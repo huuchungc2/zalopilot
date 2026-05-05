@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ZaloPilot</string>
+    <string name="accessibility_description">ZaloPilot tự động like bài đăng trên Zalo để duy trì tương tác với khách hàng</string>
+</resources>
