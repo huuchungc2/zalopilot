@@ -8,17 +8,17 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.IBinder
 import android.view.Gravity
-import android.view.LayoutInflater
-import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
 import com.zalopilot.app.util.LikeProgressManager
+import com.zalopilot.app.util.LikeSettingsManager
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -26,10 +26,11 @@ import javax.inject.Inject
 class FloatingMenuService : Service() {
 
     @Inject lateinit var progressManager: LikeProgressManager
+    @Inject lateinit var settingsManager: LikeSettingsManager
 
     private lateinit var windowManager: WindowManager
-    private var fabView: View? = null
-    private var menuView: View? = null
+    private var fabView: TextView? = null
+    private var menuView: LinearLayout? = null
     private var isMenuOpen = false
 
     private val statusReceiver = object : BroadcastReceiver() {
@@ -44,14 +45,17 @@ class FloatingMenuService : Service() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         startForeground(NOTIF_ID, buildNotification())
-        registerReceiver(statusReceiver, IntentFilter("com.zalopilot.STATUS_UPDATE"))
-        registerReceiver(statusReceiver, IntentFilter("com.zalopilot.PROGRESS_UPDATE"))
+        val filter = IntentFilter().apply {
+            addAction("com.zalopilot.STATUS_UPDATE")
+            addAction("com.zalopilot.PROGRESS_UPDATE")
+        }
+        registerReceiver(statusReceiver, filter)
         showFab()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        unregisterReceiver(statusReceiver)
+        try { unregisterReceiver(statusReceiver) } catch (e: Exception) {}
         fabView?.let { windowManager.removeView(it) }
         menuView?.let { windowManager.removeView(it) }
     }
@@ -69,16 +73,14 @@ class FloatingMenuService : Service() {
             y = 120
         }
 
+        val size = (52 * resources.displayMetrics.density).toInt()
         val fab = TextView(this).apply {
             text = "ZP"
             textSize = 14f
-            setTextColor(android.graphics.Color.WHITE)
+            setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setBackgroundColor(android.graphics.Color.parseColor("#0068FF"))
-            val size = (52 * resources.displayMetrics.density).toInt()
+            setBackgroundColor(Color.parseColor("#0068FF"))
             layoutParams = LinearLayout.LayoutParams(size, size)
-            setPadding(8, 8, 8, 8)
-
             setOnClickListener { toggleMenu() }
         }
 
@@ -93,7 +95,8 @@ class FloatingMenuService : Service() {
     private fun openMenu() {
         isMenuOpen = true
         val progress = progressManager.load()
-        val isRunning = ZaloPilotAccessibilityService.instance?.let { true } ?: false
+        val settings = settingsManager.load()
+        val isRunning = ZaloPilotAccessibilityService.instance != null
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -110,12 +113,10 @@ class FloatingMenuService : Service() {
         val menu = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(16, 16, 16, 16)
-            setBackgroundColor(android.graphics.Color.parseColor("#1a1a2e"))
+            setBackgroundColor(Color.parseColor("#CC1a1a2e"))
 
-            // Chip tiến độ
-            addView(makeMenuItem("${progress.todayLikeCount}/${progressManager.load().let { settingsManager?.load()?.dailyLimit ?: 100 }} hôm nay", "#0068FF"))
+            addView(makeMenuItem("${progress.todayLikeCount}/${settings.dailyLimit} hôm nay", "#0068FF"))
 
-            // Start/Stop
             if (isRunning) {
                 addView(makeMenuItem("■  Dừng lại", "#E24B4A") {
                     ZaloPilotAccessibilityService.instance?.stopAutoLike()
@@ -128,21 +129,20 @@ class FloatingMenuService : Service() {
                 })
             }
 
-            // Đóng menu
-            addView(makeMenuItem("✕  Đóng", "#555555") { closeMenu() })
+            addView(makeMenuItem("✕  Đóng", "#888888") { closeMenu() })
         }
 
         menuView = menu
         windowManager.addView(menu, params)
     }
 
-    private fun makeMenuItem(text: String, color: String, onClick: (() -> Unit)? = null): TextView {
+    private fun makeMenuItem(label: String, colorHex: String, onClick: (() -> Unit)? = null): TextView {
         return TextView(this).apply {
-            this.text = text
+            text = label
             textSize = 13f
-            setTextColor(android.graphics.Color.WHITE)
-            setPadding(24, 16, 24, 16)
-            setBackgroundColor(android.graphics.Color.parseColor(color.replace("#", "#22") + "44").also {})
+            setTextColor(Color.WHITE)
+            setPadding(32, 18, 32, 18)
+            setBackgroundColor(Color.parseColor(colorHex))
             val lp = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -162,7 +162,10 @@ class FloatingMenuService : Service() {
     }
 
     private fun updateFabStatus() {
-        // Update fab màu khi trạng thái thay đổi
+        val isRunning = ZaloPilotAccessibilityService.instance != null
+        fabView?.setBackgroundColor(
+            Color.parseColor(if (isRunning) "#27AE60" else "#0068FF")
+        )
     }
 
     private fun buildNotification(): Notification {
