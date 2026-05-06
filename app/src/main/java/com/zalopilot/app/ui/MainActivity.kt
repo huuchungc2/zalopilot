@@ -12,7 +12,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -42,7 +41,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         progressManager.resetDailyIfNeeded()
-
         setContent {
             MaterialTheme {
                 ZaloPilotApp()
@@ -61,12 +59,14 @@ class MainActivity : ComponentActivity() {
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     progress = progressManager.load()
-                    isRunning = ZaloPilotAccessibilityService.instance != null
+                    settings = settingsManager.load()
+                    isRunning = ZaloPilotAccessibilityService.isActive
                 }
             }
             val filter = IntentFilter().apply {
                 addAction("com.zalopilot.STATUS_UPDATE")
                 addAction("com.zalopilot.PROGRESS_UPDATE")
+                addAction("com.zalopilot.ZALO_STATE")
             }
             registerReceiver(receiver, filter)
             onDispose { unregisterReceiver(receiver) }
@@ -79,9 +79,7 @@ class MainActivity : ComponentActivity() {
                         NavigationBarItem(
                             selected = selectedTab == i,
                             onClick = { selectedTab = i },
-                            icon = {
-                                Text(listOf("🏠", "⚙️", "📋")[i], fontSize = 18.sp)
-                            },
+                            icon = { Text(listOf("🏠", "⚙️", "📋")[i], fontSize = 18.sp) },
                             label = { Text(label, fontSize = 11.sp) }
                         )
                     }
@@ -111,7 +109,6 @@ class MainActivity : ComponentActivity() {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                // Header
                 Box(
                     modifier = Modifier.fillMaxWidth()
                         .clip(RoundedCornerShape(16.dp))
@@ -120,7 +117,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Column {
                         Text("ZaloPilot", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
-                        Text("Chào Sale!", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
+                        Text("Auto Like Zalo", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
                         Spacer(Modifier.height(8.dp))
                         Surface(
                             shape = RoundedCornerShape(99.dp),
@@ -150,44 +147,30 @@ class MainActivity : ComponentActivity() {
                     ) {
                         Column(Modifier.padding(16.dp)) {
                             Text("Cần bật Accessibility Service", fontWeight = FontWeight.W500, color = Color(0xFF856404))
-                            Text("Vào Cài đặt → Hỗ trợ tiếp cận → ZaloPilot → Bật lên", fontSize = 13.sp, color = Color(0xFF856404))
+                            Text("Cài đặt → Hỗ trợ tiếp cận → ZaloPilot → Bật lên", fontSize = 13.sp, color = Color(0xFF856404))
                             Spacer(Modifier.height(8.dp))
                             Button(
-                                onClick = {
-                                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                                },
+                                onClick = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
                                 colors = ButtonDefaults.buttonColors(containerColor = zaloBlue)
-                            ) {
-                                Text("Mở Cài đặt")
-                            }
+                            ) { Text("Mở Cài đặt") }
                         }
                     }
                 }
             }
 
             item {
-                // Tiến độ hôm nay
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
                         Text("TIẾN ĐỘ HÔM NAY", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
                         Spacer(Modifier.height(10.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            StatCard(
-                                value = "${progress.todayLikeCount}",
-                                label = "Đã like",
-                                color = zaloBlue,
-                                modifier = Modifier.weight(1f)
-                            )
-                            StatCard(
-                                value = "${settings.dailyLimit}",
-                                label = "Giới hạn",
-                                color = Color(0xFF555555),
-                                modifier = Modifier.weight(1f)
-                            )
+                            StatCard("${progress.todayLikeCount}", "Đã like", zaloBlue, Modifier.weight(1f))
+                            StatCard("${settings.dailyLimit}", "Giới hạn", Color(0xFF555555), Modifier.weight(1f))
                         }
                         Spacer(Modifier.height(10.dp))
+                        val pct = (progress.todayLikeCount.toFloat() / settings.dailyLimit).coerceIn(0f, 1f)
                         LinearProgressIndicator(
-                            progress = { (progress.todayLikeCount.toFloat() / settings.dailyLimit).coerceIn(0f, 1f) },
+                            progress = { pct },
                             modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(99.dp)),
                             color = zaloBlue,
                             trackColor = Color(0xFFE0E0E0)
@@ -195,42 +178,38 @@ class MainActivity : ComponentActivity() {
                         Spacer(Modifier.height(4.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("${progress.todayLikeCount} / ${settings.dailyLimit}", fontSize = 12.sp, color = Color.Gray)
-                            Text("${((progress.todayLikeCount.toFloat() / settings.dailyLimit) * 100).toInt()}%", fontSize = 12.sp, color = Color.Gray)
+                            Text("${(pct * 100).toInt()}%", fontSize = 12.sp, color = Color.Gray)
                         }
                     }
                 }
             }
 
             item {
-                // Tiến độ tổng
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
-                        Text("TIẾN ĐỘ TỔNG", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                        Spacer(Modifier.height(10.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            StatCard("${progress.lastLikedIndex}", "Đã like", zaloBlue, Modifier.weight(1f))
-                            StatCard("${progress.totalFriends}", "Tổng bạn", Color(0xFF555555), Modifier.weight(1f))
-                        }
-                        Spacer(Modifier.height(10.dp))
-                        val totalProgress = if (progress.totalFriends > 0)
-                            progress.lastLikedIndex.toFloat() / progress.totalFriends else 0f
-                        LinearProgressIndicator(
-                            progress = { totalProgress.coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(99.dp)),
-                            color = zaloBlue,
-                            trackColor = Color(0xFFE0E0E0)
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Vòng ${progress.totalRounds + 1} · còn ~${progressManager.getRemainingDays()} ngày", fontSize = 12.sp, color = Color.Gray)
-                            Text("${(totalProgress * 100).toInt()}%", fontSize = 12.sp, color = Color.Gray)
+                        Text("CHẾ ĐỘ CHẠY", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (settingsManager.isAutoStart()) "🤖 Tự động — Zalo mở là chạy"
+                                else "👆 Thủ công — bấm Start mới chạy",
+                                fontSize = 13.sp
+                            )
+                            Switch(
+                                checked = settingsManager.isAutoStart(),
+                                onCheckedChange = { settingsManager.setAutoStart(it) },
+                                colors = SwitchDefaults.colors(checkedThumbColor = zaloBlue, checkedTrackColor = zaloBlue.copy(alpha = 0.3f))
+                            )
                         }
                     }
                 }
             }
 
             item {
-                // Nút bật/tắt floating
                 Button(
                     onClick = {
                         if (Settings.canDrawOverlays(this@MainActivity)) {
@@ -265,8 +244,8 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun SettingsScreen(settings: LikeSettings, onSave: (LikeSettings) -> Unit) {
         var dailyLimit by remember { mutableIntStateOf(settings.dailyLimit) }
-        var delayMin by remember { mutableStateOf(settings.delayMinMs.toString()) }
-        var delayMax by remember { mutableStateOf(settings.delayMaxMs.toString()) }
+        var delayMin by remember { mutableStateOf((settings.delayMinMs / 1000).toString()) }
+        var delayMax by remember { mutableStateOf((settings.delayMaxMs / 1000).toString()) }
         var sessionLimit by remember { mutableIntStateOf(settings.sessionLimit) }
         var restMin by remember { mutableIntStateOf(settings.restMinMinutes) }
         var restMax by remember { mutableIntStateOf(settings.restMaxMinutes) }
@@ -280,10 +259,7 @@ class MainActivity : ComponentActivity() {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                Box(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-                        .background(zaloBlue).padding(20.dp)
-                ) {
+                Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(zaloBlue).padding(20.dp)) {
                     Column {
                         Text("Cài đặt", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
                         Text("Tùy chỉnh theo ý muốn", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
@@ -292,60 +268,70 @@ class MainActivity : ComponentActivity() {
             }
 
             item {
-                SettingCard(title = "GIỚI HẠN LIKE") {
-                    Text("Tối đa / ngày: $dailyLimit bài", fontSize = 13.sp)
-                    Slider(value = dailyLimit.toFloat(), onValueChange = { dailyLimit = it.toInt() },
-                        valueRange = 20f..200f, steps = 17, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
-                    Text("Nghỉ sau: $sessionLimit like liên tiếp", fontSize = 13.sp)
-                    Slider(value = sessionLimit.toFloat(), onValueChange = { sessionLimit = it.toInt() },
-                        valueRange = 10f..50f, steps = 7, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
-                }
-            }
-
-            item {
-                SettingCard(title = "TỐC ĐỘ LIKE") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Delay tối thiểu (giây)", fontSize = 12.sp, color = Color.Gray)
-                            OutlinedTextField(value = delayMin, onValueChange = { delayMin = it },
-                                modifier = Modifier.fillMaxWidth(), singleLine = true)
-                        }
-                        Column(Modifier.weight(1f)) {
-                            Text("Delay tối đa (giây)", fontSize = 12.sp, color = Color.Gray)
-                            OutlinedTextField(value = delayMax, onValueChange = { delayMax = it },
-                                modifier = Modifier.fillMaxWidth(), singleLine = true)
-                        }
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Text("Nghỉ giữa session: $restMin - $restMax phút", fontSize = 13.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Tối thiểu", fontSize = 12.sp, color = Color.Gray)
-                            Slider(value = restMin.toFloat(), onValueChange = { restMin = it.toInt() },
-                                valueRange = 1f..30f, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
-                        }
-                        Column(Modifier.weight(1f)) {
-                            Text("Tối đa", fontSize = 12.sp, color = Color.Gray)
-                            Slider(value = restMax.toFloat(), onValueChange = { restMax = it.toInt() },
-                                valueRange = 1f..60f, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
-                        }
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("GIỚI HẠN LIKE", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Tối đa / ngày: $dailyLimit bài", fontSize = 13.sp)
+                        Slider(value = dailyLimit.toFloat(), onValueChange = { dailyLimit = it.toInt() },
+                            valueRange = 20f..200f, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
+                        Text("Nghỉ sau: $sessionLimit like liên tiếp", fontSize = 13.sp)
+                        Slider(value = sessionLimit.toFloat(), onValueChange = { sessionLimit = it.toInt() },
+                            valueRange = 10f..50f, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
                     }
                 }
             }
 
             item {
-                SettingCard(title = "GIỜ KHÔNG HOẠT ĐỘNG") {
-                    Text("Tắt từ ${quietStart}:00 đến ${quietEnd}:00", fontSize = 13.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Từ giờ", fontSize = 12.sp, color = Color.Gray)
-                            Slider(value = quietStart.toFloat(), onValueChange = { quietStart = it.toInt() },
-                                valueRange = 0f..23f, steps = 22, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("TỐC ĐỘ LIKE", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Delay tối thiểu (giây)", fontSize = 12.sp, color = Color.Gray)
+                                OutlinedTextField(value = delayMin, onValueChange = { delayMin = it }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text("Delay tối đa (giây)", fontSize = 12.sp, color = Color.Gray)
+                                OutlinedTextField(value = delayMax, onValueChange = { delayMax = it }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            }
                         }
-                        Column(Modifier.weight(1f)) {
-                            Text("Đến giờ", fontSize = 12.sp, color = Color.Gray)
-                            Slider(value = quietEnd.toFloat(), onValueChange = { quietEnd = it.toInt() },
-                                valueRange = 0f..23f, steps = 22, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
+                        Spacer(Modifier.height(8.dp))
+                        Text("Nghỉ giữa session: $restMin - $restMax phút", fontSize = 13.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Tối thiểu", fontSize = 12.sp, color = Color.Gray)
+                                Slider(value = restMin.toFloat(), onValueChange = { restMin = it.toInt() },
+                                    valueRange = 1f..30f, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text("Tối đa", fontSize = 12.sp, color = Color.Gray)
+                                Slider(value = restMax.toFloat(), onValueChange = { restMax = it.toInt() },
+                                    valueRange = 1f..60f, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("GIỜ KHÔNG HOẠT ĐỘNG", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Tắt từ ${quietStart}:00 đến ${quietEnd}:00", fontSize = 13.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Từ giờ", fontSize = 12.sp, color = Color.Gray)
+                                Slider(value = quietStart.toFloat(), onValueChange = { quietStart = it.toInt() },
+                                    valueRange = 0f..23f, steps = 22, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text("Đến giờ", fontSize = 12.sp, color = Color.Gray)
+                                Slider(value = quietEnd.toFloat(), onValueChange = { quietEnd = it.toInt() },
+                                    valueRange = 0f..23f, steps = 22, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
+                            }
                         }
                     }
                 }
@@ -357,36 +343,22 @@ class MainActivity : ComponentActivity() {
                 }
                 Button(
                     onClick = {
-                        val newSettings = settings.copy(
+                        onSave(settings.copy(
                             dailyLimit = dailyLimit,
-                            delayMinMs = (delayMin.toLongOrNull() ?: 1) * 1000,
-                            delayMaxMs = (delayMax.toLongOrNull() ?: 3) * 1000,
+                            delayMinMs = (delayMin.toLongOrNull() ?: 1L) * 1000L,
+                            delayMaxMs = (delayMax.toLongOrNull() ?: 3L) * 1000L,
                             sessionLimit = sessionLimit,
                             restMinMinutes = restMin,
                             restMaxMinutes = restMax,
                             quietHourStart = quietStart,
                             quietHourEnd = quietEnd
-                        )
-                        onSave(newSettings)
+                        ))
                         saveMsg = "Đã lưu cài đặt!"
                     },
                     modifier = Modifier.fillMaxWidth().height(50.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = zaloBlue),
                     shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("Lưu cài đặt", fontSize = 15.sp, fontWeight = FontWeight.W500)
-                }
-            }
-        }
-    }
-
-    @Composable
-    fun SettingCard(title: String, content: @Composable ColumnScope.() -> Unit) {
-        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-            Column(Modifier.padding(16.dp)) {
-                Text(title, fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                Spacer(Modifier.height(10.dp))
-                content()
+                ) { Text("Lưu cài đặt", fontSize = 15.sp, fontWeight = FontWeight.W500) }
             }
         }
     }
@@ -419,7 +391,7 @@ class MainActivity : ComponentActivity() {
                     item {
                         Card(modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp)) {
-                                Text("HÔM NAY", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                                Text("NHẬT KÝ GẦN ĐÂY", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
                                 Spacer(Modifier.height(8.dp))
                                 logs.forEach { log ->
                                     val dotColor = colorMap.entries.find { log.result.contains(it.key) }?.value ?: Color.Gray
@@ -429,13 +401,13 @@ class MainActivity : ComponentActivity() {
                                             Text(
                                                 when (log.action) {
                                                     "LIKE" -> "Like thành công — ${log.target}"
-                                                    "LIKE_SKIP" -> "Bỏ qua — ${log.target} (đã like rồi)"
+                                                    "LIKE_SKIP" -> "Bỏ qua — ${log.target}"
                                                     "AUTO_LIKE" -> when (log.result) {
                                                         "STARTED" -> "Bắt đầu phiên"
                                                         "STOPPED" -> "Dừng phiên"
                                                         "SESSION_REST" -> log.target
                                                         "DAILY_LIMIT_REACHED" -> "Đã đủ giới hạn hôm nay"
-                                                        else -> log.action
+                                                        else -> "${log.action} ${log.result}"
                                                     }
                                                     else -> "${log.action} — ${log.target}"
                                                 },
@@ -444,7 +416,7 @@ class MainActivity : ComponentActivity() {
                                             Text(log.timestamp, fontSize = 11.sp, color = Color.Gray)
                                         }
                                     }
-                                    if (logs.last() != log) Divider(color = Color(0xFFEEEEEE), thickness = 0.5.dp)
+                                    if (logs.last() != log) HorizontalDivider(color = Color(0xFFEEEEEE), thickness = 0.5.dp)
                                 }
                             }
                         }
@@ -456,7 +428,7 @@ class MainActivity : ComponentActivity() {
 
     private fun isAccessibilityServiceEnabled(): Boolean {
         val service = "$packageName/com.zalopilot.app.accessibility.ZaloPilotAccessibilityService"
-        val enabledServices = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
-        return enabledServices.contains(service)
+        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+        return enabled.contains(service)
     }
 }

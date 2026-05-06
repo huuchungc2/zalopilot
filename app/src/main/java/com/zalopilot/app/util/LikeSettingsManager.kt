@@ -18,7 +18,7 @@ data class LikeSettings(
     val quietHourStart: Int = 22,
     val quietHourEnd: Int = 6,
     val autoStart: Boolean = false,
-    val likeModeStr: String = "FEED"  // Lưu String thay vì enum — tránh Gson serialize fail
+    val likeModeStr: String = "FEED"  // Lưu String thay vì enum tránh Gson fail
 )
 
 @Singleton
