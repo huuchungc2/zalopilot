@@ -8,59 +8,69 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.IBinder
 import android.view.Gravity
+import android.view.LayoutInflater
+import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
-import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
+import com.zalopilot.app.R
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
+import com.zalopilot.app.util.LikeMode
 import com.zalopilot.app.util.LikeProgressManager
 import com.zalopilot.app.util.LikeSettingsManager
+import com.zalopilot.app.util.Logger
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class FloatingMenuService : Service() {
 
-    @Inject lateinit var progressManager: LikeProgressManager
     @Inject lateinit var settingsManager: LikeSettingsManager
+    @Inject lateinit var progressManager: LikeProgressManager
+    @Inject lateinit var logger: Logger
 
     private lateinit var windowManager: WindowManager
-    private var fabView: TextView? = null
-    private var menuView: LinearLayout? = null
+    private var floatingView: View? = null
+    private var menuView: View? = null
     private var isMenuOpen = false
 
+    // Broadcast receiver nhận update từ accessibility service
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            updateFabStatus()
+            when (intent?.action) {
+                "com.zalopilot.STATUS_UPDATE" -> updateButtonState()
+                "com.zalopilot.PROGRESS_UPDATE" -> updateProgressText()
+            }
         }
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
-
     override fun onCreate() {
         super.onCreate()
+        startForeground(1, buildNotification())
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        startForeground(NOTIF_ID, buildNotification())
-        val filter = IntentFilter().apply {
+        registerReceiver(statusReceiver, IntentFilter().apply {
             addAction("com.zalopilot.STATUS_UPDATE")
             addAction("com.zalopilot.PROGRESS_UPDATE")
-        }
-        registerReceiver(statusReceiver, filter)
-        showFab()
+        })
+        showFloatingButton()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        try { unregisterReceiver(statusReceiver) } catch (e: Exception) {}
-        fabView?.let { windowManager.removeView(it) }
+        unregisterReceiver(statusReceiver)
+        floatingView?.let { windowManager.removeView(it) }
         menuView?.let { windowManager.removeView(it) }
     }
 
-    private fun showFab() {
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    // ─── Floating Button ──────────────────────────────────────────
+
+    private fun showFloatingButton() {
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -68,35 +78,74 @@ class FloatingMenuService : Service() {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.END or Gravity.BOTTOM
+            gravity = Gravity.TOP or Gravity.START
             x = 20
-            y = 120
+            y = 300
         }
 
-        val size = (52 * resources.displayMetrics.density).toInt()
-        val fab = TextView(this).apply {
-            text = "ZP"
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setBackgroundColor(Color.parseColor("#0068FF"))
-            layoutParams = LinearLayout.LayoutParams(size, size)
-            setOnClickListener { toggleMenu() }
-        }
+        floatingView = LayoutInflater.from(this).inflate(R.layout.floating_button, null)
+        windowManager.addView(floatingView, params)
 
-        fabView = fab
-        windowManager.addView(fab, params)
+        updateButtonState()
+        setupDragAndClick(floatingView!!, params)
     }
+
+    private fun setupDragAndClick(view: View, params: WindowManager.LayoutParams) {
+        var initialX = 0; var initialY = 0
+        var touchX = 0f; var touchY = 0f
+        var isDragging = false
+
+        view.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    initialX = params.x; initialY = params.y
+                    touchX = event.rawX; touchY = event.rawY
+                    isDragging = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - touchX
+                    val dy = event.rawY - touchY
+                    if (dx * dx + dy * dy > 100) isDragging = true
+                    if (isDragging) {
+                        params.x = initialX + dx.toInt()
+                        params.y = initialY + dy.toInt()
+                        windowManager.updateViewLayout(view, params)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (!isDragging) toggleMenu()
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun updateButtonState() {
+        val service = ZaloPilotAccessibilityService.instance
+        val running = service?.let { true } == true && ZaloPilotAccessibilityService.isActive
+        floatingView?.findViewById<TextView>(R.id.tvFloatingBtn)?.text = if (running) "ZP▶" else "ZP"
+    }
+
+    private fun updateProgressText() {
+        menuView?.findViewById<TextView>(R.id.tvProgress)?.let {
+            val progress = progressManager.load()
+            val limit = settingsManager.load().dailyLimit
+            it.text = "📊 Hôm nay: ${progress.todayLikeCount}/$limit"
+        }
+    }
+
+    // ─── Menu ─────────────────────────────────────────────────────
 
     private fun toggleMenu() {
         if (isMenuOpen) closeMenu() else openMenu()
     }
 
     private fun openMenu() {
+        if (isMenuOpen) return
         isMenuOpen = true
-        val progress = progressManager.load()
-        val settings = settingsManager.load()
-        val isRunning = ZaloPilotAccessibilityService.instance != null
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -105,85 +154,88 @@ class FloatingMenuService : Service() {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.END or Gravity.BOTTOM
-            x = 20
-            y = 200
+            gravity = Gravity.TOP or Gravity.START
+            x = 80; y = 300
         }
 
-        val menu = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(16, 16, 16, 16)
-            setBackgroundColor(Color.parseColor("#CC1a1a2e"))
-
-            addView(makeMenuItem("${progress.todayLikeCount}/${settings.dailyLimit} hôm nay", "#0068FF"))
-
-            if (isRunning) {
-                addView(makeMenuItem("■  Dừng lại", "#E24B4A") {
-                    ZaloPilotAccessibilityService.instance?.stopAutoLike()
-                    closeMenu()
-                })
-            } else {
-                addView(makeMenuItem("▶  Bắt đầu like", "#27AE60") {
-                    ZaloPilotAccessibilityService.instance?.startAutoLike()
-                    closeMenu()
-                })
-            }
-
-            addView(makeMenuItem("✕  Đóng", "#888888") { closeMenu() })
-        }
-
-        menuView = menu
-        windowManager.addView(menu, params)
-    }
-
-    private fun makeMenuItem(label: String, colorHex: String, onClick: (() -> Unit)? = null): TextView {
-        return TextView(this).apply {
-            text = label
-            textSize = 13f
-            setTextColor(Color.WHITE)
-            setPadding(32, 18, 32, 18)
-            setBackgroundColor(Color.parseColor(colorHex))
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.setMargins(0, 4, 0, 4)
-            layoutParams = lp
-            if (onClick != null) setOnClickListener { onClick() }
-        }
+        menuView = LayoutInflater.from(this).inflate(R.layout.floating_menu, null)
+        windowManager.addView(menuView, params)
+        setupMenuActions()
+        updateMenuLabels()
+        updateProgressText()
     }
 
     private fun closeMenu() {
+        if (!isMenuOpen) return
         isMenuOpen = false
-        menuView?.let {
-            windowManager.removeView(it)
-            menuView = null
+        menuView?.let { windowManager.removeView(it) }
+        menuView = null
+    }
+
+    private fun setupMenuActions() {
+        val menu = menuView ?: return
+
+        // Start / Stop
+        menu.findViewById<TextView>(R.id.btnStartStop).setOnClickListener {
+            val service = ZaloPilotAccessibilityService.instance
+            if (service != null) {
+                if (ZaloPilotAccessibilityService.isActive) {
+                    service.stopAutoLike()
+                } else {
+                    service.startAutoLike()
+                }
+            }
+            updateMenuLabels()
+            closeMenu()
+        }
+
+        // Toggle Feed / Visit mode
+        menu.findViewById<TextView>(R.id.btnMode).setOnClickListener {
+            settingsManager.toggleLikeMode()
+            updateMenuLabels()
+        }
+
+        // Toggle Auto / Manual
+        menu.findViewById<TextView>(R.id.btnAutoManual).setOnClickListener {
+            settingsManager.toggleAutoStart()
+            updateMenuLabels()
+        }
+
+        // Close
+        menu.findViewById<TextView>(R.id.btnClose).setOnClickListener {
+            closeMenu()
         }
     }
 
-    private fun updateFabStatus() {
-        val isRunning = ZaloPilotAccessibilityService.instance != null
-        fabView?.setBackgroundColor(
-            Color.parseColor(if (isRunning) "#27AE60" else "#0068FF")
-        )
+    private fun updateMenuLabels() {
+        val menu = menuView ?: return
+        val settings = settingsManager.load()
+        val running = ZaloPilotAccessibilityService.isActive
+
+        menu.findViewById<TextView>(R.id.btnStartStop).text =
+            if (running) "■  Dừng" else "▶  Bắt đầu"
+
+        menu.findViewById<TextView>(R.id.btnMode).text =
+            if (settings.likeMode == LikeMode.FEED) "🔄  Feed Mode" else "🔄  Visit Mode"
+
+        menu.findViewById<TextView>(R.id.btnAutoManual).text =
+            if (settings.autoStart) "⚙  Tự động" else "⚙  Thủ công"
     }
 
+    // ─── Notification ─────────────────────────────────────────────
+
     private fun buildNotification(): Notification {
-        val channelId = "zalopilot_floating"
+        val channelId = "zalopilot_service"
         val manager = getSystemService(NotificationManager::class.java)
         if (manager.getNotificationChannel(channelId) == null) {
             manager.createNotificationChannel(
-                NotificationChannel(channelId, "ZaloPilot Floating", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(channelId, "ZaloPilot", NotificationManager.IMPORTANCE_LOW)
             )
         }
         return NotificationCompat.Builder(this, channelId)
             .setContentTitle("ZaloPilot đang chạy")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setContentText("Nhấn để mở cài đặt")
+            .setSmallIcon(R.drawable.ic_notification)
             .build()
-    }
-
-    companion object {
-        private const val NOTIF_ID = 1002
     }
 }

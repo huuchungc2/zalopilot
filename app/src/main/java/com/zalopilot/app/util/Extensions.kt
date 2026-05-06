@@ -1,17 +1,10 @@
 package com.zalopilot.app.util
 
-import android.app.ActivityManager
-import android.content.Context
 import kotlinx.coroutines.delay
 
-suspend fun randomDelay(minMs: Long = 800, maxMs: Long = 3000) {
-    val wait = (minMs..maxMs).random()
-    delay(wait)
+suspend fun randomDelay(minMs: Long, maxMs: Long) {
+    val ms = if (minMs >= maxMs) minMs else (minMs..maxMs).random()
+    delay(ms)
 }
 
-fun isZaloRunning(context: Context): Boolean {
-    val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-    return am.runningAppProcesses?.any {
-        it.processName == "com.zing.zalo"
-    } == true
-}
+fun LongRange.random(): Long = (this.first + (Math.random() * (this.last - this.first)).toLong())
