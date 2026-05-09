@@ -113,8 +113,46 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     // ─── Public API ──────────────────────────────────────────────
 
     fun startAutoLike() {
-        if (isRunning) return
-        rootInActiveWindow?.let { uiScanner.scan(it) }
+        if (isRunning) {
+            logger.log("AUTO_LIKE", "", "ALREADY_RUNNING")
+            showToast("ℹ️ Bot đang chạy sẵn")
+            return
+        }
+
+        if (settingsManager.isQuietHour()) {
+            logger.log("AUTO_LIKE", "", "BLOCKED_QUIET_HOUR")
+            showToast("🌙 Đang trong giờ nghỉ — không chạy")
+            return
+        }
+
+        if (progressManager.isLimitReached()) {
+            val count = progressManager.load().todayLikeCount
+            logger.log("AUTO_LIKE", "todayLikeCount=$count", "BLOCKED_DAILY_LIMIT")
+            showToast("✅ Đã đủ giới hạn hôm nay ($count)")
+            sendBroadcast(Intent("com.zalopilot.DAILY_LIMIT"))
+            return
+        }
+
+        // Người dùng có thể bấm Start khi đang ở sẵn trong Zalo nhưng chưa có event TYPE_WINDOW_STATE_CHANGED,
+        // nên cần tự detect foreground để tránh loop dừng ngay.
+        val root = rootInActiveWindow
+        val pkg = root?.packageName?.toString()
+        if (pkg == "com.zing.zalo") {
+            isZaloForeground = true
+        } else {
+            logger.log("AUTO_LIKE", "pkg=$pkg", "BLOCKED_NOT_IN_ZALO")
+            showToast("⚠️ Hãy mở Zalo (tab Nhật ký) rồi bấm Start")
+            return
+        }
+
+        if (root == null) {
+            logger.log("AUTO_LIKE", "root=null", "BLOCKED_NO_ROOT")
+            showToast("⚠️ Không đọc được màn hình — kiểm tra Accessibility")
+            return
+        }
+
+        logger.log("AUTO_LIKE", "pkg=$pkg", "START_CLICKED")
+        uiScanner.forceScan(root)
         isRunning = true
         sessionLikeCount = 0
         consecutiveNullCount = 0

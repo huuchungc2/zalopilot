@@ -21,6 +21,7 @@ class ZaloUIScanner @Inject constructor(
 
     fun scan(root: AccessibilityNodeInfo) {
         var foundAny = false
+        logger.log("SCANNER", "scan begin", "START")
 
         foundAny = scanLikeButton(root) || foundAny
         foundAny = scanTabTimeline(root) || foundAny
@@ -33,6 +34,8 @@ class ZaloUIScanner @Inject constructor(
             if (scanCount == 1 || scanCount % 50 == 0) {
                 logger.log("SCANNER", "Scan #$scanCount", "IDs_UPDATED")
             }
+        } else {
+            logger.log("SCANNER", "scan end", "NO_MATCH")
         }
     }
 

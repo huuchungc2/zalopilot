@@ -16,10 +16,12 @@ import android.view.MotionEvent
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
 import com.zalopilot.app.util.LikeProgressManager
 import com.zalopilot.app.util.LikeSettingsManager
+import com.zalopilot.app.util.Logger
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -28,6 +30,7 @@ class FloatingMenuService : Service() {
 
     @Inject lateinit var settingsManager: LikeSettingsManager
     @Inject lateinit var progressManager: LikeProgressManager
+    @Inject lateinit var logger: Logger
 
     private lateinit var windowManager: WindowManager
     private var fabView: TextView? = null
@@ -48,6 +51,7 @@ class FloatingMenuService : Service() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         startForeground(NOTIF_ID, buildNotification())
+        logger.log("FLOATING", "FloatingMenuService", "CREATED")
         val filter = IntentFilter().apply {
             addAction("com.zalopilot.STATUS_UPDATE")
             addAction("com.zalopilot.PROGRESS_UPDATE")
@@ -132,7 +136,7 @@ class FloatingMenuService : Service() {
         isMenuOpen = true
         val progress = progressManager.load()
         val settings = settingsManager.load()
-        val isRunning = ZaloPilotAccessibilityService.isActive
+        val botRunning = ZaloPilotAccessibilityService.instance?.isRunning == true
         val autoMode = settingsManager.isAutoStart()
 
         val fp = fabParams ?: return
@@ -162,14 +166,21 @@ class FloatingMenuService : Service() {
                 closeMenu(); openMenu()
             })
 
-            if (isRunning) {
+            if (botRunning) {
                 addView(menuItem("■  Dừng", "#E24B4A") {
                     ZaloPilotAccessibilityService.instance?.stopAutoLike()
                     closeMenu()
                 })
             } else {
                 addView(menuItem("▶  Bắt đầu like", "#27AE60") {
-                    ZaloPilotAccessibilityService.instance?.startAutoLike()
+                    val svc = ZaloPilotAccessibilityService.instance
+                    if (svc == null) {
+                        Toast.makeText(this@FloatingMenuService, "⚠️ Chưa bật Accessibility cho ZaloPilot", Toast.LENGTH_LONG).show()
+                        logger.log("FLOATING", "Accessibility chưa bật", "NO_SERVICE")
+                        closeMenu()
+                        return@menuItem
+                    }
+                    svc.startAutoLike()
                     closeMenu()
                 })
             }
@@ -206,11 +217,11 @@ class FloatingMenuService : Service() {
     }
 
     private fun updateFabState() {
-        val isRunning = ZaloPilotAccessibilityService.isActive
+        val botRunning = ZaloPilotAccessibilityService.instance?.isRunning == true
         fabView?.setBackgroundColor(
-            if (isRunning) Color.parseColor("#27AE60") else Color.parseColor("#0068FF")
+            if (botRunning) Color.parseColor("#27AE60") else Color.parseColor("#0068FF")
         )
-        fabView?.text = if (isRunning) "ZP▶" else "ZP"
+        fabView?.text = if (botRunning) "ZP▶" else "ZP"
     }
 
     private fun buildNotification(): Notification {
