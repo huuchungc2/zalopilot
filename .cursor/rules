@@ -134,3 +134,8 @@ Luôn cập nhật:
 1. `TODO.md` — đánh dấu [x] task xong
 2. `CHANGELOG.md` — thêm vào [Unreleased]
 3. Báo nếu có dependency mới cần thêm vào build.gradle.kts
+
+## 3. OUTPUT & WORKFLOW
+- Trả về code sửa đổi (diff), hạn chế viết lại cả file dài.
+- Giải thích ngắn gọn (< 5 dòng).
+- **TỰ ĐỘNG UPDATE**: Chỉ sau khi hoàn thành task code, hãy gộp việc cập nhật @TODO.md và @CHANGELOG.md vào cùng một lần trả lời cuối cùng để tiết kiệm lượt gọi AI.

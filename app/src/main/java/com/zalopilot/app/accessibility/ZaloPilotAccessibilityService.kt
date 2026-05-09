@@ -62,18 +62,26 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         showToast("✅ ZaloPilot đã kết nối")
     }
 
+    private fun isZaloPkg(pkg: String): Boolean {
+        // Bắt tất cả package liên quan Zalo: activity phụ, webview, mini app
+        return pkg.startsWith("com.zing.zalo") || pkg.startsWith("com.vng.zalo")
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
+        val pkg = event.packageName?.toString() ?: ""
+
+        // Lọc bằng code thay vì XML packageNames — bắt được webview/activity phụ
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val pkg = event.packageName?.toString() ?: ""
-            if (pkg == "com.zing.zalo") {
+            if (isZaloPkg(pkg)) {
                 if (!isZaloForeground) {
                     isZaloForeground = true
-                    logger.log("ZALO", "", "FOREGROUND")
+                    logger.log("ZALO", "pkg=$pkg", "FOREGROUND")
                     sendBroadcast(Intent("com.zalopilot.ZALO_STATE").putExtra("foreground", true))
                     scope.launch(Dispatchers.Main) {
-                        delay(800)
-                        rootInActiveWindow?.let { uiScanner.scan(it) }
+                        // Delay 1200ms thay vì 800ms — đợi Zalo render xong UI
+                        delay(1200)
+                        scanWithRetry()
                     }
                     if (settingsManager.isAutoStart() && !isRunning
                         && !progressManager.isLimitReached()
@@ -81,10 +89,10 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         startAutoLike()
                     }
                 }
-            } else {
+            } else if (!isZaloPkg(pkg)) {
                 if (isZaloForeground) {
                     isZaloForeground = false
-                    logger.log("ZALO", "", "BACKGROUND")
+                    logger.log("ZALO", "pkg=$pkg", "BACKGROUND")
                     sendBroadcast(Intent("com.zalopilot.ZALO_STATE").putExtra("foreground", false))
                     if (isRunning) {
                         stopAutoLike()
@@ -94,6 +102,21 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 }
             }
         }
+    }
+
+    // Fix 4: retry khi rootInActiveWindow chưa render xong
+    private suspend fun scanWithRetry() {
+        repeat(5) { attempt ->
+            val root = rootInActiveWindow
+            if (root != null) {
+                logger.log("SCAN", "attempt=$attempt", "ROOT_OK")
+                uiScanner.scan(root)
+                return
+            }
+            logger.log("SCAN", "attempt=$attempt", "ROOT_NULL_RETRY")
+            delay(600)
+        }
+        logger.log("SCAN", "all attempts failed", "ROOT_NEVER_READY")
     }
 
     override fun onInterrupt() {
@@ -136,8 +159,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         // Người dùng có thể bấm Start khi đang ở sẵn trong Zalo nhưng chưa có event TYPE_WINDOW_STATE_CHANGED,
         // nên cần tự detect foreground để tránh loop dừng ngay.
         val root = rootInActiveWindow
-        val pkg = root?.packageName?.toString()
-        if (pkg == "com.zing.zalo") {
+        val pkg = root?.packageName?.toString() ?: ""
+        if (isZaloPkg(pkg)) {
             isZaloForeground = true
         } else {
             logger.log("AUTO_LIKE", "pkg=$pkg", "BLOCKED_NOT_IN_ZALO")
@@ -225,7 +248,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 continue
             }
 
-            val root = rootInActiveWindow
+            val root = rootInActiveWindow ?: run { delay(500); rootInActiveWindow }
             if (root == null) {
                 consecutiveNullCount++
                 updateStatus("⚠️ Zalo không phản hồi ($consecutiveNullCount lần)")
