@@ -2,12 +2,14 @@ package com.zalopilot.app.accessibility
 
 import android.view.accessibility.AccessibilityNodeInfo
 import com.zalopilot.app.data.model.ZaloIDStore
+import com.zalopilot.app.util.Logger
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class NodeFinder @Inject constructor(
-    private val idStore: ZaloIDStore
+    private val idStore: ZaloIDStore,
+    private val logger: Logger
 ) {
     /**
      * Tìm tất cả nút like chưa được like.
@@ -86,6 +88,47 @@ class NodeFinder @Inject constructor(
         }
         // Fallback text
         return root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_TIMELINE).firstOrNull()
+    }
+
+    /**
+     * Duyệt toàn bộ node tree từ root và ghi ra log để debug UI Zalo.
+     * In ra text/resourceId/className của từng node.
+     */
+    fun debugDump(root: AccessibilityNodeInfo?, maxNodes: Int = 800) {
+        root ?: run {
+            logger.log("DEBUG_DUMP", "root=null", "EMPTY")
+            return
+        }
+
+        var visited = 0
+        logger.log("DEBUG_DUMP", "start maxNodes=$maxNodes", "BEGIN")
+
+        val stack = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+        stack.addLast(root to 0)
+
+        while (stack.isNotEmpty() && visited < maxNodes) {
+            val (node, depth) = stack.removeLast()
+            visited++
+
+            val indent = buildString { repeat(depth.coerceAtMost(30)) { append("  ") } }
+            val text = node.text?.toString()?.replace("\n", "\\n") ?: ""
+            val resId = node.viewIdResourceName ?: ""
+            val cls = node.className?.toString() ?: ""
+
+            val line = "$indent- text=\"$text\" id=\"$resId\" class=\"$cls\""
+            logger.log("DEBUG_DUMP", line, "NODE")
+
+            val childCount = node.childCount
+            if (childCount > 0 && depth < 60) {
+                for (i in childCount - 1 downTo 0) {
+                    val child = node.getChild(i) ?: continue
+                    stack.addLast(child to (depth + 1))
+                }
+            }
+        }
+
+        val endResult = if (visited >= maxNodes) "TRUNCATED" else "DONE"
+        logger.log("DEBUG_DUMP", "visited=$visited", endResult)
     }
 
     // ─── Helpers ──────────────────────────────────────────────────

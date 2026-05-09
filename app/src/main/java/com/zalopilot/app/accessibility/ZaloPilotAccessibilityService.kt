@@ -39,6 +39,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private var isZaloForeground = false
     private var consecutiveNullCount = 0
     private val likedAuthorsThisSession = mutableSetOf<String>()
+    private var lastDebugDumpMs = 0L
 
     // Status overlay
     private var windowManager: WindowManager? = null
@@ -226,6 +227,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         if (likeNodes.isEmpty()) {
             updateStatus("🔍 Không thấy nút Thích trên màn hình này")
             logger.log("SCAN", "Không thấy nút Thích", "EMPTY")
+            val now = System.currentTimeMillis()
+            if (now - lastDebugDumpMs > 30_000) {
+                lastDebugDumpMs = now
+                nodeFinder.debugDump(root, maxNodes = 500)
+            }
             return false
         }
 

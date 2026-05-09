@@ -1,0 +1,136 @@
+# ZaloPilot — Cursor Rules
+
+## Dự án là gì
+Android app tự động like bài đăng Zalo qua Accessibility Service.
+Không dùng root. Không dùng Zalo API. Hoàn toàn hợp lệ về mặt kỹ thuật Android.
+
+## Tech Stack
+- Kotlin (không dùng Java)
+- Jetpack Compose (không dùng XML layout)
+- Hilt dependency injection
+- Room database
+- Kotlin Coroutines + Flow
+- Min SDK 26 (Android 8.0)
+- Package: com.zalopilot.app
+
+## Cấu trúc thư mục
+```
+accessibility/
+  ZaloPilotAccessibilityService.kt  # Core service - auto like loop
+  NodeFinder.kt                      # Tìm node Zalo với fallback
+  ZaloUIScanner.kt                   # Tự học resource-id từ UI Zalo
+data/model/
+  ZaloIDStore.kt                     # Lưu resource-id đã học được
+floating/
+  FloatingMenuService.kt             # Nút ZP nổi trên Zalo
+ui/
+  MainActivity.kt                    # UI chính - Compose
+util/
+  LikeSettingsManager.kt             # Cài đặt của sale
+  LikeProgressManager.kt             # Tiến độ like
+  Logger.kt                          # Ghi log ra file
+  Extensions.kt                      # randomDelay(), isZaloRunning()
+```
+
+## Quy tắc code BẮT BUỘC
+
+### 1. Null-check AccessibilityNodeInfo
+```kotlin
+// SAI - crash ngay
+val node = root.findByText("Thích")
+node.performAction(ACTION_CLICK)
+
+// ĐÚNG
+val node = nodeFinder.findLikeButtons(root).firstOrNull() ?: return false
+node.performAction(ACTION_CLICK)
+```
+
+### 2. Không hardcode resource-id Zalo
+```kotlin
+// SAI
+root.findAccessibilityNodeInfosByViewId("com.zing.zalo:id/like_btn")
+
+// ĐÚNG - đọc từ ZaloIDStore
+val id = idStore.getLikeButtonID()
+if (id.isNotEmpty()) root.findAccessibilityNodeInfosByViewId(id)
+```
+
+### 3. Random delay giữa mỗi action
+```kotlin
+// SAI
+Thread.sleep(1000)
+
+// ĐÚNG
+randomDelay(settings.delayMinMs, settings.delayMaxMs)
+```
+
+### 4. Log mọi action
+```kotlin
+logger.log("LIKE", authorName, "SUCCESS")
+logger.log("LIKE", authorName, "CLICK_FAILED")
+logger.log("SCAN", "resource-id mới", "ID_SAVED")
+```
+
+### 5. Không dùng XML layout
+```kotlin
+// SAI - không có file layout XML
+LayoutInflater.from(this).inflate(R.layout.my_layout, null)
+
+// ĐÚNG - tạo view bằng code
+val tv = TextView(this).apply {
+    text = "ZP"
+    setBackgroundColor(Color.parseColor("#0068FF"))
+}
+```
+
+### 6. Không dùng R.drawable trừ mipmap icon
+```kotlin
+// SAI - không có drawable nào ngoài icon
+setSmallIcon(R.drawable.ic_notification)
+
+// ĐÚNG
+setSmallIcon(android.R.drawable.ic_dialog_info)
+```
+
+## LikeSettings — các field quan trọng
+```kotlin
+data class LikeSettings(
+    val dailyLimit: Int = 100,
+    val delayMinMs: Long = 1000,
+    val delayMaxMs: Long = 3000,
+    val sessionLimit: Int = 30,
+    val restMinMinutes: Int = 5,
+    val restMaxMinutes: Int = 10,
+    val quietHourStart: Int = 22,
+    val quietHourEnd: Int = 6,
+    val autoStart: Boolean = false,
+    val likeModeStr: String = "FEED"
+)
+```
+
+## LikeProgress — các field quan trọng
+```kotlin
+data class LikeProgress(
+    val todayLikeCount: Int = 0,
+    val lastRunDate: String = "",
+    val visitIndex: Int = 0
+)
+```
+
+## Broadcast actions
+- `com.zalopilot.STATUS_UPDATE` — bot bắt đầu/dừng
+- `com.zalopilot.PROGRESS_UPDATE` — đã like thêm 1 bài
+- `com.zalopilot.ZALO_STATE` — Zalo mở/tắt
+- `com.zalopilot.DAILY_LIMIT` — đã đủ giới hạn ngày
+
+## Zalo package
+- Package: `com.zing.zalo`
+- Tab Nhật ký text: "Nhật ký"
+- Nút Like text: "Thích"
+- Nút đã Like text: "Đã thích"
+
+## Sau mỗi task
+Luôn cập nhật:
+1. `TODO.md` — đánh dấu [x] task xong
+2. `CHANGELOG.md` — thêm vào [Unreleased]
+3. Báo nếu có dependency mới cần thêm vào build.gradle.kts
