@@ -1,6 +1,7 @@
 package com.zalopilot.app.util
 
 import android.content.Context
+import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,7 +20,8 @@ class Logger @Inject constructor(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
     private val logFile: File by lazy {
-        val dir = File(context.getExternalFilesDir(null), "ZaloPilot")
+        // Internal storage để tránh lỗi scoped storage / external không sẵn sàng.
+        val dir = File(context.filesDir, "ZaloPilot")
         dir.mkdirs()
         File(dir, "log.txt")
     }
@@ -32,7 +34,8 @@ class Logger @Inject constructor(
                 logFile.appendText(line)
                 trimLogIfNeeded()
             } catch (e: Exception) {
-                // Không crash app nếu log lỗi
+                // Không crash app nếu log lỗi, nhưng phải có dấu vết để debug.
+                Log.e("ZaloPilot", "Logger failed: action=$action result=$result target=$target", e)
             }
         }
     }
@@ -52,10 +55,12 @@ class Logger @Inject constructor(
     private fun parseLine(line: String): LogEntry? {
         return try {
             val parts = line.split("] [")
+            if (parts.size < 4) return null
             val timestamp = parts[0].removePrefix("[")
             val action = parts[1]
             val result = parts[2]
-            val target = parts[3].removeSuffix("]").trim()
+            // target có thể chứa thêm "] [" nên join lại để không fail parse.
+            val target = parts.drop(3).joinToString("] [").removeSuffix("]").trim()
             LogEntry(timestamp, action, result, target)
         } catch (e: Exception) {
             null
