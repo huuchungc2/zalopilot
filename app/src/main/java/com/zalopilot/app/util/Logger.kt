@@ -30,7 +30,8 @@ class Logger @Inject constructor(
         scope.launch {
             try {
                 val timestamp = dateFormat.format(Date())
-                val line = "[$timestamp] [$action] [$result] $target\n"
+                // Wrap target in [] to make parsing reliable.
+                val line = "[$timestamp] [$action] [$result] [$target]\n"
                 logFile.appendText(line)
                 trimLogIfNeeded()
             } catch (e: Exception) {
@@ -54,14 +55,21 @@ class Logger @Inject constructor(
 
     private fun parseLine(line: String): LogEntry? {
         return try {
-            val parts = line.split("] [")
-            if (parts.size < 4) return null
-            val timestamp = parts[0].removePrefix("[")
-            val action = parts[1]
-            val result = parts[2]
-            // target có thể chứa thêm "] [" nên join lại để không fail parse.
-            val target = parts.drop(3).joinToString("] [").removeSuffix("]").trim()
-            LogEntry(timestamp, action, result, target)
+            // Support both formats:
+            // - New: [ts] [action] [result] [target]
+            // - Old: [ts] [action] [result] target
+            val newFmt = Regex("^\\[(.*?)] \\[(.*?)] \\[(.*?)] \\[(.*)]\\s*$")
+            val oldFmt = Regex("^\\[(.*?)] \\[(.*?)] \\[(.*?)]\\s+(.*)\\s*$")
+
+            val m1 = newFmt.find(line)
+            if (m1 != null) {
+                val (ts, action, result, target) = m1.destructured
+                return LogEntry(ts, action, result, target)
+            }
+
+            val m2 = oldFmt.find(line) ?: return null
+            val (ts, action, result, target) = m2.destructured
+            LogEntry(ts, action, result, target)
         } catch (e: Exception) {
             null
         }
