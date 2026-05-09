@@ -7,11 +7,13 @@ import android.content.IntentFilter
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -21,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
@@ -43,17 +46,126 @@ class MainActivity : ComponentActivity() {
         progressManager.resetDailyIfNeeded()
         setContent {
             MaterialTheme {
-                ZaloPilotApp()
+                if (!isSetupComplete()) SetupWizard() else ZaloPilotApp()
+            }
+        }
+    }
+
+    // ─── Setup Wizard ────────────────────────────────────────────
+
+    @Composable
+    fun SetupWizard() {
+        var step by remember { mutableIntStateOf(1) }
+        var tick by remember { mutableIntStateOf(0) }
+
+        LaunchedEffect(Unit) {
+            while (true) {
+                kotlinx.coroutines.delay(1000)
+                tick++
+            }
+        }
+
+        val acc = remember(tick) { isAccessibilityServiceEnabled() }
+        val overlay = remember(tick) { Settings.canDrawOverlays(this) }
+
+        LaunchedEffect(acc, overlay) {
+            if (step == 1 && acc) step = 2
+            if (step == 2 && overlay) step = 3
+        }
+
+        Column(
+            modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)).padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text("ZaloPilot", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = zaloBlue)
+            Text("Thiết lập lần đầu", fontSize = 14.sp, color = Color.Gray)
+            Spacer(Modifier.height(32.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                listOf(1, 2, 3).forEach { s ->
+                    Box(Modifier.size(32.dp).clip(CircleShape)
+                        .background(if (s <= step) zaloBlue else Color(0xFFE0E0E0)),
+                        contentAlignment = Alignment.Center) {
+                        Text("$s", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                    if (s < 3) Box(Modifier.width(32.dp).height(2.dp)
+                        .background(if (s < step) zaloBlue else Color(0xFFE0E0E0)))
+                }
+            }
+
+            Spacer(Modifier.height(32.dp))
+
+            when (step) {
+                1 -> StepCard("♿", "Bật Accessibility Service",
+                    "Cho phép ZaloPilot điều khiển Zalo.\n\nSamsung: Cài đặt → tìm kiếm 'Hỗ trợ tiếp cận' → Ứng dụng đã cài → ZaloPilot → BẬT\n\nHoặc bấm nút bên dưới:",
+                    "Mở Cài đặt Accessibility", acc) {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
+                2 -> StepCard("🪟", "Hiển thị trên app khác",
+                    "Để nút ZP nổi lên trên màn hình Zalo.\n\nBấm nút bên dưới → tìm ZaloPilot → bật lên:",
+                    "Mở Cài đặt", overlay) {
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                }
+                3 -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("✅", fontSize = 48.sp)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Thiết lập hoàn tất!", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF27AE60))
+                    Spacer(Modifier.height(8.dp))
+                    Text("Mở Zalo → vào tab Nhật ký → bấm nút ZP → Bắt đầu like",
+                        fontSize = 14.sp, color = Color.Gray, textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(24.dp))
+                    Button(onClick = {
+                        startService(Intent(this@MainActivity, FloatingMenuService::class.java))
+                        recreate()
+                    }, colors = ButtonDefaults.buttonColors(containerColor = zaloBlue),
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                        shape = RoundedCornerShape(12.dp)) {
+                        Text("Vào app chính", fontSize = 15.sp, fontWeight = FontWeight.W500)
+                    }
+                }
             }
         }
     }
 
     @Composable
+    fun StepCard(icon: String, title: String, desc: String, btnText: String, done: Boolean, onClick: () -> Unit) {
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+            Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(icon, fontSize = 40.sp)
+                Spacer(Modifier.height(12.dp))
+                Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(8.dp))
+                Text(desc, fontSize = 13.sp, color = Color.Gray, textAlign = TextAlign.Center, lineHeight = 20.sp)
+                Spacer(Modifier.height(20.dp))
+                if (done) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Box(Modifier.size(20.dp).clip(CircleShape).background(Color(0xFF27AE60)), contentAlignment = Alignment.Center) {
+                            Text("✓", color = Color.White, fontSize = 12.sp)
+                        }
+                        Text("Đã cấp quyền ✓", color = Color(0xFF27AE60), fontWeight = FontWeight.W500)
+                    }
+                } else {
+                    Button(onClick = onClick, colors = ButtonDefaults.buttonColors(containerColor = zaloBlue),
+                        modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(10.dp)) {
+                        Text(btnText)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("Sau khi bật xong, app tự chuyển bước tiếp", fontSize = 11.sp, color = Color.Gray, textAlign = TextAlign.Center)
+                }
+            }
+        }
+    }
+
+    // ─── Main App ────────────────────────────────────────────────
+
+    @Composable
     fun ZaloPilotApp() {
         var selectedTab by remember { mutableIntStateOf(0) }
-        var isRunning by remember { mutableStateOf(false) }
+        var isRunning by remember { mutableStateOf(ZaloPilotAccessibilityService.isActive) }
         var progress by remember { mutableStateOf(progressManager.load()) }
         var settings by remember { mutableStateOf(settingsManager.load()) }
+        var logs by remember { mutableStateOf(logger.readLogs()) }
 
         DisposableEffect(Unit) {
             val receiver = object : BroadcastReceiver() {
@@ -61,103 +173,74 @@ class MainActivity : ComponentActivity() {
                     progress = progressManager.load()
                     settings = settingsManager.load()
                     isRunning = ZaloPilotAccessibilityService.isActive
+                    logs = logger.readLogs()
+                    when (intent?.action) {
+                        "com.zalopilot.STATUS_UPDATE" -> {
+                            val running = intent.getBooleanExtra("running", false)
+                            Toast.makeText(this@MainActivity,
+                                if (running) "▶ ZaloPilot đang chạy" else "■ ZaloPilot đã dừng",
+                                Toast.LENGTH_SHORT).show()
+                        }
+                        "com.zalopilot.DAILY_LIMIT" ->
+                            Toast.makeText(this@MainActivity,
+                                "✅ Đã like đủ ${settingsManager.load().dailyLimit} bài hôm nay!",
+                                Toast.LENGTH_LONG).show()
+                    }
                 }
             }
             val filter = IntentFilter().apply {
                 addAction("com.zalopilot.STATUS_UPDATE")
                 addAction("com.zalopilot.PROGRESS_UPDATE")
+                addAction("com.zalopilot.DAILY_LIMIT")
                 addAction("com.zalopilot.ZALO_STATE")
             }
             registerReceiver(receiver, filter)
             onDispose { unregisterReceiver(receiver) }
         }
 
-        Scaffold(
-            bottomBar = {
-                NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                    listOf("Trang chủ", "Cài đặt", "Nhật ký").forEachIndexed { i, label ->
-                        NavigationBarItem(
-                            selected = selectedTab == i,
-                            onClick = { selectedTab = i },
-                            icon = { Text(listOf("🏠", "⚙️", "📋")[i], fontSize = 18.sp) },
-                            label = { Text(label, fontSize = 11.sp) }
-                        )
-                    }
+        Scaffold(bottomBar = {
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                listOf("Trang chủ", "Cài đặt", "Nhật ký").forEachIndexed { i, label ->
+                    NavigationBarItem(
+                        selected = selectedTab == i,
+                        onClick = { selectedTab = i; if (i == 2) logs = logger.readLogs() },
+                        icon = { Text(listOf("🏠", "⚙️", "📋")[i], fontSize = 18.sp) },
+                        label = { Text(label, fontSize = 11.sp) }
+                    )
                 }
             }
-        ) { padding ->
+        }) { padding ->
             Box(Modifier.padding(padding)) {
                 when (selectedTab) {
                     0 -> HomeScreen(isRunning, progress, settings)
-                    1 -> SettingsScreen(settings) {
-                        settings = it
-                        settingsManager.save(it)
-                    }
-                    2 -> LogScreen()
+                    1 -> SettingsScreen(settings) { settings = it; settingsManager.save(it) }
+                    2 -> LogScreen(logs)
                 }
             }
         }
     }
 
+    // ─── Home ────────────────────────────────────────────────────
+
     @Composable
     fun HomeScreen(isRunning: Boolean, progress: LikeProgress, settings: LikeSettings) {
-        val isAccessibilityOn = isAccessibilityServiceEnabled()
-
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        LazyColumn(modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)),
+            contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
-                Box(
-                    modifier = Modifier.fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(zaloBlue)
-                        .padding(20.dp)
-                ) {
+                Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(zaloBlue).padding(20.dp)) {
                     Column {
                         Text("ZaloPilot", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
                         Text("Auto Like Zalo", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
                         Spacer(Modifier.height(8.dp))
-                        Surface(
-                            shape = RoundedCornerShape(99.dp),
-                            color = if (isRunning) Color(0xFF27AE60) else Color.White.copy(alpha = 0.2f)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
+                        Surface(shape = RoundedCornerShape(99.dp), color = if (isRunning) Color(0xFF27AE60) else Color.White.copy(alpha = 0.2f)) {
+                            Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Box(Modifier.size(7.dp).clip(CircleShape).background(Color.White))
-                                Text(
-                                    if (isRunning) "Đang chạy" else "Chờ",
-                                    color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.W500
-                                )
+                                Text(if (isRunning) "Đang chạy" else "Chờ", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.W500)
                             }
                         }
                     }
                 }
             }
-
-            if (!isAccessibilityOn) {
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3CD))
-                    ) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text("Cần bật Accessibility Service", fontWeight = FontWeight.W500, color = Color(0xFF856404))
-                            Text("Cài đặt → Hỗ trợ tiếp cận → ZaloPilot → Bật lên", fontSize = 13.sp, color = Color(0xFF856404))
-                            Spacer(Modifier.height(8.dp))
-                            Button(
-                                onClick = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
-                                colors = ButtonDefaults.buttonColors(containerColor = zaloBlue)
-                            ) { Text("Mở Cài đặt") }
-                        }
-                    }
-                }
-            }
-
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
@@ -169,12 +252,9 @@ class MainActivity : ComponentActivity() {
                         }
                         Spacer(Modifier.height(10.dp))
                         val pct = (progress.todayLikeCount.toFloat() / settings.dailyLimit).coerceIn(0f, 1f)
-                        LinearProgressIndicator(
-                            progress = { pct },
+                        LinearProgressIndicator(progress = { pct },
                             modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(99.dp)),
-                            color = zaloBlue,
-                            trackColor = Color(0xFFE0E0E0)
-                        )
+                            color = zaloBlue, trackColor = Color(0xFFE0E0E0))
                         Spacer(Modifier.height(4.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("${progress.todayLikeCount} / ${settings.dailyLimit}", fontSize = 12.sp, color = Color.Gray)
@@ -183,46 +263,29 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
                         Text("CHẾ ĐỘ CHẠY", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
                         Spacer(Modifier.height(8.dp))
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                if (settingsManager.isAutoStart()) "🤖 Tự động — Zalo mở là chạy"
-                                else "👆 Thủ công — bấm Start mới chạy",
-                                fontSize = 13.sp
-                            )
-                            Switch(
-                                checked = settingsManager.isAutoStart(),
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column {
+                                Text(if (settingsManager.isAutoStart()) "🤖 Tự động" else "👆 Thủ công", fontSize = 14.sp, fontWeight = FontWeight.W500)
+                                Text(if (settingsManager.isAutoStart()) "Zalo mở là tự chạy" else "Bấm Start trên nút ZP", fontSize = 12.sp, color = Color.Gray)
+                            }
+                            Switch(checked = settingsManager.isAutoStart(),
                                 onCheckedChange = { settingsManager.setAutoStart(it) },
-                                colors = SwitchDefaults.colors(checkedThumbColor = zaloBlue, checkedTrackColor = zaloBlue.copy(alpha = 0.3f))
-                            )
+                                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue))
                         }
                     }
                 }
             }
-
             item {
-                Button(
-                    onClick = {
-                        if (Settings.canDrawOverlays(this@MainActivity)) {
-                            startService(Intent(this@MainActivity, FloatingMenuService::class.java))
-                        } else {
-                            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-                        }
-                    },
+                Button(onClick = { startService(Intent(this@MainActivity, FloatingMenuService::class.java)) },
                     modifier = Modifier.fillMaxWidth().height(50.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = zaloBlue),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("Bật nút nổi trên Zalo", fontSize = 15.sp, fontWeight = FontWeight.W500)
+                    shape = RoundedCornerShape(12.dp)) {
+                    Text("Bật nút nổi ZP trên Zalo", fontSize = 15.sp, fontWeight = FontWeight.W500)
                 }
             }
         }
@@ -230,16 +293,15 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun StatCard(value: String, label: String, color: Color, modifier: Modifier = Modifier) {
-        Box(
-            modifier = modifier.clip(RoundedCornerShape(10.dp)).background(Color(0xFFF5F5F5)).padding(12.dp),
-            contentAlignment = Alignment.Center
-        ) {
+        Box(modifier.clip(RoundedCornerShape(10.dp)).background(Color(0xFFF5F5F5)).padding(12.dp), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(value, fontSize = 24.sp, fontWeight = FontWeight.W500, color = color)
                 Text(label, fontSize = 12.sp, color = Color.Gray)
             }
         }
     }
+
+    // ─── Settings ────────────────────────────────────────────────
 
     @Composable
     fun SettingsScreen(settings: LikeSettings, onSave: (LikeSettings) -> Unit) {
@@ -251,22 +313,17 @@ class MainActivity : ComponentActivity() {
         var restMax by remember { mutableIntStateOf(settings.restMaxMinutes) }
         var quietStart by remember { mutableIntStateOf(settings.quietHourStart) }
         var quietEnd by remember { mutableIntStateOf(settings.quietHourEnd) }
-        var saveMsg by remember { mutableStateOf("") }
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        LazyColumn(modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)),
+            contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
                 Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(zaloBlue).padding(20.dp)) {
                     Column {
                         Text("Cài đặt", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
-                        Text("Tùy chỉnh theo ý muốn", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
+                        Text("Tùy chỉnh tốc độ like", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
                     }
                 }
             }
-
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
@@ -281,7 +338,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
@@ -298,7 +354,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         Spacer(Modifier.height(8.dp))
-                        Text("Nghỉ giữa session: $restMin - $restMax phút", fontSize = 13.sp)
+                        Text("Nghỉ giữa session: $restMin–$restMax phút", fontSize = 13.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Column(Modifier.weight(1f)) {
                                 Text("Tối thiểu", fontSize = 12.sp, color = Color.Gray)
@@ -314,7 +370,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
@@ -336,87 +391,82 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-
             item {
-                if (saveMsg.isNotEmpty()) {
-                    Text(saveMsg, color = Color(0xFF27AE60), modifier = Modifier.fillMaxWidth(), fontSize = 13.sp)
-                }
-                Button(
-                    onClick = {
-                        onSave(settings.copy(
-                            dailyLimit = dailyLimit,
-                            delayMinMs = (delayMin.toLongOrNull() ?: 1L) * 1000L,
-                            delayMaxMs = (delayMax.toLongOrNull() ?: 3L) * 1000L,
-                            sessionLimit = sessionLimit,
-                            restMinMinutes = restMin,
-                            restMaxMinutes = restMax,
-                            quietHourStart = quietStart,
-                            quietHourEnd = quietEnd
-                        ))
-                        saveMsg = "Đã lưu cài đặt!"
-                    },
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                Button(onClick = {
+                    onSave(settings.copy(
+                        dailyLimit = dailyLimit,
+                        delayMinMs = (delayMin.toLongOrNull() ?: 1L) * 1000L,
+                        delayMaxMs = (delayMax.toLongOrNull() ?: 3L) * 1000L,
+                        sessionLimit = sessionLimit,
+                        restMinMinutes = restMin,
+                        restMaxMinutes = restMax,
+                        quietHourStart = quietStart,
+                        quietHourEnd = quietEnd
+                    ))
+                    Toast.makeText(this@MainActivity, "✅ Đã lưu cài đặt", Toast.LENGTH_SHORT).show()
+                }, modifier = Modifier.fillMaxWidth().height(50.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = zaloBlue),
-                    shape = RoundedCornerShape(12.dp)
-                ) { Text("Lưu cài đặt", fontSize = 15.sp, fontWeight = FontWeight.W500) }
+                    shape = RoundedCornerShape(12.dp)) {
+                    Text("Lưu cài đặt", fontSize = 15.sp, fontWeight = FontWeight.W500)
+                }
             }
         }
     }
 
+    // ─── Log Screen ──────────────────────────────────────────────
+
     @Composable
-    fun LogScreen() {
-        val logs = remember { logger.readLogs() }
+    fun LogScreen(logs: List<LogEntry>) {
         val colorMap = mapOf(
-            "SUCCESS" to Color(0xFF27AE60),
-            "SKIP" to Color(0xFF888888),
-            "REST" to Color(0xFFBA7517),
-            "ERROR" to Color(0xFFE24B4A),
-            "STARTED" to Color(0xFF0068FF),
-            "STOPPED" to Color(0xFF888888)
+            "SUCCESS" to Color(0xFF27AE60), "SKIP" to Color(0xFF888888),
+            "REST" to Color(0xFFBA7517), "ERROR" to Color(0xFFE24B4A),
+            "STARTED" to Color(0xFF0068FF), "STOPPED" to Color(0xFF888888),
+            "CONNECTED" to Color(0xFF0068FF)
         )
 
         Column(Modifier.fillMaxSize().background(Color(0xFFF5F5F5))) {
             Box(Modifier.fillMaxWidth().background(zaloBlue).padding(20.dp)) {
                 Column {
                     Text("Nhật ký", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
-                    Text("Lịch sử hoạt động", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
+                    Text("${logs.size} hoạt động gần nhất", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
                 }
             }
             if (logs.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Chưa có hoạt động nào", color = Color.Gray)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("📋", fontSize = 40.sp)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Chưa có hoạt động nào", color = Color.Gray, fontSize = 14.sp)
+                        Text("Mở Zalo và bắt đầu like để xem log", color = Color.Gray, fontSize = 12.sp)
+                    }
                 }
             } else {
-                LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    item {
+                LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(logs) { log ->
+                        val dotColor = colorMap.entries.find { log.result.contains(it.key) }?.value ?: Color.Gray
                         Card(modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp)) {
-                                Text("NHẬT KÝ GẦN ĐÂY", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                                Spacer(Modifier.height(8.dp))
-                                logs.forEach { log ->
-                                    val dotColor = colorMap.entries.find { log.result.contains(it.key) }?.value ?: Color.Gray
-                                    Row(Modifier.padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                        Box(Modifier.size(8.dp).clip(CircleShape).background(dotColor).align(Alignment.CenterVertically))
-                                        Column {
-                                            Text(
-                                                when (log.action) {
-                                                    "LIKE" -> "Like thành công — ${log.target}"
-                                                    "LIKE_SKIP" -> "Bỏ qua — ${log.target}"
-                                                    "AUTO_LIKE" -> when (log.result) {
-                                                        "STARTED" -> "Bắt đầu phiên"
-                                                        "STOPPED" -> "Dừng phiên"
-                                                        "SESSION_REST" -> log.target
-                                                        "DAILY_LIMIT_REACHED" -> "Đã đủ giới hạn hôm nay"
-                                                        else -> "${log.action} ${log.result}"
-                                                    }
-                                                    else -> "${log.action} — ${log.target}"
-                                                },
-                                                fontSize = 13.sp, color = Color(0xFF222222)
-                                            )
-                                            Text(log.timestamp, fontSize = 11.sp, color = Color.Gray)
+                            Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Box(Modifier.size(8.dp).clip(CircleShape).background(dotColor).align(Alignment.CenterVertically))
+                                Column(Modifier.weight(1f)) {
+                                    Text(when (log.action) {
+                                        "LIKE" -> "👍 Like thành công — ${log.target}"
+                                        "LIKE_SKIP" -> "⏭ Bỏ qua — ${log.target}"
+                                        "AUTO_LIKE" -> when (log.result) {
+                                            "STARTED" -> "▶ Bắt đầu (${log.target})"
+                                            "STOPPED" -> "■ Dừng"
+                                            "SESSION_REST" -> "😴 ${log.target}"
+                                            "DAILY_LIMIT_REACHED" -> "✅ Đã đủ giới hạn hôm nay"
+                                            "QUIET_HOUR_PAUSE" -> "🌙 Giờ nghỉ — dừng"
+                                            "ZALO_NOT_FOREGROUND" -> "⚠️ Zalo không mở"
+                                            "PAUSED_ZALO_CLOSED" -> "⏸ Zalo tắt — tạm dừng"
+                                            else -> "${log.action} ${log.result}"
                                         }
-                                    }
-                                    if (logs.last() != log) HorizontalDivider(color = Color(0xFFEEEEEE), thickness = 0.5.dp)
+                                        "ZALO" -> if (log.result == "FOREGROUND") "📱 Zalo mở lên" else "📴 Zalo tắt"
+                                        "SERVICE" -> "🔧 Service ${log.result}"
+                                        "SCANNER" -> "🔍 ${log.target}"
+                                        else -> "${log.action} — ${log.target}"
+                                    }, fontSize = 13.sp, color = Color(0xFF222222))
+                                    Text(log.timestamp, fontSize = 11.sp, color = Color.Gray)
                                 }
                             }
                         }
@@ -425,6 +475,10 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    // ─── Helpers ─────────────────────────────────────────────────
+
+    private fun isSetupComplete() = isAccessibilityServiceEnabled() && Settings.canDrawOverlays(this)
 
     private fun isAccessibilityServiceEnabled(): Boolean {
         val service = "$packageName/com.zalopilot.app.accessibility.ZaloPilotAccessibilityService"

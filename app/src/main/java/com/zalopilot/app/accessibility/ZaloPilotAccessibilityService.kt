@@ -4,9 +4,18 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.graphics.Path
+import android.graphics.PixelFormat
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
+import android.view.Gravity
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Toast
 import com.zalopilot.app.util.*
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
@@ -22,58 +31,56 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     @Inject lateinit var logger: Logger
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private var isRunning = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    var isRunning = false
     private var likeJob: Job? = null
     private var sessionLikeCount = 0
     private var wakeLock: PowerManager.WakeLock? = null
     private var isZaloForeground = false
     private var consecutiveNullCount = 0
-
     private val likedAuthorsThisSession = mutableSetOf<String>()
+
+    // Status overlay
+    private var windowManager: WindowManager? = null
+    private var statusView: LinearLayout? = null
+    private var statusText: TextView? = null
+    private var isOverlayShowing = false
 
     companion object {
         var instance: ZaloPilotAccessibilityService? = null
         var isActive = false
-        private const val MAX_NULL_BEFORE_WARN = 3
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         isActive = true
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         progressManager.resetDailyIfNeeded()
         logger.log("SERVICE", "", "CONNECTED")
+        showToast("✅ ZaloPilot đã kết nối")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val pkg = event.packageName?.toString() ?: ""
-
             if (pkg == "com.zing.zalo") {
                 if (!isZaloForeground) {
                     isZaloForeground = true
                     logger.log("ZALO", "", "FOREGROUND")
                     sendBroadcast(Intent("com.zalopilot.ZALO_STATE").putExtra("foreground", true))
-
-                    // Scan UI ngay khi Zalo lên foreground để học ID mới nhất
                     scope.launch(Dispatchers.Main) {
-                        delay(500) // Chờ UI load xong
+                        delay(800)
                         rootInActiveWindow?.let { uiScanner.scan(it) }
                     }
-
-                    // Auto start nếu được bật
-                    if (settingsManager.isAutoStart()
-                        && !isRunning
+                    if (settingsManager.isAutoStart() && !isRunning
                         && !progressManager.isLimitReached()
-                        && !settingsManager.isQuietHour()
-                    ) {
+                        && !settingsManager.isQuietHour()) {
                         startAutoLike()
                     }
                 }
             } else {
-                // App khác lên foreground → Zalo bị đẩy xuống
                 if (isZaloForeground) {
                     isZaloForeground = false
                     logger.log("ZALO", "", "BACKGROUND")
@@ -82,6 +89,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         stopAutoLike()
                         logger.log("AUTO_LIKE", "", "PAUSED_ZALO_CLOSED")
                     }
+                    hideStatusOverlay()
                 }
             }
         }
@@ -95,6 +103,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         stopAutoLike()
+        hideStatusOverlay()
         instance = null
         isActive = false
         scope.cancel()
@@ -104,26 +113,22 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
     fun startAutoLike() {
         if (isRunning) return
-
-        // Scan UI trước khi bắt đầu
         rootInActiveWindow?.let { uiScanner.scan(it) }
-
         isRunning = true
         sessionLikeCount = 0
         consecutiveNullCount = 0
         likedAuthorsThisSession.clear()
 
-        // Bật WakeLock giữ CPU chạy kể cả tắt màn hình
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ZaloPilot:AutoLike")
-        wakeLock?.acquire(10 * 60 * 60 * 1000L) // Tối đa 10 tiếng
+        wakeLock?.acquire(10 * 60 * 60 * 1000L)
 
         sendBroadcast(Intent("com.zalopilot.STATUS_UPDATE").putExtra("running", true))
-        logger.log("AUTO_LIKE", settingsManager.getLikeMode().name, "STARTED")
+        logger.log("AUTO_LIKE", "FEED", "STARTED")
+        showToast("▶ Bắt đầu auto like")
+        showStatusOverlay("▶ Đang khởi động...")
 
-        likeJob = scope.launch {
-            autoLikeLoop()
-        }
+        likeJob = scope.launch { autoLikeLoop() }
     }
 
     fun stopAutoLike() {
@@ -131,12 +136,12 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         isRunning = false
         likeJob?.cancel()
         likeJob = null
-
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
-
         sendBroadcast(Intent("com.zalopilot.STATUS_UPDATE").putExtra("running", false))
         logger.log("AUTO_LIKE", "", "STOPPED")
+        showToast("■ Đã dừng")
+        hideStatusOverlay()
     }
 
     // ─── Main Loop ───────────────────────────────────────────────
@@ -144,18 +149,23 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private suspend fun autoLikeLoop() {
         while (isRunning) {
             if (settingsManager.isQuietHour()) {
+                updateStatus("🌙 Giờ nghỉ — dừng lại")
+                showToast("🌙 Giờ nghỉ — ZaloPilot tạm dừng")
                 logger.log("AUTO_LIKE", "", "QUIET_HOUR_PAUSE")
                 stopAutoLike()
                 return
             }
 
             if (progressManager.isLimitReached()) {
+                val count = progressManager.load().todayLikeCount
+                updateStatus("✅ Đã like đủ $count bài hôm nay")
+                showToast("✅ Đã like đủ $count bài hôm nay!")
                 logger.log("AUTO_LIKE", "", "DAILY_LIMIT_REACHED")
+                sendBroadcast(Intent("com.zalopilot.DAILY_LIMIT"))
                 stopAutoLike()
                 return
             }
 
-            // Kiểm tra Zalo vẫn foreground
             if (!isZaloForeground) {
                 logger.log("AUTO_LIKE", "", "ZALO_NOT_FOREGROUND")
                 stopAutoLike()
@@ -164,10 +174,12 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
             val settings = settingsManager.load()
 
-            // Nghỉ giữa session
             if (sessionLikeCount >= settings.sessionLimit) {
                 val restMs = ((settings.restMinMinutes * 60_000L)..(settings.restMaxMinutes * 60_000L)).random()
-                logger.log("AUTO_LIKE", "Nghỉ ${restMs / 60000} phút", "SESSION_REST")
+                val restMin = restMs / 60000
+                updateStatus("😴 Nghỉ $restMin phút (đã like $sessionLikeCount bài)")
+                showToast("😴 Nghỉ $restMin phút cho tự nhiên")
+                logger.log("AUTO_LIKE", "Nghỉ $restMin phút", "SESSION_REST")
                 sessionLikeCount = 0
                 likedAuthorsThisSession.clear()
                 delay(restMs)
@@ -177,30 +189,32 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             val root = rootInActiveWindow
             if (root == null) {
                 consecutiveNullCount++
-                if (consecutiveNullCount >= MAX_NULL_BEFORE_WARN) {
+                updateStatus("⚠️ Zalo không phản hồi ($consecutiveNullCount lần)")
+                if (consecutiveNullCount >= 3) {
+                    showToast("⚠️ Không đọc được màn hình Zalo — kiểm tra Accessibility")
                     logger.log("AUTO_LIKE", "Zalo không phản hồi", "ZALO_SLEEP")
                 }
-                delay(10_000)
+                delay(5000)
                 continue
             }
 
             consecutiveNullCount = 0
 
-            // Scan UI để cập nhật ID mới nhất nếu cần
             if (!uiScanner.hasScannedRecently()) {
+                updateStatus("🔍 Đang scan giao diện Zalo...")
                 uiScanner.scan(root)
             }
 
             val liked = runFeedMode(root, settings)
 
             if (!liked) {
+                val progress = progressManager.load()
+                updateStatus("📜 Cuộn xuống... (đã like ${progress.todayLikeCount}/${settings.dailyLimit})")
                 scrollDown()
                 delay(1500)
             }
         }
     }
-
-    // ─── Feed Mode ───────────────────────────────────────────────
 
     private suspend fun runFeedMode(
         root: android.view.accessibility.AccessibilityNodeInfo,
@@ -209,9 +223,18 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         val likeNodes = nodeFinder.findLikeButtons(root)
         var likedThisScan = false
 
+        if (likeNodes.isEmpty()) {
+            updateStatus("🔍 Không thấy nút Thích trên màn hình này")
+            logger.log("SCAN", "Không thấy nút Thích", "EMPTY")
+            return false
+        }
+
         for (node in likeNodes) {
             if (!isRunning) break
-            if (!nodeFinder.shouldLike(node)) continue
+            if (!nodeFinder.shouldLike(node)) {
+                logger.log("LIKE_SKIP", "Đã like rồi", "SKIP")
+                continue
+            }
 
             val author = nodeFinder.getAuthorName(node)
             if (author != null && likedAuthorsThisSession.contains(author)) {
@@ -219,15 +242,21 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 continue
             }
 
+            updateStatus("👍 Đang like bài của ${author ?: "..."}...")
             val clicked = node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+
             if (clicked) {
-                progressManager.incrementAndSave()
+                val progress = progressManager.incrementAndSave()
                 sessionLikeCount++
                 likedThisScan = true
                 if (author != null) likedAuthorsThisSession.add(author)
                 logger.log("LIKE", author ?: "unknown", "SUCCESS")
+                updateStatus("✅ Like #${progress.todayLikeCount} — ${author ?: "unknown"}")
                 sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                 randomDelay(settings.delayMinMs, settings.delayMaxMs)
+            } else {
+                updateStatus("❌ Click thất bại — node không clickable")
+                logger.log("LIKE", author ?: "unknown", "CLICK_FAILED")
             }
 
             if (progressManager.isLimitReached()) {
@@ -240,6 +269,76 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         return likedThisScan
     }
 
+    // ─── Status Overlay ──────────────────────────────────────────
+
+    private fun showStatusOverlay(msg: String) {
+        mainHandler.post {
+            try {
+                if (isOverlayShowing) { updateStatus(msg); return@post }
+                val wm = windowManager ?: return@post
+
+                val params = WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                    PixelFormat.TRANSLUCENT
+                ).apply {
+                    gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                    y = 80
+                }
+
+                val layout = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(24, 12, 24, 12)
+                    setBackgroundColor(Color.parseColor("#CC000000"))
+                }
+
+                val tv = TextView(this).apply {
+                    text = msg
+                    textSize = 12f
+                    setTextColor(Color.WHITE)
+                    maxLines = 2
+                }
+
+                layout.addView(tv)
+                statusView = layout
+                statusText = tv
+                wm.addView(layout, params)
+                isOverlayShowing = true
+            } catch (e: Exception) {
+                logger.log("OVERLAY", e.message ?: "", "ERROR")
+            }
+        }
+    }
+
+    private fun updateStatus(msg: String) {
+        mainHandler.post {
+            if (!isOverlayShowing) {
+                showStatusOverlay(msg)
+                return@post
+            }
+            statusText?.text = msg
+        }
+    }
+
+    private fun hideStatusOverlay() {
+        mainHandler.post {
+            try {
+                statusView?.let { windowManager?.removeView(it) }
+            } catch (e: Exception) {}
+            statusView = null
+            statusText = null
+            isOverlayShowing = false
+        }
+    }
+
+    private fun showToast(msg: String) {
+        mainHandler.post {
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     // ─── Scroll ──────────────────────────────────────────────────
 
     private fun scrollDown() {
@@ -247,7 +346,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         val fromX = metrics.widthPixels / 2f
         val fromY = metrics.heightPixels * 0.75f
         val toY = metrics.heightPixels * 0.25f
-
         val path = Path().apply {
             moveTo(fromX, fromY)
             lineTo(fromX, toY)
