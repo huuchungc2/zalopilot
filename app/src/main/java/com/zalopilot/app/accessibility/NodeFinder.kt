@@ -32,6 +32,7 @@ class NodeFinder @Inject constructor(
 
         fun addResolved(raw: AccessibilityNodeInfo?) {
             val node = resolveClickable(raw) ?: return
+            if (isAlreadyLiked(node)) return
             val key = dedupeKey(node)
             if (key !in seen) {
                 seen.add(key)
@@ -55,7 +56,12 @@ class NodeFinder @Inject constructor(
             logger.log(LogTag.SCAN, "savedId=$savedId", "ID_MISS_FALLBACK")
         }
 
-        root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKE).forEach { addResolved(it) }
+        // findAccessibilityNodeInfosByText("Thích") có thể khớp cả "Đã thích" (substring).
+        val byText = root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKE)
+        for (raw in byText) {
+            if (isAlreadyLiked(raw)) continue
+            addResolved(raw)
+        }
 
         collectLikeHintsByTraversal(root, maxNodes = 2800).forEach { addResolved(it) }
 
@@ -211,6 +217,35 @@ class NodeFinder @Inject constructor(
         return false
     }
 
+    /** Hai node cùng một view: [===] không đủ vì snapshot khác lần có thể khác instance. */
+    private fun isSameAccessibilityView(a: AccessibilityNodeInfo, b: AccessibilityNodeInfo): Boolean {
+        if (a === b) return true
+        val ida = a.viewIdResourceName
+        val idb = b.viewIdResourceName
+        if (ida.isNullOrBlank() || idb.isNullOrBlank() || ida != idb) return false
+        val ra = Rect()
+        val rb = Rect()
+        a.getBoundsInScreen(ra)
+        b.getBoundsInScreen(rb)
+        return ra == rb
+    }
+
+    /** Tìm [reaction_info] / [my_reaction] trong cây con nông (cùng khối footer bài). */
+    private fun shallowSubtreeShowsMyReaction(root: AccessibilityNodeInfo, maxDepth: Int): Boolean {
+        val q = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+        q.addLast(root to 0)
+        while (q.isNotEmpty()) {
+            val (n, d) = q.removeFirst()
+            if (d > maxDepth) continue
+            val id = n.viewIdResourceName ?: ""
+            if (id.contains("reaction_info") || id.contains("my_reaction")) return true
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { q.addLast(it to (d + 1)) }
+            }
+        }
+        return false
+    }
+
     /**
      * Kiểm tra node đã ở trạng thái "Đã thích" chưa — tập trung tất cả logic tại đây.
      *
@@ -244,17 +279,16 @@ class NodeFinder @Inject constructor(
             if (child.contentDescription?.toString().containsLiked()) return true
         }
 
-        // 4. Leo lên parent, kiểm tra sibling có id reaction_info
-        // (Zalo hiển thị emoji reaction khi mình đã like)
+        // 4. Cùng parent: sibling / cây con footer có reaction_info (Zalo bản mới: btn_like_text
+        // vẫn "Thích" trong snapshot nhưng đã có reaction_info — tránh click 2 → unlike).
         val parent = node.parent ?: return false
         for (i in 0 until parent.childCount) {
             val sib = parent.getChild(i) ?: continue
-            if (sib === node) continue
+            if (isSameAccessibilityView(sib, node)) continue
             val sibId = sib.viewIdResourceName ?: ""
-            // reaction_info chỉ xuất hiện khi chính mình đã like
-            // (khác với like_count là số lượng like của người khác)
-            if (sibId.endsWith("reaction_info") || sibId.endsWith("my_reaction")) return true
+            if (sibId.contains("reaction_info") || sibId.contains("my_reaction")) return true
         }
+        if (shallowSubtreeShowsMyReaction(parent, maxDepth = 6)) return true
 
         return false
     }

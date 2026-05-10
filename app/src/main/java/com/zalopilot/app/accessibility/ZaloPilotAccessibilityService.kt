@@ -22,6 +22,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import com.zalopilot.app.data.model.ZaloIDStore
 import com.zalopilot.app.util.LikeProgressManager
 import com.zalopilot.app.util.LikeSettings
 import com.zalopilot.app.util.DebugHighlightPrefs
@@ -54,6 +55,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private var startAutoLikeInProgress = false
 
     @Inject lateinit var nodeFinder: NodeFinder
+    @Inject lateinit var idStore: ZaloIDStore
     @Inject lateinit var uiScanner: ZaloUIScanner
     @Inject lateinit var progressManager: LikeProgressManager
     @Inject lateinit var settingsManager: LikeSettingsManager
@@ -598,22 +600,13 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 // Không delay đủ → scan ngay lại thấy vẫn "Thích" → click lại → unlike.
                 delay(900L)
 
-                // Verify: đọc lại chính node đó, xác nhận đã chuyển sang "Đã thích".
-                // Nếu vẫn thấy "Thích" → có thể click fail hoặc Zalo chưa render xong.
-                val nowText = node.text?.toString()?.trim() ?: ""
-                val nowDesc = node.contentDescription?.toString()?.trim() ?: ""
-                val confirmedLiked = nowText.contains("Đã thích", ignoreCase = true) ||
-                    nowDesc.contains("Đã thích", ignoreCase = true) ||
-                    nowText.contains("liked", ignoreCase = true)
+                // Verify: dùng [NodeFinder.isAlreadyLiked] (text, children, checked, reaction_info).
+                val confirmedLiked = nodeFinder.isAlreadyLiked(node)
 
                 if (!confirmedLiked) {
                     // Vẫn chưa chắc — thêm 600ms nữa rồi kiểm tra lần cuối
                     delay(600L)
-                    val t2 = node.text?.toString()?.trim() ?: ""
-                    val d2 = node.contentDescription?.toString()?.trim() ?: ""
-                    val confirmedLiked2 = t2.contains("Đã thích", ignoreCase = true) ||
-                        d2.contains("Đã thích", ignoreCase = true) ||
-                        t2.contains("liked", ignoreCase = true)
+                    val confirmedLiked2 = nodeFinder.isAlreadyLiked(node)
                     if (!confirmedLiked2) {
                         // Node không đổi trạng thái — ghi log nghi ngờ, vẫn đếm
                         // (có thể Zalo dùng icon thay text, không đọc được qua text)
@@ -703,15 +696,34 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
     private suspend fun scrollFeedWithVerification(rootBeforeScroll: AccessibilityNodeInfo) {
         val beforeTop = measureFeedAnchorTop(rootBeforeScroll)
-        scrollDown()
-        logger.log(LogTag.SCROLL, "gesture swipe up beforeTop=$beforeTop", "DISPATCHED")
+        val recyclerOk = tryScrollFeedRecycler(rootBeforeScroll)
+        val gestureOk = if (!recyclerOk) scrollDownByGesture() else false
+        logger.log(
+            LogTag.SCROLL,
+            "beforeTop=$beforeTop recycler=$recyclerOk gestureFallback=$gestureOk",
+            "DISPATCHED"
+        )
         delay(1_200)
-        val rootAfter = acquireRootOrNull(
+        var rootAfter = acquireRootOrNull(
             maxAttempts = 4,
             delayRangeMs = 80L..220L,
             logTag = LogTag.SCROLL
         )
-        val afterTop = rootAfter?.let { measureFeedAnchorTop(it) }
+        var afterTop = rootAfter?.let { measureFeedAnchorTop(it) }
+        if (beforeTop != null && afterTop != null && beforeTop == afterTop) {
+            logger.log(LogTag.SCROLL, "pass1 no movement", "SCROLL_RETRY")
+            val rootRetry = acquireRootOrNull(3, 80L..200L, LogTag.SCROLL)
+            val retryRecycler = rootRetry?.let { tryScrollFeedRecycler(it) } ?: false
+            val retryGesture = if (!retryRecycler) scrollDownByGesture() else false
+            logger.log(
+                LogTag.SCROLL,
+                "retry recycler=$retryRecycler gesture=$retryGesture",
+                "DISPATCHED"
+            )
+            delay(1_000)
+            rootAfter = acquireRootOrNull(4, 80L..220L, LogTag.SCROLL)
+            afterTop = rootAfter?.let { measureFeedAnchorTop(it) }
+        }
         when {
             beforeTop == null || afterTop == null ->
                 logger.log(LogTag.SCROLL, "beforeTop=$beforeTop afterTop=$afterTop", "SCROLL_VERIFY_UNKNOWN")
@@ -949,7 +961,59 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun scrollDown() {
+    /**
+     * Cuộn feed qua API accessibility (RecyclerView) — thường tin cậy hơn vuốt toàn màn hình
+     * khi Zalo bọc feed trong RecyclerView đã học [ZaloIDStore.KEY_FEED_RECYCLER].
+     */
+    private fun tryScrollFeedRecycler(root: AccessibilityNodeInfo): Boolean {
+        val id = idStore.getFeedRecyclerID()
+        if (id.isNullOrBlank()) {
+            logger.log(LogTag.SCROLL, "feed_recycler_id", "MISSING_SKIP_API")
+            return false
+        }
+        val matches = root.findAccessibilityNodeInfosByViewId(id)
+        if (matches.isNullOrEmpty()) {
+            logger.log(LogTag.SCROLL, "id=$id", "RECYCLER_NOT_IN_TREE")
+            return false
+        }
+        var scrolled = false
+        try {
+            for (node in matches) {
+                if (node == null) continue
+                if (attemptScrollRecyclerNode(node)) {
+                    scrolled = true
+                    break
+                }
+            }
+        } finally {
+            for (node in matches) {
+                runCatching { node.recycle() }
+            }
+        }
+        return scrolled
+    }
+
+    /** Thử [ACTION_SCROLL_FORWARD] trên node và tối đa một parent scrollable. */
+    private fun attemptScrollRecyclerNode(n: AccessibilityNodeInfo): Boolean {
+        if (n.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) {
+            logger.log(LogTag.SCROLL, boundsSummary(n), "SCROLL_FORWARD_NODE")
+            return true
+        }
+        val parent = n.parent ?: return false
+        return try {
+            val ok = parent.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+            if (ok) logger.log(LogTag.SCROLL, boundsSummary(parent), "SCROLL_FORWARD_PARENT")
+            ok
+        } finally {
+            runCatching { parent.recycle() }
+        }
+    }
+
+    /**
+     * Vuốt lên (nội dung feed xuống) — fallback khi API scroll không dùng được;
+     * có callback để biết gesture bị reject/cancel hay hoàn tất.
+     */
+    private suspend fun scrollDownByGesture(): Boolean {
         val metrics = resources.displayMetrics
         val fromX = metrics.widthPixels / 2f
         val fromY = metrics.heightPixels * 0.75f
@@ -961,7 +1025,28 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 500))
             .build()
-        dispatchGesture(gesture, null, null)
+        return withTimeoutOrNull(1_800L) {
+            suspendCancellableCoroutine { cont ->
+                val callback = object : AccessibilityService.GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription) {
+                        if (cont.isActive) cont.resume(true)
+                    }
+
+                    override fun onCancelled(gestureDescription: GestureDescription) {
+                        logger.log(LogTag.SCROLL, "swipe", "GESTURE_CANCELLED")
+                        if (cont.isActive) cont.resume(false)
+                    }
+                }
+                val dispatched = dispatchGesture(gesture, callback, null)
+                if (!dispatched) {
+                    logger.log(LogTag.SCROLL, "swipe", "GESTURE_DISPATCH_REJECTED")
+                    if (cont.isActive) cont.resume(false)
+                }
+            }
+        } ?: run {
+            logger.log(LogTag.SCROLL, "swipe", "GESTURE_TIMEOUT")
+            false
+        }
     }
 
     private suspend fun tapNodeByCoordinate(node: AccessibilityNodeInfo): Boolean {

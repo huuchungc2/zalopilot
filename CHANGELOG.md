@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix(NodeFinder): `isAlreadyLiked` — bỏ so khớp sibling bằng `===` (dùng id+bounds); `reaction_info`/`my_reaction` qua `contains`; quét cây con nông dưới parent footer để bắt Zalo vẫn để text "Thích" khi đã có reaction (tránh like rồi unlike).
+- fix(accessibility): cuộn feed — ưu tiên `ACTION_SCROLL_FORWARD` trên RecyclerView đã học (`feed_recycler_id`); fallback vuốt màn hình có `GestureResultCallback` + log reject/cancel/timeout; nếu anchor không đổi sau lần 1 thì retry scroll API + vuốt trên root mới; xác nhận sau like dùng `NodeFinder.isAlreadyLiked` (tránh đọc chỉ text node). `NodeFinder`: bỏ candidate đã thích khi `findAccessibilityNodeInfosByText("Thích")` khớp nhầm "Đã thích", và lọc trong `addResolved`.
 - fix: `boundsDedupeKey` làm tròn left/top theo 16px + `viewIdResourceName`; `authorTextOrNull` bỏ qua chuỗi chứa thích/bình luận/nhập/chia sẻ/comment/like; `shouldLike` lọc text/desc node (đã thích/liked/bình luận/nhập/chia sẻ), không chặn chỉ "Thích".
 - feat(settings): `FeedMode` (SCROLL / MANUAL / MIX) lưu prefs `feed_mode`, mặc định SCROLL; UI Cài đặt (Cuộn tự động / Đẩy tay / Kết hợp); `autoLikeLoop` — MANUAL không scroll, MIX 50% `scrollDown` hoặc chờ, SCROLL giữ hành vi cũ theo `InteractMode`.
 - fix(accessibility): `GestureResultCallback` dùng `AccessibilityService.GestureResultCallback` (sửa unresolved reference khi build).
