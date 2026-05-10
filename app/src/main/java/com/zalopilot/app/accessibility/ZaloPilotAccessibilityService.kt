@@ -272,8 +272,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             if (!liked) {
                 val progress = progressManager.load()
                 updateStatus("📜 Cuộn xuống... (đã like ${progress.todayLikeCount}/${settings.dailyLimit})")
+                // Random scroll speed: đôi khi scroll nhanh, đôi khi chậm
+                delay((200..600).random().toLong())
                 scrollDown()
-                delay(1500)
+                // Đợi feed load + giả lập mắt đọc
+                delay((1200..2500).random().toLong())
             }
         }
     }
@@ -310,8 +313,13 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             }
 
             updateStatus("👍 Đang like bài của ${author ?: "..."}...")
-            // Thử click node, nếu fail thì leo lên parent thử tiếp
-            val clicked = performClickWithFallback(node)
+            // Delay ngẫu nhiên 0.8-2s giả lập đọc bài trước khi like
+            delay((800..2000).random().toLong())
+
+            // Tap tọa độ thật trước, fallback ACTION_CLICK nếu cần
+            val clicked = tapNodeByCoordinate(node).let { tapped ->
+                if (tapped) true else performClickWithFallback(node)
+            }
 
             if (clicked) {
                 val progress = progressManager.incrementAndSave()
@@ -422,5 +430,52 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             .addStroke(GestureDescription.StrokeDescription(path, 0, 500))
             .build()
         dispatchGesture(gesture, null, null)
+    }
+
+    /**
+     * Tap vào tọa độ thật của node trên màn hình.
+     * Giống ngón tay chạm thật — tự nhiên hơn ACTION_CLICK.
+     */
+    private suspend fun tapNodeByCoordinate(node: android.view.accessibility.AccessibilityNodeInfo): Boolean {
+        val rect = android.graphics.Rect()
+        node.getBoundsInScreen(rect)
+        if (rect.isEmpty) return false
+
+        // Tap vào giữa node, lệch random ±4px cho tự nhiên
+        val x = (rect.centerX() + (-4..4).random()).toFloat()
+        val y = (rect.centerY() + (-4..4).random()).toFloat()
+
+        val path = Path().apply { moveTo(x, y) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 80)) // 80ms giống tap thật
+            .build()
+
+        var result = false
+        val latch = java.util.concurrent.CountDownLatch(1)
+        dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription) {
+                result = true
+                latch.countDown()
+            }
+            override fun onCancelled(gestureDescription: GestureDescription) {
+                latch.countDown()
+            }
+        }, null)
+        latch.await(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+        return result
+    }
+
+    private fun performClickWithFallback(node: android.view.accessibility.AccessibilityNodeInfo): Boolean {
+        if (node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)) return true
+        var parent = node.parent
+        repeat(4) {
+            if (parent == null) return false
+            if (parent!!.isClickable &&
+                parent!!.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)) {
+                return true
+            }
+            parent = parent!!.parent
+        }
+        return false
     }
 }
