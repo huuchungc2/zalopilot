@@ -128,6 +128,52 @@ class NodeFinder @Inject constructor(
         return node
     }
 
+    /**
+     * @return true = label "Thích"; false = không like; null = không đọc được (btn_like_text)
+     */
+    private fun evaluateBtnLikeText(node: AccessibilityNodeInfo): Boolean? {
+        fun scanHost(host: AccessibilityNodeInfo): Boolean? {
+            var foundBtnLikeText = false
+            var sawThich = false
+            for (i in 0 until host.childCount) {
+                val c = host.getChild(i) ?: continue
+                val id = c.viewIdResourceName ?: ""
+                if (!id.contains("btn_like_text")) continue
+                foundBtnLikeText = true
+                val t = c.text?.toString()?.trim().orEmpty()
+                when {
+                    t == ZaloIDStore.TEXT_LIKE -> sawThich = true
+                    t.isNotEmpty() -> return false
+                }
+            }
+            if (sawThich) return true
+            if (foundBtnLikeText) return null
+            return null
+        }
+
+        scanHost(node)?.let { return it }
+        val parent = node.parent ?: return null
+        for (i in 0 until parent.childCount) {
+            val sib = parent.getChild(i) ?: continue
+            if (sib === node) continue
+            scanHost(sib)?.let { return it }
+        }
+        return null
+    }
+
+    /** Anh/chị/em cùng cấp với parent của nút like có id chứa [reaction_info] → đã thích. */
+    private fun hasReactionInfoSiblingOfParent(likeNode: AccessibilityNodeInfo): Boolean {
+        val parent = likeNode.parent ?: return false
+        val gp = parent.parent ?: return false
+        for (i in 0 until gp.childCount) {
+            val sib = gp.getChild(i) ?: continue
+            if (sib === parent) continue
+            val id = sib.viewIdResourceName ?: ""
+            if (id.contains("reaction_info")) return true
+        }
+        return false
+    }
+
     fun shouldLike(node: AccessibilityNodeInfo): Boolean {
         if (node.isChecked) return false
 
@@ -149,6 +195,11 @@ class NodeFinder @Inject constructor(
             return false
         }
 
+        val btnLikeState = evaluateBtnLikeText(node)
+        if (btnLikeState == false) return false
+
+        if (hasReactionInfoSiblingOfParent(node)) return false
+
         if (ownTextOrDescReject(node)) return false
 
         for (i in 0 until node.childCount) {
@@ -159,10 +210,10 @@ class NodeFinder @Inject constructor(
 
         var p: AccessibilityNodeInfo? = node.parent
         repeat(3) {
-            val parent = p ?: return@repeat
-            if (containsLikedMark(parent.text?.toString())) return false
-            if (containsLikedMark(parent.contentDescription?.toString())) return false
-            p = parent.parent
+            val parentNode = p ?: return@repeat
+            if (containsLikedMark(parentNode.text?.toString())) return false
+            if (containsLikedMark(parentNode.contentDescription?.toString())) return false
+            p = parentNode.parent
         }
 
         return true

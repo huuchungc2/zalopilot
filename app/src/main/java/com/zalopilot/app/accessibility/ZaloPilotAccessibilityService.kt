@@ -21,8 +21,6 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import com.zalopilot.app.util.FeedMode
-import com.zalopilot.app.util.InteractMode
 import com.zalopilot.app.util.LikeProgressManager
 import com.zalopilot.app.util.LikeSettings
 import com.zalopilot.app.util.DebugHighlightPrefs
@@ -71,6 +69,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private var consecutiveNullCount = 0
     private var consecutivePollRootNull = 0
     private val likedAuthorsThisSession = mutableSetOf<String>()
+    private val clickedPositionsThisSession = mutableSetOf<String>()
+    private var consecutiveEmptyScrolls = 0
+    private var lastLikedBoundsKey: String? = null
     private var lastDebugDumpMs = 0L
     private var lastContentEventLogMs = 0L
     private var lastRootNullWallLogMs = 0L
@@ -351,6 +352,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 consecutiveNullCount = 0
                 consecutivePollRootNull = 0
                 likedAuthorsThisSession.clear()
+                clickedPositionsThisSession.clear()
+                consecutiveEmptyScrolls = 0
 
                 val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
                 wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ZaloPilot:AutoLike")
@@ -448,40 +451,24 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 uiScanner.scan(root)
             }
 
+            lastLikedBoundsKey = null
             val liked = runFeedMode(root, settings)
 
-            if (!liked) {
-                val progress = progressManager.load()
-                val feedMode = settingsManager.getFeedMode()
-                when (feedMode) {
-                    FeedMode.MANUAL -> {
-                        updateStatus("👆 Chế độ tay — cuộn để tìm bài (${progress.todayLikeCount}/${settings.dailyLimit})")
-                        delay((800..1500).random().toLong())
-                    }
-                    FeedMode.MIX -> {
-                        updateStatus("📜 Kết hợp... (đã like ${progress.todayLikeCount}/${settings.dailyLimit})")
-                        delay((200..600).random().toLong())
-                        if (listOf(true, false).random()) {
-                            scrollDown()
-                            logger.log(LogTag.SCROLL, "gesture swipe up", "MIX_DISPATCHED")
-                        } else {
-                            logger.log(LogTag.SCROLL, "mix", "SKIP_SCROLL_WAIT")
-                        }
-                        delay((1200..2500).random().toLong())
-                    }
-                    FeedMode.SCROLL -> {
-                        updateStatus("📜 Cuộn xuống... (đã like ${progress.todayLikeCount}/${settings.dailyLimit})")
-                        delay((200..600).random().toLong())
-                        val scrollMode = settingsManager.getInteractMode()
-                        if (scrollMode == InteractMode.TAP) {
-                            val scrolled = root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
-                            logger.log(LogTag.SCROLL, "ACTION_SCROLL_FORWARD", if (scrolled) "OK" else "FAILED")
-                        } else {
-                            scrollDown()
-                            logger.log(LogTag.SCROLL, "gesture swipe up", "DISPATCHED")
-                        }
-                        delay((1200..2500).random().toLong())
-                    }
+            if (liked && lastLikedBoundsKey != null && isRunning) {
+                clickedPositionsThisSession.add(lastLikedBoundsKey!!)
+                lastLikedBoundsKey = null
+                delay(1000)
+                scrollDown()
+                logger.log(LogTag.SCROLL, "after like", "SCROLL_DOWN")
+                consecutiveEmptyScrolls = 0
+            } else if (!liked) {
+                scrollDown()
+                logger.log(LogTag.SCROLL, "empty or skip", "SCROLL_DOWN")
+                consecutiveEmptyScrolls++
+                if (consecutiveEmptyScrolls >= 5) {
+                    showToast("✅ Đã hết feed — dừng tự động")
+                    stopAutoLike()
+                    return
                 }
             }
         }
@@ -531,6 +518,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             updateDebugNodeHighlights(likeNodes, null)
 
             if (clicked) {
+                val br = Rect()
+                node.getBoundsInScreen(br)
+                lastLikedBoundsKey = "${br.left}_${br.top}"
                 val progress = progressManager.incrementAndSave()
                 sessionLikeCount++
                 likedThisScan = true
