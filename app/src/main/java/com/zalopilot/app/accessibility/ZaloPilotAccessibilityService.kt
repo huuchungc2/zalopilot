@@ -2,12 +2,15 @@ package com.zalopilot.app.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -88,6 +91,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         var instance: ZaloPilotAccessibilityService? = null
         var isActive = false
 
+        /** Broadcast: foreground notification "📋 Dump UI" → [performDumpUiTreeFromActiveWindow]. */
+        const val ACTION_DUMP_UI_TREE = "com.zalopilot.DUMP_UI_TREE"
+
         /** Áp dụng ngay khi bật/tắt trong Cài đặt (không cần khởi động lại service). */
         fun syncDebugHighlightFromPrefs() {
             instance?.syncDebugHighlightFromPrefsInternal()
@@ -102,10 +108,29 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         private const val DUPLICATE_LIKE_CLICK_SUPPRESS_MS = 2_500L
     }
 
+    private val dumpUiTreeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != ACTION_DUMP_UI_TREE) return
+            performDumpUiTreeFromActiveWindow()
+        }
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         isActive = true
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(
+                    dumpUiTreeReceiver,
+                    IntentFilter(ACTION_DUMP_UI_TREE),
+                    Context.RECEIVER_NOT_EXPORTED
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                registerReceiver(dumpUiTreeReceiver, IntentFilter(ACTION_DUMP_UI_TREE))
+            }
+        }.onFailure { e -> logger.logError("registerDumpUiReceiver", e) }
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         progressManager.resetDailyIfNeeded()
         logger.log(LogTag.STATE, "service poll=${POLL_MS_MIN}-${POLL_MS_MAX}ms", "CONNECTED")
@@ -255,6 +280,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        runCatching { unregisterReceiver(dumpUiTreeReceiver) }
+            .onFailure { e -> logger.logError("unregisterDumpUiReceiver", e) }
         super.onDestroy()
         foregroundPollJob?.cancel()
         foregroundPollJob = null
@@ -666,6 +693,25 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private fun showToast(msg: String) {
         mainHandler.post {
             Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * [rootInActiveWindow] + [NodeFinder.dumpToFile] (cùng JSON [Logger.saveUiTree]).
+     */
+    private fun performDumpUiTreeFromActiveWindow() {
+        scope.launch(Dispatchers.Default) {
+            val root = rootInActiveWindow
+            if (root == null) {
+                logger.log(LogTag.SCAN, "dump UI action", "ROOT_NULL")
+                return@launch
+            }
+            try {
+                nodeFinder.dumpToFile(root)
+                mainHandler.post { showToast("✅ Đã lưu UI tree") }
+            } finally {
+                runCatching { root.recycle() }
+            }
         }
     }
 

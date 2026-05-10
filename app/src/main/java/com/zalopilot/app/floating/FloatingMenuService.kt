@@ -3,6 +3,7 @@ package com.zalopilot.app.floating
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -249,10 +250,17 @@ class FloatingMenuService : Service() {
                 NotificationChannel(channelId, "ZaloPilot", NotificationManager.IMPORTANCE_LOW)
             )
         }
+        val dumpPi = PendingIntent.getBroadcast(
+            this,
+            2,
+            Intent(ZaloPilotAccessibilityService.ACTION_DUMP_UI_TREE).setPackage(packageName),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         return NotificationCompat.Builder(this, channelId)
             .setContentTitle("ZaloPilot đang chạy")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .addAction(android.R.drawable.ic_menu_save, "📋 Dump UI", dumpPi)
             .build()
     }
 
