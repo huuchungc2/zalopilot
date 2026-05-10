@@ -43,7 +43,10 @@ class NodeFinder @Inject constructor(
         if (savedId != null) {
             val byId = root.findAccessibilityNodeInfosByViewId(savedId)
             if (byId.isNotEmpty()) {
-                byId.forEach { addResolved(it) }
+                // Lọc bỏ nút đã like trước khi addResolved — tránh trường hợp
+                // savedId khớp cả nút "Thích" lẫn nút "Đã thích" (cùng resource-id,
+                // khác text/contentDescription).
+                byId.filter { !isAlreadyLiked(it) }.forEach { addResolved(it) }
                 if (result.isNotEmpty()) {
                     logFoundSummary(result)
                     return result
@@ -208,45 +211,69 @@ class NodeFinder @Inject constructor(
         return false
     }
 
-    fun shouldLike(node: AccessibilityNodeInfo): Boolean {
-        fun containsLikedMark(s: String?): Boolean {
-            val t = s ?: ""
-            return t.contains("Đã thích", ignoreCase = true) ||
-                t.contains("liked", ignoreCase = true)
+    /**
+     * Kiểm tra node đã ở trạng thái "Đã thích" chưa — tập trung tất cả logic tại đây.
+     *
+     * Zalo có thể biểu thị "đã like" theo nhiều cách:
+     *   1. text hoặc contentDescription của node chứa "Đã thích"
+     *   2. Child có id "btn_like_text" chứa "Đã thích"
+     *   3. isChecked == true (một số phiên bản Zalo)
+     *   4. contentDescription chứa "liked" (bản tiếng Anh)
+     *
+     * Trả về true = đã like → bỏ qua.
+     */
+    fun isAlreadyLiked(node: AccessibilityNodeInfo): Boolean {
+        fun String?.containsLiked(): Boolean {
+            if (this == null) return false
+            return contains("Đã thích", ignoreCase = true) ||
+                contains("đã thích", ignoreCase = true) ||
+                contains("liked", ignoreCase = true)
         }
 
-        fun ownTextOrDescReject(node: AccessibilityNodeInfo): Boolean {
+        // 1. Chính node
+        if (node.text?.toString().containsLiked()) return true
+        if (node.contentDescription?.toString().containsLiked()) return true
+
+        // 2. isChecked (một số phiên bản Zalo dùng checked state)
+        if (node.isChecked) return true
+
+        // 3. Duyệt children: tìm btn_like_text hoặc bất kỳ child nào có "Đã thích"
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (child.text?.toString().containsLiked()) return true
+            if (child.contentDescription?.toString().containsLiked()) return true
+        }
+
+        // 4. Leo lên parent, kiểm tra sibling có id reaction_info
+        // (Zalo hiển thị emoji reaction khi mình đã like)
+        val parent = node.parent ?: return false
+        for (i in 0 until parent.childCount) {
+            val sib = parent.getChild(i) ?: continue
+            if (sib === node) continue
+            val sibId = sib.viewIdResourceName ?: ""
+            // reaction_info chỉ xuất hiện khi chính mình đã like
+            // (khác với like_count là số lượng like của người khác)
+            if (sibId.endsWith("reaction_info") || sibId.endsWith("my_reaction")) return true
+        }
+
+        return false
+    }
+
+    fun shouldLike(node: AccessibilityNodeInfo): Boolean {
+        // Tập trung logic phân biệt đã like ở isAlreadyLiked() — không duplicate ở đây.
+        if (isAlreadyLiked(node)) return false
+
+        // Lọc thêm: node là nút "Bình luận", "Chia sẻ", "Nhập" — không phải nút Like
+        fun ownTextIsAction(node: AccessibilityNodeInfo): Boolean {
             for (raw in listOf(node.text?.toString(), node.contentDescription?.toString())) {
                 val t = raw ?: ""
-                if (t.contains("đã thích", ignoreCase = true)) return true
-                if (t.contains("liked", ignoreCase = true)) return true
                 if (t.contains("bình luận", ignoreCase = true)) return true
                 if (t.contains("nhập", ignoreCase = true)) return true
                 if (t.contains("chia sẻ", ignoreCase = true)) return true
             }
             return false
         }
-
-        val btnLikeState = evaluateBtnLikeText(node)
-        if (btnLikeState == false) return false
-
-        if (hasReactionInfoSiblingOfParent(node)) return false
-
-        if (ownTextOrDescReject(node)) return false
-
-        for (i in 0 until node.childCount) {
-            val c = node.getChild(i) ?: continue
-            if (containsLikedMark(c.text?.toString())) return false
-            if (containsLikedMark(c.contentDescription?.toString())) return false
-        }
-
-        var p: AccessibilityNodeInfo? = node.parent
-        repeat(3) {
-            val parentNode = p ?: return@repeat
-            if (containsLikedMark(parentNode.text?.toString())) return false
-            if (containsLikedMark(parentNode.contentDescription?.toString())) return false
-            p = parentNode.parent
-        }
+        if (ownTextIsAction(node)) return false
 
         return true
     }

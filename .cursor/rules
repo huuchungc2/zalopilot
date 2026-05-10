@@ -2,16 +2,16 @@
 
 ## Dự án là gì
 Android app tự động like bài đăng Zalo qua Accessibility Service.
-Không dùng root. Không dùng Zalo API. Hoàn toàn hợp lệ về mặt kỹ thuật Android.
+Không dùng root. Không dùng Zalo API.
 
 ## Tech Stack
 - Kotlin (không dùng Java)
 - Jetpack Compose (không dùng XML layout)
 - Hilt dependency injection
-- Room database
 - Kotlin Coroutines + Flow
 - Min SDK 26 (Android 8.0)
 - Package: com.zalopilot.app
+- ⚠️ Room khai báo trong build.gradle nhưng KHÔNG dùng — dữ liệu dùng SharedPreferences
 
 ## Cấu trúc thư mục
 ```
@@ -26,23 +26,64 @@ floating/
 ui/
   MainActivity.kt                    # UI chính - Compose
 util/
-  LikeSettingsManager.kt             # Cài đặt của sale
+  LikeSettingsManager.kt             # Cài đặt (FeedMode, InteractMode...)
   LikeProgressManager.kt             # Tiến độ like
   Logger.kt                          # Ghi log ra file
   Extensions.kt                      # randomDelay(), isZaloRunning()
 ```
 
+---
+
+## Quyết định thiết kế — KHÔNG thay đổi
+
+### Không lưu danh sách bài đã like
+Bot đọc trạng thái thực từ màn hình Zalo qua `NodeFinder.isAlreadyLiked()`.
+Không dùng database để track bài đã like — dễ sai, không cần thiết.
+
+### postKey KHÔNG dùng bounds tuyệt đối
+```kotlin
+// SAI — bounds trùng sau scroll → skip sai
+"${rect.left}_${rect.top}|$author|$snippet"
+
+// ĐÚNG
+"CONTENT|$author|$snippet"
+```
+
+### processedPosts phải clear sau mỗi scroll
+Sau `scrollFeedWithVerification()` → gọi `processedPosts.clear()` ngay.
+
+### runFeedMode trả về FeedScanResult (không phải Boolean)
+- `LIKED` → like được → delay tự nhiên → scroll theo FeedMode
+- `ALL_SKIPPED` → thấy nút nhưng đã like hết → scroll nhanh 300–600ms, KHÔNG đếm empty
+- `NO_BUTTONS` → không thấy nút Thích → đếm consecutiveEmptyScrolls
+
+### FeedMode và InteractMode PHẢI được đọc từ settingsManager
+```kotlin
+val feedMode = settingsManager.getFeedMode()      // SCROLL / MANUAL / MIX
+val interactMode = settingsManager.getInteractMode() // TAP / SWIPE / MIX
+```
+Không bao giờ hardcode hành vi scroll hay click mà bỏ qua 2 setting này.
+
+### Verify sau khi click like
+Sau click thành công → delay 900ms → đọc lại node → xác nhận "Đã thích".
+Nếu chưa confirm → delay thêm 600ms → kiểm tra lần 2.
+Mục đích: tránh click lại khi Zalo chưa animate xong → unlike.
+
+### isAlreadyLiked() là nguồn truth duy nhất
+Mọi check "đã like chưa" phải qua `NodeFinder.isAlreadyLiked()`.
+Không duplicate logic này ở chỗ khác.
+
+---
+
 ## Quy tắc code BẮT BUỘC
 
 ### 1. Null-check AccessibilityNodeInfo
 ```kotlin
-// SAI - crash ngay
-val node = root.findByText("Thích")
-node.performAction(ACTION_CLICK)
+// SAI
+node.performAction(ACTION_CLICK)  // crash nếu null
 
 // ĐÚNG
-val node = nodeFinder.findLikeButtons(root).firstOrNull() ?: return false
-node.performAction(ACTION_CLICK)
+val node = nodeFinder.findLikeButtons(root).firstOrNull() ?: return FeedScanResult.NO_BUTTONS
 ```
 
 ### 2. Không hardcode resource-id Zalo
@@ -50,92 +91,71 @@ node.performAction(ACTION_CLICK)
 // SAI
 root.findAccessibilityNodeInfosByViewId("com.zing.zalo:id/like_btn")
 
-// ĐÚNG - đọc từ ZaloIDStore
+// ĐÚNG
 val id = idStore.getLikeButtonID()
-if (id.isNotEmpty()) root.findAccessibilityNodeInfosByViewId(id)
+if (id != null) root.findAccessibilityNodeInfosByViewId(id)
 ```
 
-### 3. Random delay giữa mỗi action
+### 3. Không dùng Thread.sleep()
 ```kotlin
 // SAI
 Thread.sleep(1000)
 
 // ĐÚNG
-randomDelay(settings.delayMinMs, settings.delayMaxMs)
+delay((300L..600L).random())
 ```
 
-### 4. Log mọi action
+### 4. Không dùng XML layout hay R.drawable
 ```kotlin
-logger.log("LIKE", authorName, "SUCCESS")
-logger.log("LIKE", authorName, "CLICK_FAILED")
-logger.log("SCAN", "resource-id mới", "ID_SAVED")
-```
-
-### 5. Không dùng XML layout
-```kotlin
-// SAI - không có file layout XML
+// SAI
 LayoutInflater.from(this).inflate(R.layout.my_layout, null)
-
-// ĐÚNG - tạo view bằng code
-val tv = TextView(this).apply {
-    text = "ZP"
-    setBackgroundColor(Color.parseColor("#0068FF"))
-}
-```
-
-### 6. Không dùng R.drawable trừ mipmap icon
-```kotlin
-// SAI - không có drawable nào ngoài icon
 setSmallIcon(R.drawable.ic_notification)
 
 // ĐÚNG
+val tv = TextView(this).apply { text = "ZP" }
 setSmallIcon(android.R.drawable.ic_dialog_info)
 ```
 
-## LikeSettings — các field quan trọng
+### 5. Log mọi action
 ```kotlin
-data class LikeSettings(
-    val dailyLimit: Int = 100,
-    val delayMinMs: Long = 1000,
-    val delayMaxMs: Long = 3000,
-    val sessionLimit: Int = 30,
-    val restMinMinutes: Int = 5,
-    val restMaxMinutes: Int = 10,
-    val quietHourStart: Int = 22,
-    val quietHourEnd: Int = 6,
-    val autoStart: Boolean = false,
-    val likeModeStr: String = "FEED"
-)
+logger.log(LogTag.CLICK, authorName, "SUCCESS")
+logger.log(LogTag.SCROLL, "consecutiveEmpty=$n", "NO_BUTTONS")
+logger.log(LogTag.STATE, "interactMode=$mode", "LOOP_PARAMS")
 ```
 
-## LikeProgress — các field quan trọng
+---
+
+## Enums quan trọng
 ```kotlin
-data class LikeProgress(
-    val todayLikeCount: Int = 0,
-    val lastRunDate: String = "",
-    val visitIndex: Int = 0
-)
+enum class FeedMode { SCROLL, MANUAL, MIX }
+enum class InteractMode { TAP, SWIPE, MIX }
+enum class FeedScanResult { LIKED, ALL_SKIPPED, NO_BUTTONS }
 ```
 
-## Broadcast actions
-- `com.zalopilot.STATUS_UPDATE` — bot bắt đầu/dừng
-- `com.zalopilot.PROGRESS_UPDATE` — đã like thêm 1 bài
-- `com.zalopilot.ZALO_STATE` — Zalo mở/tắt
-- `com.zalopilot.DAILY_LIMIT` — đã đủ giới hạn ngày
-
-## Zalo package
+## Zalo Info
 - Package: `com.zing.zalo`
-- Tab Nhật ký text: "Nhật ký"
-- Nút Like text: "Thích"
-- Nút đã Like text: "Đã thích"
+- Nút Like: `"Thích"` / Đã like: `"Đã thích"`
+- Tab Nhật ký: `"Nhật ký"`
+
+---
 
 ## Sau mỗi task (bắt buộc — không chờ user nhắc)
-Ngay trong cùng session sau khi sửa code xong, tự làm luôn (không hỏi có cần không):
-1. `TODO.md` — đánh [x] / thêm mục hoàn thành cho phần đã làm
-2. `CHANGELOG.md` — thêm bullet vào `[Unreleased]` (tiếng Việt ngắn, đủ ý)
+1. `TODO.md` — đánh [x] / thêm mục hoàn thành
+2. `CHANGELOG.md` — thêm bullet vào `[Unreleased]`
 3. Báo nếu có dependency mới trong `build.gradle.kts`
 
-## 3. OUTPUT & WORKFLOW
-- Trả về code sửa đổi (diff), hạn chế viết lại cả file dài.
-- Giải thích ngắn gọn (< 5 dòng).
-- **TỰ ĐỘNG UPDATE**: Chỉ sau khi hoàn thành task code, hãy gộp việc cập nhật @TODO.md và @CHANGELOG.md vào cùng một lần trả lời cuối cùng để tiết kiệm lượt gọi AI.
+## Output & Workflow
+- Trả về diff/đoạn code sửa đổi, hạn chế viết lại cả file dài
+- Giải thích ngắn gọn (< 5 dòng)
+- Gộp update TODO.md + CHANGELOG.md vào cuối cùng 1 lần
+
+## KHÔNG được làm
+- KHÔNG hardcode resource-id Zalo
+- KHÔNG dùng Thread.sleep()
+- KHÔNG dùng XML layout
+- KHÔNG crash khi node null — luôn return null/false/FeedScanResult
+- KHÔNG chạy khi Zalo không foreground
+- KHÔNG dùng bounds tuyệt đối làm postKey
+- KHÔNG duplicate logic isAlreadyLiked
+- KHÔNG bỏ qua FeedMode/InteractMode
+- KHÔNG click lại ngay sau like mà không delay verify

@@ -25,6 +25,8 @@ import android.widget.Toast
 import com.zalopilot.app.util.LikeProgressManager
 import com.zalopilot.app.util.LikeSettings
 import com.zalopilot.app.util.DebugHighlightPrefs
+import com.zalopilot.app.util.FeedMode
+import com.zalopilot.app.util.InteractMode
 import com.zalopilot.app.util.LikeSettingsManager
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
@@ -73,8 +75,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private val clickedPositionsThisSession = mutableSetOf<String>()
     /** Đã like xong trong phiên — tránh like/unlike cùng bài khi rescan ngay. */
     private val processedPosts = mutableSetOf<String>()
-    /** Cùng bounds đã xử lý — bổ sung cho postKey. */
-    private val processedBoundsKeys = mutableSetOf<String>()
     private var lastClickedPostKey = ""
     private var lastClickedPostAt = 0L
     private var consecutiveEmptyScrolls = 0
@@ -362,7 +362,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 likedAuthorsThisSession.clear()
                 clickedPositionsThisSession.clear()
                 processedPosts.clear()
-                processedBoundsKeys.clear()
                 lastClickedPostKey = ""
                 lastClickedPostAt = 0L
                 consecutiveEmptyScrolls = 0
@@ -463,34 +462,76 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 uiScanner.scan(root)
             }
 
-            val liked = runFeedMode(root, settings)
+            val scanResult = runFeedMode(root, settings)
+            val feedMode = settingsManager.getFeedMode()
+            val interactMode = settingsManager.getInteractMode()
 
-            if (liked && isRunning) {
-                delay((1_000L..1_800L).random())
-                scrollFeedWithVerification(root)
-                consecutiveEmptyScrolls = 0
-                delay((400L..1_000L).random())
-                randomDelay(settings.delayMinMs, settings.delayMaxMs)
-            } else if (!liked) {
-                scrollFeedWithVerification(root)
-                consecutiveEmptyScrolls++
-                logger.log(LogTag.SCROLL, "consecutiveEmpty=$consecutiveEmptyScrolls", "EMPTY_OR_SKIP_SCROLL")
-                if (consecutiveEmptyScrolls >= 5) {
-                    showToast("✅ Đã hết feed — dừng tự động")
-                    stopAutoLike()
-                    return
+            when (scanResult) {
+                FeedScanResult.LIKED -> {
+                    delay((1_000L..1_800L).random())
+                    when (feedMode) {
+                        FeedMode.SCROLL -> {
+                            scrollFeedWithVerification(root)
+                        }
+                        FeedMode.MANUAL -> {
+                            // Không tự scroll — chờ sale vuốt tay
+                            updateStatus("✋ Manual mode — vuốt tay để tiếp tục")
+                            logger.log(LogTag.SCROLL, "manual mode, skip auto scroll", "MANUAL")
+                        }
+                        FeedMode.MIX -> {
+                            // 60% tự scroll, 40% chờ tay vuốt (tự nhiên hơn)
+                            if ((1..10).random() <= 6) {
+                                scrollFeedWithVerification(root)
+                            } else {
+                                updateStatus("✋ Mix mode — chờ vuốt tay...")
+                                logger.log(LogTag.SCROLL, "mix mode, skip this scroll", "MIX_SKIP")
+                                delay((800L..1_500L).random())
+                            }
+                        }
+                    }
+                    processedPosts.clear()
+                    consecutiveEmptyScrolls = 0
+                    delay((400L..1_000L).random())
+                    randomDelay(settings.delayMinMs, settings.delayMaxMs)
+                    logger.log(LogTag.STATE, "feedMode=$feedMode interactMode=$interactMode", "LOOP_PARAMS")
                 }
-                delay((400L..900L).random())
+                FeedScanResult.ALL_SKIPPED -> {
+                    logger.log(LogTag.SCROLL, "all skipped, fast scroll feedMode=$feedMode", "ALL_SKIPPED")
+                    updateStatus("⏩ Bài đã like — cuộn tiếp...")
+                    // ALL_SKIPPED luôn tự scroll bất kể FeedMode — không lý do gì chờ tay
+                    // khi đang cuộn qua bài đã like
+                    scrollFeedWithVerification(root)
+                    processedPosts.clear()
+                    delay((300L..600L).random())
+                }
+                FeedScanResult.NO_BUTTONS -> {
+                    scrollFeedWithVerification(root)
+                    processedPosts.clear()
+                    consecutiveEmptyScrolls++
+                    logger.log(LogTag.SCROLL, "consecutiveEmpty=$consecutiveEmptyScrolls", "NO_BUTTONS")
+                    if (consecutiveEmptyScrolls >= 5) {
+                        showToast("✅ Đã hết feed — dừng tự động")
+                        stopAutoLike()
+                        return
+                    }
+                    delay((400L..900L).random())
+                }
             }
         }
+    }
+
+    // Kết quả 1 lần scan feed
+    private enum class FeedScanResult {
+        LIKED,          // Đã like được ít nhất 1 bài
+        ALL_SKIPPED,    // Thấy nút Thích nhưng tất cả đã like → scroll nhanh, không đếm empty
+        NO_BUTTONS      // Không thấy nút Thích nào → có thể hết feed hoặc sai tab
     }
 
     private suspend fun runFeedMode(
         root: AccessibilityNodeInfo,
         @Suppress("UNUSED_PARAMETER") settings: LikeSettings
-    ): Boolean {
+    ): FeedScanResult {
         val likeNodes = nodeFinder.findLikeButtons(root)
-        var likedThisScan = false
 
         if (likeNodes.isEmpty()) {
             updateDebugNodeHighlights(emptyList(), null)
@@ -501,10 +542,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 lastDebugDumpMs = now
                 nodeFinder.debugDump(root, maxNodes = 500)
             }
-            return false
+            return FeedScanResult.NO_BUTTONS
         }
 
         updateDebugNodeHighlights(likeNodes, null)
+        var anyEligible = false  // có node nào vượt qua shouldLike không
 
         for (node in likeNodes) {
             if (!isRunning) break
@@ -512,6 +554,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 logger.log(LogTag.STATE, "Đã like / không hợp lệ — ${boundsSummary(node)}", "SKIP_SHOULD_LIKE")
                 continue
             }
+
+            anyEligible = true
 
             val author = nodeFinder.getAuthorName(node)
             if (author != null && likedAuthorsThisSession.contains(author)) {
@@ -522,14 +566,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             val postKey = makePostKey(node)
             val rect = Rect()
             node.getBoundsInScreen(rect)
-            val boundsKey = "${rect.left}_${rect.top}_${rect.right}_${rect.bottom}"
 
             if (postKey in processedPosts) {
                 logger.log(LogTag.STATE, postKey, "SKIP_ALREADY_PROCESSED")
-                continue
-            }
-            if (boundsKey in processedBoundsKeys) {
-                logger.log(LogTag.STATE, "bounds=$boundsKey postKey=$postKey", "SKIP_DUPLICATE_BOUNDS")
                 continue
             }
 
@@ -555,8 +594,34 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             updateDebugNodeHighlights(likeNodes, null)
 
             if (clicked) {
+                // Đợi Zalo animate "Thích" → "Đã thích" xong (~300–800ms thực tế).
+                // Không delay đủ → scan ngay lại thấy vẫn "Thích" → click lại → unlike.
+                delay(900L)
+
+                // Verify: đọc lại chính node đó, xác nhận đã chuyển sang "Đã thích".
+                // Nếu vẫn thấy "Thích" → có thể click fail hoặc Zalo chưa render xong.
+                val nowText = node.text?.toString()?.trim() ?: ""
+                val nowDesc = node.contentDescription?.toString()?.trim() ?: ""
+                val confirmedLiked = nowText.contains("Đã thích", ignoreCase = true) ||
+                    nowDesc.contains("Đã thích", ignoreCase = true) ||
+                    nowText.contains("liked", ignoreCase = true)
+
+                if (!confirmedLiked) {
+                    // Vẫn chưa chắc — thêm 600ms nữa rồi kiểm tra lần cuối
+                    delay(600L)
+                    val t2 = node.text?.toString()?.trim() ?: ""
+                    val d2 = node.contentDescription?.toString()?.trim() ?: ""
+                    val confirmedLiked2 = t2.contains("Đã thích", ignoreCase = true) ||
+                        d2.contains("Đã thích", ignoreCase = true) ||
+                        t2.contains("liked", ignoreCase = true)
+                    if (!confirmedLiked2) {
+                        // Node không đổi trạng thái — ghi log nghi ngờ, vẫn đếm
+                        // (có thể Zalo dùng icon thay text, không đọc được qua text)
+                        logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_UNCONFIRMED")
+                    }
+                }
+
                 processedPosts.add(postKey)
-                processedBoundsKeys.add(boundsKey)
                 clickedPositionsThisSession.add("${rect.left}_${rect.top}")
                 lastClickedPostKey = postKey
                 lastClickedPostAt = System.currentTimeMillis()
@@ -569,7 +634,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
                 val progress = progressManager.incrementAndSave()
                 sessionLikeCount++
-                likedThisScan = true
                 if (author != null) likedAuthorsThisSession.add(author)
                 logger.log(LogTag.CLICK, author ?: "unknown", "SUCCESS")
                 updateStatus("✅ Like #${progress.todayLikeCount} — ${author ?: "unknown"}")
@@ -578,24 +642,37 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 if (progressManager.isLimitReached()) {
                     logger.log(LogTag.STATE, "autoLike", "DAILY_LIMIT_REACHED")
                     stopAutoLike()
-                    return true
+                    return FeedScanResult.LIKED
                 }
-                return true
+                return FeedScanResult.LIKED
             }
 
             updateStatus("❌ Click thất bại — thử bài khác")
             logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_FAILED:${boundsSummary(node)}")
         }
 
-        return likedThisScan
+        // Có nút Thích nhưng tất cả đều đã like → scroll nhanh
+        return if (anyEligible) FeedScanResult.LIKED.also {
+            // anyEligible = true nhưng không like được bài nào (tất cả skip)
+            // → dùng ALL_SKIPPED để loop xử lý đúng
+        }.let { FeedScanResult.ALL_SKIPPED }
+        else FeedScanResult.ALL_SKIPPED
     }
 
     private fun makePostKey(likeNode: AccessibilityNodeInfo): String {
-        val rect = Rect()
-        likeNode.getBoundsInScreen(rect)
+        // KHÔNG dùng bounds tuyệt đối: sau khi scroll, bài mới xuất hiện ở
+        // cùng tọa độ pixel với bài cũ → postKey trùng → bị SKIP sai.
+        // Key chỉ dựa vào nội dung bài: author + snippet.
         val author = nodeFinder.getAuthorName(likeNode)?.trim().orEmpty().take(64)
         val snippet = nodeFinder.getPostSnippetForKey(likeNode).take(96)
-        return "${rect.left}_${rect.top}_${rect.right}_${rect.bottom}|$author|$snippet"
+        if (author.isEmpty() && snippet.isEmpty()) {
+            // Fallback khi không đọc được nội dung: dùng bounds nhưng chỉ giữ
+            // trong 30s (xử lý bởi cooldown lastClickedPostKey).
+            val rect = Rect()
+            likeNode.getBoundsInScreen(rect)
+            return "BOUNDS|${rect.left}_${rect.top}_${rect.right}_${rect.bottom}"
+        }
+        return "CONTENT|$author|$snippet"
     }
 
     private fun logAutoBeforeClick(postKey: String, node: AccessibilityNodeInfo, rect: Rect) {
@@ -702,17 +779,39 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         logLikeButtonContextDump(node, "PRE_LIKE_DUMP")
         markLikeClickAttemptForBounds(node)
         logger.log(LogTag.CLICK, nodeSnapshotForLog(node), "CLICK_CANDIDATE")
-        val ok = if (performClickWithFallback(node)) {
-            true
-        } else {
-            val gestureOk = tapNodeByCoordinate(node)
-            logger.log(
-                LogTag.CLICK,
-                boundsSummary(node),
-                if (gestureOk) "GESTURE_FALLBACK_OK" else "GESTURE_FALLBACK_FAIL"
-            )
-            gestureOk
+
+        val interactMode = settingsManager.getInteractMode()
+        val useGestureFirst = when (interactMode) {
+            InteractMode.TAP   -> false                    // ACTION_CLICK trước, gesture fallback
+            InteractMode.SWIPE -> true                     // gesture trước, ACTION_CLICK fallback
+            InteractMode.MIX   -> (1..2).random() == 1    // random 50/50
         }
+        logger.log(LogTag.CLICK, "interactMode=$interactMode useGestureFirst=$useGestureFirst", "INTERACT_MODE")
+
+        val ok = if (useGestureFirst) {
+            // SWIPE mode: gesture tọa độ thật trước
+            val gestureOk = tapNodeByCoordinate(node)
+            logger.log(LogTag.CLICK, boundsSummary(node),
+                if (gestureOk) "GESTURE_PRIMARY_OK" else "GESTURE_PRIMARY_FAIL")
+            if (!gestureOk) {
+                // fallback sang ACTION_CLICK
+                val clickOk = performClickWithFallback(node)
+                logger.log(LogTag.CLICK, boundsSummary(node),
+                    if (clickOk) "ACTION_CLICK_FALLBACK_OK" else "ACTION_CLICK_FALLBACK_FAIL")
+                clickOk
+            } else true
+        } else {
+            // TAP mode: ACTION_CLICK trước
+            if (performClickWithFallback(node)) {
+                true
+            } else {
+                val gestureOk = tapNodeByCoordinate(node)
+                logger.log(LogTag.CLICK, boundsSummary(node),
+                    if (gestureOk) "GESTURE_FALLBACK_OK" else "GESTURE_FALLBACK_FAIL")
+                gestureOk
+            }
+        }
+
         if (ok) {
             logLikeButtonContextDump(node, "POST_LIKE_DUMP")
         }
