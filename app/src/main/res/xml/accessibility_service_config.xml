@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Không dùng android:packageNames khi test / production: lọc package trong code (linh hoạt hơn). -->
 <accessibility-service
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeAllMask"

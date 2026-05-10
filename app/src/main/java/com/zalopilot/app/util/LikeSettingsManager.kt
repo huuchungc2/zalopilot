@@ -8,6 +8,14 @@ import javax.inject.Singleton
 
 enum class LikeMode { FEED, VISIT }
 
+/**
+ * Chế độ tương tác khi like:
+ * TAP    — chỉ tap vào nút Thích (ACTION_CLICK), scroll bằng API
+ * SWIPE  — vuốt màn hình lên + tap tọa độ thật như ngón tay thật
+ * MIX    — random giữa TAP và SWIPE mỗi lần (tự nhiên nhất)
+ */
+enum class InteractMode { TAP, SWIPE, MIX }
+
 data class LikeSettings(
     val dailyLimit: Int = 100,
     val delayMinMs: Long = 1000,
@@ -18,7 +26,8 @@ data class LikeSettings(
     val quietHourStart: Int = 22,
     val quietHourEnd: Int = 6,
     val autoStart: Boolean = false,
-    val likeModeStr: String = "FEED"  // Lưu String thay vì enum tránh Gson fail
+    val likeModeStr: String = "FEED",
+    val interactModeStr: String = "MIX"  // Mặc định MIX
 )
 
 @Singleton
@@ -73,5 +82,13 @@ class LikeSettingsManager @Inject constructor(
 
     fun setAutoStart(value: Boolean) {
         save(load().copy(autoStart = value))
+    }
+
+    fun getInteractMode(): InteractMode {
+        return try {
+            InteractMode.valueOf(load().interactModeStr)
+        } catch (e: Exception) {
+            InteractMode.MIX
+        }
     }
 }

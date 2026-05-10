@@ -21,6 +21,7 @@ import androidx.core.app.NotificationCompat
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
 import com.zalopilot.app.util.LikeProgressManager
 import com.zalopilot.app.util.LikeSettingsManager
+import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -51,7 +52,7 @@ class FloatingMenuService : Service() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         startForeground(NOTIF_ID, buildNotification())
-        logger.log("FLOATING", "FloatingMenuService", "CREATED")
+        logger.log(LogTag.STATE, "FloatingMenuService", "CREATED")
         val filter = IntentFilter().apply {
             addAction("com.zalopilot.STATUS_UPDATE")
             addAction("com.zalopilot.PROGRESS_UPDATE")
@@ -63,9 +64,25 @@ class FloatingMenuService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        try { unregisterReceiver(statusReceiver) } catch (e: Exception) {}
-        fabView?.let { try { windowManager.removeView(it) } catch (e: Exception) {} }
-        menuView?.let { try { windowManager.removeView(it) } catch (e: Exception) {} }
+        try {
+            unregisterReceiver(statusReceiver)
+        } catch (e: Exception) {
+            logger.logError("FloatingMenuService.onDestroy.unregister", e)
+        }
+        fabView?.let {
+            try {
+                windowManager.removeView(it)
+            } catch (e: Exception) {
+                logger.logError("FloatingMenuService.onDestroy.removeFab", e)
+            }
+        }
+        menuView?.let {
+            try {
+                windowManager.removeView(it)
+            } catch (e: Exception) {
+                logger.logError("FloatingMenuService.onDestroy.removeMenu", e)
+            }
+        }
     }
 
     private fun showFab() {
@@ -176,7 +193,7 @@ class FloatingMenuService : Service() {
                     val svc = ZaloPilotAccessibilityService.instance
                     if (svc == null) {
                         Toast.makeText(this@FloatingMenuService, "⚠️ Chưa bật Accessibility cho ZaloPilot", Toast.LENGTH_LONG).show()
-                        logger.log("FLOATING", "Accessibility chưa bật", "NO_SERVICE")
+                        logger.log(LogTag.STATE, "floating menu", "NO_ACCESSIBILITY_SERVICE")
                         closeMenu()
                         return@menuItem
                     }

@@ -1,8 +1,13 @@
 package com.zalopilot.app.accessibility
 
+import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
 import com.zalopilot.app.data.model.ZaloIDStore
+import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
+import java.util.ArrayList
+import java.util.LinkedHashSet
+import kotlin.collections.ArrayDeque
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -13,29 +18,54 @@ class ZaloUIScanner @Inject constructor(
 ) {
     private var scanCount = 0
     private var lastScanTime = 0L
-    private val SCAN_COOLDOWN_MS = 30_000L // Không scan liên tục — tối thiểu 30 giây/lần
+    @Volatile private var hintRescanPending = false
+    /** Gần với chu kỳ poll 1–2s; poll + loop là nguồn chính, không phụ thuộc event. */
+    private val MIN_SCAN_GAP_MS = 1_800L
 
     fun hasScannedRecently(): Boolean {
-        return System.currentTimeMillis() - lastScanTime < SCAN_COOLDOWN_MS
+        return System.currentTimeMillis() - lastScanTime < MIN_SCAN_GAP_MS
+    }
+
+    /** Accessibility event chỉ là gợi ý: lần scan tới bỏ throttle một nhịp. */
+    fun requestHintRescan() {
+        hintRescanPending = true
     }
 
     fun scan(root: AccessibilityNodeInfo) {
-        var foundAny = false
-        logger.log("SCANNER", "scan begin", "START")
-
-        foundAny = scanLikeButton(root) || foundAny
-        foundAny = scanTabTimeline(root) || foundAny
-        foundAny = scanAuthorName(root) || foundAny
-        foundAny = scanFeedRecycler(root) || foundAny
-
-        if (foundAny) {
-            scanCount++
-            lastScanTime = System.currentTimeMillis()
-            if (scanCount == 1 || scanCount % 50 == 0) {
-                logger.log("SCANNER", "Scan #$scanCount", "IDs_UPDATED")
+        val t0 = SystemClock.elapsedRealtime()
+        var outcome = "THROTTLED"
+        try {
+            if (hintRescanPending) {
+                hintRescanPending = false
+                lastScanTime = 0L
             }
-        } else {
-            logger.log("SCANNER", "scan end", "NO_MATCH")
+            val now = System.currentTimeMillis()
+            if (now - lastScanTime < MIN_SCAN_GAP_MS) {
+                return
+            }
+            lastScanTime = now
+
+            var foundAny = false
+            foundAny = scanLikeButton(root) || foundAny
+            foundAny = scanTabTimeline(root) || foundAny
+            foundAny = scanAuthorName(root) || foundAny
+            foundAny = scanFeedRecycler(root) || foundAny
+
+            if (foundAny) {
+                scanCount++
+                if (scanCount == 1 || scanCount % 50 == 0) {
+                    logger.log(LogTag.SCAN, "scanCount=$scanCount", "IDS_UPDATED")
+                }
+                outcome = "MATCH"
+            } else {
+                outcome = "NO_MATCH"
+            }
+        } catch (e: Exception) {
+            logger.logError("ZaloUIScanner.scan", e)
+            outcome = "EXCEPTION"
+        } finally {
+            val elapsed = SystemClock.elapsedRealtime() - t0
+            logger.log(LogTag.SCAN, "ui_scan", outcome, durationMs = elapsed)
         }
     }
 
@@ -48,7 +78,8 @@ class ZaloUIScanner @Inject constructor(
     private fun scanLikeButton(root: AccessibilityNodeInfo): Boolean {
         val byThich = root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKE)
         val byDaThich = root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKED)
-        val candidates = (byThich + byDaThich)
+        val byTraversal = collectTraversalLikeHints(root)
+        val candidates = mergeUniqueNodes(byThich + byDaThich + byTraversal)
 
         for (node in candidates) {
             // Thử lấy ID từ chính node, nếu không có thì leo lên parent
@@ -57,15 +88,58 @@ class ZaloUIScanner @Inject constructor(
                 val current = idStore.getLikeButtonID()
                 if (current != id) {
                     idStore.saveLikeButtonID(id)
-                    logger.log("SCANNER", "like_button = $id", "ID_SAVED")
+                    logger.log(LogTag.SCAN, "like_button = $id", "ID_SAVED")
                 }
                 return true
             }
         }
 
         // Không tìm được ID nào — log để debug
-        logger.log("SCANNER", "candidates=${candidates.size} but no zalo ID found", "LIKE_ID_MISS")
+        logger.log(LogTag.SCAN, "candidates=${candidates.size}", "LIKE_ID_MISS")
         return false
+    }
+
+    /** Gợi ý nút like từ contentDescription / text khi API theo chuỗi không đủ. */
+    private fun collectTraversalLikeHints(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+        val out = ArrayList<AccessibilityNodeInfo>()
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 2400) {
+            val node = stack.removeLast()
+            visited++
+            val t = node.text?.toString() ?: ""
+            val cd = node.contentDescription?.toString() ?: ""
+            val hay = "$t $cd"
+            if (hay.contains("Đã thích", ignoreCase = true)) {
+                // skip
+            } else if (hay.contains(ZaloIDStore.TEXT_LIKE, ignoreCase = true)) {
+                out.add(node)
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return out
+    }
+
+    private fun mergeUniqueNodes(nodes: List<AccessibilityNodeInfo>): List<AccessibilityNodeInfo> {
+        val seen = LinkedHashSet<String>()
+        val out = ArrayList<AccessibilityNodeInfo>()
+        for (n in nodes) {
+            val key = nodeBoundsKey(n)
+            if (key !in seen) {
+                seen.add(key)
+                out.add(n)
+            }
+        }
+        return out
+    }
+
+    private fun nodeBoundsKey(n: AccessibilityNodeInfo): String {
+        val r = android.graphics.Rect()
+        n.getBoundsInScreen(r)
+        return "${r.centerX()}_${r.centerY()}_${n.viewIdResourceName ?: ""}"
     }
 
     private fun findIdFromNodeOrParent(node: AccessibilityNodeInfo): String? {
@@ -80,14 +154,17 @@ class ZaloUIScanner @Inject constructor(
     }
 
     private fun scanTabTimeline(root: AccessibilityNodeInfo): Boolean {
-        val nodes = root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_TIMELINE)
+        val nodes = mergeUniqueNodes(
+            root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_TIMELINE) +
+                collectNodesWithTextOrDesc(root, ZaloIDStore.TEXT_TIMELINE, maxNodes = 1600)
+        )
         for (node in nodes) {
-            val id = node.viewIdResourceName ?: continue
+            val id = findIdFromNodeOrParent(node) ?: continue
             if (id.contains("zalo", ignoreCase = true)) {
                 val current = idStore.getTabTimelineID()
                 if (current != id) {
                     idStore.saveTabTimelineID(id)
-                    logger.log("SCANNER", "tab_timeline = $id", "ID_SAVED")
+                    logger.log(LogTag.SCAN, "tab_timeline = $id", "ID_SAVED")
                 }
                 return true
             }
@@ -95,10 +172,36 @@ class ZaloUIScanner @Inject constructor(
         return false
     }
 
+    private fun collectNodesWithTextOrDesc(
+        root: AccessibilityNodeInfo,
+        needle: String,
+        maxNodes: Int
+    ): List<AccessibilityNodeInfo> {
+        val out = ArrayList<AccessibilityNodeInfo>()
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < maxNodes) {
+            val node = stack.removeLast()
+            visited++
+            val t = node.text?.toString() ?: ""
+            val d = node.contentDescription?.toString() ?: ""
+            if (t.contains(needle, ignoreCase = true) || d.contains(needle, ignoreCase = true)) {
+                out.add(node)
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return out
+    }
+
     private fun scanAuthorName(root: AccessibilityNodeInfo): Boolean {
-        val likeNodes = root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKE)
+        val likeNodes = mergeUniqueNodes(
+            root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKE) + collectTraversalLikeHints(root)
+        )
         for (likeNode in likeNodes) {
-            val id = likeNode.viewIdResourceName ?: continue
+            val id = findIdFromNodeOrParent(likeNode) ?: continue
             if (!id.contains("zalo", ignoreCase = true)) continue
 
             val feedItem = findFeedItemParent(likeNode, depth = 4) ?: continue
@@ -108,7 +211,7 @@ class ZaloUIScanner @Inject constructor(
                 val current = idStore.getAuthorNameID()
                 if (current != authorId) {
                     idStore.saveAuthorNameID(authorId)
-                    logger.log("SCANNER", "author_name = $authorId", "ID_SAVED")
+                    logger.log(LogTag.SCAN, "author_name = $authorId", "ID_SAVED")
                 }
                 return true
             }
@@ -123,7 +226,7 @@ class ZaloUIScanner @Inject constructor(
             val current = idStore.getFeedRecyclerID()
             if (current != id) {
                 idStore.saveFeedRecyclerID(id)
-                logger.log("SCANNER", "feed_recycler = $id", "ID_SAVED")
+                logger.log(LogTag.SCAN, "feed_recycler = $id", "ID_SAVED")
             }
             return true
         }

@@ -7,49 +7,89 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.view.Gravity
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import com.zalopilot.app.util.*
+import com.zalopilot.app.util.InteractMode
+import com.zalopilot.app.util.LikeProgressManager
+import com.zalopilot.app.util.LikeSettings
+import com.zalopilot.app.util.DebugHighlightPrefs
+import com.zalopilot.app.util.LikeSettingsManager
+import com.zalopilot.app.util.LogTag
+import com.zalopilot.app.util.Logger
+import com.zalopilot.app.util.isZaloRelatedPackage
+import com.zalopilot.app.util.random
+import com.zalopilot.app.util.randomDelay
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class ZaloPilotAccessibilityService : AccessibilityService() {
+
+    @Volatile
+    private var startAutoLikeInProgress = false
 
     @Inject lateinit var nodeFinder: NodeFinder
     @Inject lateinit var uiScanner: ZaloUIScanner
     @Inject lateinit var progressManager: LikeProgressManager
     @Inject lateinit var settingsManager: LikeSettingsManager
     @Inject lateinit var logger: Logger
+    @Inject lateinit var debugHighlightPrefs: DebugHighlightPrefs
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var foregroundPollJob: Job? = null
+
     var isRunning = false
     private var likeJob: Job? = null
     private var sessionLikeCount = 0
     private var wakeLock: PowerManager.WakeLock? = null
     private var isZaloForeground = false
     private var consecutiveNullCount = 0
+    private var consecutivePollRootNull = 0
     private val likedAuthorsThisSession = mutableSetOf<String>()
     private var lastDebugDumpMs = 0L
+    private var lastContentEventLogMs = 0L
+    private var lastRootNullWallLogMs = 0L
 
-    // Status overlay
     private var windowManager: WindowManager? = null
     private var statusView: LinearLayout? = null
     private var statusText: TextView? = null
     private var isOverlayShowing = false
 
+    /** Viền debug nút like — tách khỏi status overlay. */
+    private var nodeHighlightView: NodeHighlightOverlayView? = null
+
     companion object {
         var instance: ZaloPilotAccessibilityService? = null
         var isActive = false
+
+        /** Áp dụng ngay khi bật/tắt trong Cài đặt (không cần khởi động lại service). */
+        fun syncDebugHighlightFromPrefs() {
+            instance?.syncDebugHighlightFromPrefsInternal()
+        }
+
+        private const val POLL_MS_MIN = 1_000L
+        private const val POLL_MS_MAX = 2_000L
+        private const val ROOT_RETRY_DEFAULT = 5
+        private const val POLL_ROOT_ASSUME_BACKGROUND = 6
+        private const val CONTENT_EVENT_LOG_THROTTLE_MS = 3_000L
+        private const val ROOT_NULL_WALL_LOG_MS = 8_000L
     }
 
     override fun onServiceConnected() {
@@ -58,139 +98,238 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         isActive = true
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         progressManager.resetDailyIfNeeded()
-        logger.log("SERVICE", "", "CONNECTED")
+        logger.log(LogTag.STATE, "service poll=${POLL_MS_MIN}-${POLL_MS_MAX}ms", "CONNECTED")
         showToast("✅ ZaloPilot đã kết nối")
+
+        foregroundPollJob?.cancel()
+        foregroundPollJob = scope.launch {
+            while (isActive) {
+                delay((POLL_MS_MIN..POLL_MS_MAX).random())
+                runCatching { pollOnce() }.onFailure { e ->
+                    logger.logError("pollLoop", e)
+                }
+            }
+        }
     }
 
-    private fun isZaloPkg(pkg: String): Boolean {
-        // Bắt tất cả package liên quan Zalo: activity phụ, webview, mini app
-        return pkg.startsWith("com.zing.zalo") || pkg.startsWith("com.vng.zalo")
+    /**
+     * Poll định kỳ: nguồn sự thật chính cho root + package (không phụ thuộc event).
+     */
+    private suspend fun pollOnce() {
+        val root = acquireRootOrNull(
+            maxAttempts = ROOT_RETRY_DEFAULT,
+            delayRangeMs = 100L..320L,
+            logTag = LogTag.POLL
+        )
+
+        if (root == null) {
+            consecutivePollRootNull++
+            val now = System.currentTimeMillis()
+            if (now - lastRootNullWallLogMs > ROOT_NULL_WALL_LOG_MS) {
+                lastRootNullWallLogMs = now
+                logger.log(LogTag.POLL, "consecutiveNull=$consecutivePollRootNull", "ROOT_NULL_AFTER_RETRIES")
+            }
+            if (consecutivePollRootNull >= POLL_ROOT_ASSUME_BACKGROUND && isZaloForeground) {
+                logger.log(LogTag.STATE, "root persistently null", "BACKGROUND_ASSUMED")
+                applyZaloBackground(reason = "poll_root_exhausted")
+            }
+            return
+        }
+
+        consecutivePollRootNull = 0
+        val pkg = root.packageName?.toString() ?: ""
+        logger.setForegroundPackage(pkg)
+        val inZalo = isZaloRelatedPackage(pkg)
+
+        if (inZalo) {
+            if (!isZaloForeground) {
+                logger.log(LogTag.STATE, "pkg=$pkg", "FOREGROUND_POLL")
+                sendBroadcast(Intent("com.zalopilot.ZALO_STATE").putExtra("foreground", true))
+                isZaloForeground = true
+                if (settingsManager.isAutoStart() && !isRunning
+                    && !progressManager.isLimitReached()
+                    && !settingsManager.isQuietHour()) {
+                    mainHandler.post { startAutoLike() }
+                }
+            }
+            uiScanner.scan(root)
+        } else {
+            if (isZaloForeground) {
+                logger.log(LogTag.STATE, "pkg=$pkg", "BACKGROUND_POLL")
+                applyZaloBackground(reason = "poll_other_package")
+            }
+        }
+    }
+
+    private fun applyZaloBackground(reason: String) {
+        isZaloForeground = false
+        sendBroadcast(Intent("com.zalopilot.ZALO_STATE").putExtra("foreground", false))
+        if (isRunning) {
+            stopAutoLike()
+            logger.log(LogTag.STATE, "reason=$reason", "PAUSED_ZALO_CLOSED")
+        }
+        hideStatusOverlay()
+    }
+
+    /**
+     * Lấy [rootInActiveWindow] với vài lần thử; không nuốt lỗi — luôn log từng bước.
+     */
+    private suspend fun acquireRootOrNull(
+        maxAttempts: Int = ROOT_RETRY_DEFAULT,
+        delayRangeMs: LongRange = 100L..300L,
+        logTag: LogTag = LogTag.POLL
+    ): AccessibilityNodeInfo? {
+        repeat(maxAttempts) { attempt ->
+            val root = rootInActiveWindow
+            if (root != null) {
+                val pkg = root.packageName?.toString() ?: ""
+                logger.setForegroundPackage(pkg)
+                logger.log(logTag, "attempt=${attempt + 1}/$maxAttempts pkg=$pkg", "ROOT_OK")
+                return root
+            }
+            logger.log(logTag, "attempt=${attempt + 1}/$maxAttempts", "ROOT_NULL_RETRY")
+            if (attempt < maxAttempts - 1) {
+                delay(delayRangeMs.random())
+            }
+        }
+        logger.log(logTag, "attempts=$maxAttempts", "ROOT_GIVEUP")
+        return null
+    }
+
+    private fun eventTypeLabel(type: Int): String = when (type) {
+        AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> "WINDOW_STATE"
+        AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> "WINDOW_CONTENT"
+        AccessibilityEvent.TYPE_VIEW_CLICKED -> "VIEW_CLICKED"
+        AccessibilityEvent.TYPE_VIEW_FOCUSED -> "VIEW_FOCUSED"
+        AccessibilityEvent.TYPE_VIEW_SCROLLED -> "VIEW_SCROLLED"
+        else -> "TYPE_$type"
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        event ?: return
+        event ?: run {
+            logger.log(LogTag.ERROR, "onAccessibilityEvent", "NULL_EVENT")
+            return
+        }
         val pkg = event.packageName?.toString() ?: ""
+        logger.setForegroundPackage(pkg)
+        val label = eventTypeLabel(event.eventType)
+        val className = event.className?.toString() ?: ""
 
-        // Lọc bằng code thay vì XML packageNames — bắt được webview/activity phụ
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                val now = System.currentTimeMillis()
+                if (now - lastContentEventLogMs > CONTENT_EVENT_LOG_THROTTLE_MS) {
+                    lastContentEventLogMs = now
+                    logger.log(LogTag.EVENT_HINT, "type=$label pkg=$pkg class=$className", "CONTENT_THROTTLED")
+                }
+            }
+            else -> {
+                logger.log(LogTag.EVENT_HINT, "type=$label pkg=$pkg class=$className", "HINT")
+            }
+        }
+
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            if (isZaloPkg(pkg)) {
-                if (!isZaloForeground) {
-                    isZaloForeground = true
-                    logger.log("ZALO", "pkg=$pkg", "FOREGROUND")
-                    sendBroadcast(Intent("com.zalopilot.ZALO_STATE").putExtra("foreground", true))
-                    scope.launch(Dispatchers.Main) {
-                        // Delay 1200ms thay vì 800ms — đợi Zalo render xong UI
-                        delay(1200)
-                        scanWithRetry()
-                    }
-                    if (settingsManager.isAutoStart() && !isRunning
-                        && !progressManager.isLimitReached()
-                        && !settingsManager.isQuietHour()) {
-                        startAutoLike()
-                    }
-                }
-            } else if (!isZaloPkg(pkg)) {
-                if (isZaloForeground) {
-                    isZaloForeground = false
-                    logger.log("ZALO", "pkg=$pkg", "BACKGROUND")
-                    sendBroadcast(Intent("com.zalopilot.ZALO_STATE").putExtra("foreground", false))
-                    if (isRunning) {
-                        stopAutoLike()
-                        logger.log("AUTO_LIKE", "", "PAUSED_ZALO_CLOSED")
-                    }
-                    hideStatusOverlay()
-                }
+            if (isZaloRelatedPackage(pkg)) {
+                logger.setForegroundPackage(pkg)
+                uiScanner.requestHintRescan()
+            } else if (isZaloForeground) {
+                logger.log(LogTag.STATE, "pkg=$pkg", "BACKGROUND_EVENT")
+                applyZaloBackground(reason = "window_state_non_zalo")
             }
         }
-    }
-
-    // Fix 4: retry khi rootInActiveWindow chưa render xong
-    private suspend fun scanWithRetry() {
-        repeat(5) { attempt ->
-            val root = rootInActiveWindow
-            if (root != null) {
-                logger.log("SCAN", "attempt=$attempt", "ROOT_OK")
-                uiScanner.scan(root)
-                return
-            }
-            logger.log("SCAN", "attempt=$attempt", "ROOT_NULL_RETRY")
-            delay(600)
-        }
-        logger.log("SCAN", "all attempts failed", "ROOT_NEVER_READY")
     }
 
     override fun onInterrupt() {
         stopAutoLike()
-        logger.log("SERVICE", "", "INTERRUPTED")
+        logger.log(LogTag.STATE, "service", "INTERRUPTED")
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        foregroundPollJob?.cancel()
+        foregroundPollJob = null
         stopAutoLike()
         hideStatusOverlay()
+        detachNodeHighlightOverlay()
         instance = null
         isActive = false
         scope.cancel()
     }
 
-    // ─── Public API ──────────────────────────────────────────────
-
     fun startAutoLike() {
         if (isRunning) {
-            logger.log("AUTO_LIKE", "", "ALREADY_RUNNING")
+            logger.log(LogTag.STATE, "autoLike", "ALREADY_RUNNING")
             showToast("ℹ️ Bot đang chạy sẵn")
+            return
+        }
+        if (startAutoLikeInProgress) {
+            logger.log(LogTag.STATE, "autoLike", "START_IN_PROGRESS")
+            showToast("ℹ️ Đang khởi động bot…")
             return
         }
 
         if (settingsManager.isQuietHour()) {
-            logger.log("AUTO_LIKE", "", "BLOCKED_QUIET_HOUR")
+            logger.log(LogTag.STATE, "autoLike", "BLOCKED_QUIET_HOUR")
             showToast("🌙 Đang trong giờ nghỉ — không chạy")
             return
         }
 
         if (progressManager.isLimitReached()) {
             val count = progressManager.load().todayLikeCount
-            logger.log("AUTO_LIKE", "todayLikeCount=$count", "BLOCKED_DAILY_LIMIT")
+            logger.log(LogTag.STATE, "todayLikeCount=$count", "BLOCKED_DAILY_LIMIT")
             showToast("✅ Đã đủ giới hạn hôm nay ($count)")
             sendBroadcast(Intent("com.zalopilot.DAILY_LIMIT"))
             return
         }
 
-        // Người dùng có thể bấm Start khi đang ở sẵn trong Zalo nhưng chưa có event TYPE_WINDOW_STATE_CHANGED,
-        // nên cần tự detect foreground để tránh loop dừng ngay.
-        val root = rootInActiveWindow
-        val pkg = root?.packageName?.toString() ?: ""
-        if (isZaloPkg(pkg)) {
-            isZaloForeground = true
-        } else {
-            logger.log("AUTO_LIKE", "pkg=$pkg", "BLOCKED_NOT_IN_ZALO")
-            showToast("⚠️ Hãy mở Zalo (tab Nhật ký) rồi bấm Start")
-            return
+        startAutoLikeInProgress = true
+        scope.launch {
+            try {
+                val root = acquireRootOrNull(
+                    maxAttempts = 5,
+                    delayRangeMs = 120L..350L,
+                    logTag = LogTag.STATE
+                )
+                val pkg = root?.packageName?.toString() ?: ""
+
+                if (root == null) {
+                    logger.log(LogTag.STATE, "pkg=$pkg", "BLOCKED_NO_ROOT")
+                    showToast("⚠️ Không đọc được màn hình — thử lại sau vài giây")
+                    return@launch
+                }
+
+                if (!isZaloRelatedPackage(pkg)) {
+                    logger.log(LogTag.STATE, "pkg=$pkg", "BLOCKED_NOT_IN_ZALO")
+                    showToast("⚠️ Hãy mở Zalo (tab Nhật ký) rồi bấm Start")
+                    return@launch
+                }
+
+                isZaloForeground = true
+                logger.setForegroundPackage(pkg)
+                logger.log(LogTag.STATE, "pkg=$pkg", "START_CLICKED")
+                uiScanner.forceScan(root)
+
+                isRunning = true
+                sessionLikeCount = 0
+                consecutiveNullCount = 0
+                consecutivePollRootNull = 0
+                likedAuthorsThisSession.clear()
+
+                val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ZaloPilot:AutoLike")
+                wakeLock?.acquire(10 * 60 * 60 * 1000L)
+
+                sendBroadcast(Intent("com.zalopilot.STATUS_UPDATE").putExtra("running", true))
+                logger.log(LogTag.STATE, "FEED", "STARTED")
+                showToast("▶ Bắt đầu auto like")
+                showStatusOverlay("▶ Đang khởi động...")
+
+                likeJob?.cancel()
+                likeJob = scope.launch { autoLikeLoop() }
+            } finally {
+                startAutoLikeInProgress = false
+            }
         }
-
-        if (root == null) {
-            logger.log("AUTO_LIKE", "root=null", "BLOCKED_NO_ROOT")
-            showToast("⚠️ Không đọc được màn hình — kiểm tra Accessibility")
-            return
-        }
-
-        logger.log("AUTO_LIKE", "pkg=$pkg", "START_CLICKED")
-        uiScanner.forceScan(root)
-        isRunning = true
-        sessionLikeCount = 0
-        consecutiveNullCount = 0
-        likedAuthorsThisSession.clear()
-
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ZaloPilot:AutoLike")
-        wakeLock?.acquire(10 * 60 * 60 * 1000L)
-
-        sendBroadcast(Intent("com.zalopilot.STATUS_UPDATE").putExtra("running", true))
-        logger.log("AUTO_LIKE", "FEED", "STARTED")
-        showToast("▶ Bắt đầu auto like")
-        showStatusOverlay("▶ Đang khởi động...")
-
-        likeJob = scope.launch { autoLikeLoop() }
     }
 
     fun stopAutoLike() {
@@ -201,19 +340,18 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         sendBroadcast(Intent("com.zalopilot.STATUS_UPDATE").putExtra("running", false))
-        logger.log("AUTO_LIKE", "", "STOPPED")
+        logger.log(LogTag.STATE, "autoLike", "STOPPED")
         showToast("■ Đã dừng")
         hideStatusOverlay()
+        detachNodeHighlightOverlay()
     }
-
-    // ─── Main Loop ───────────────────────────────────────────────
 
     private suspend fun autoLikeLoop() {
         while (isRunning) {
             if (settingsManager.isQuietHour()) {
                 updateStatus("🌙 Giờ nghỉ — dừng lại")
                 showToast("🌙 Giờ nghỉ — ZaloPilot tạm dừng")
-                logger.log("AUTO_LIKE", "", "QUIET_HOUR_PAUSE")
+                logger.log(LogTag.STATE, "autoLike", "QUIET_HOUR_PAUSE")
                 stopAutoLike()
                 return
             }
@@ -222,14 +360,14 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 val count = progressManager.load().todayLikeCount
                 updateStatus("✅ Đã like đủ $count bài hôm nay")
                 showToast("✅ Đã like đủ $count bài hôm nay!")
-                logger.log("AUTO_LIKE", "", "DAILY_LIMIT_REACHED")
+                logger.log(LogTag.STATE, "autoLike", "DAILY_LIMIT_REACHED")
                 sendBroadcast(Intent("com.zalopilot.DAILY_LIMIT"))
                 stopAutoLike()
                 return
             }
 
             if (!isZaloForeground) {
-                logger.log("AUTO_LIKE", "", "ZALO_NOT_FOREGROUND")
+                logger.log(LogTag.STATE, "autoLike", "ZALO_NOT_FOREGROUND")
                 stopAutoLike()
                 return
             }
@@ -241,22 +379,28 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 val restMin = restMs / 60000
                 updateStatus("😴 Nghỉ $restMin phút (đã like $sessionLikeCount bài)")
                 showToast("😴 Nghỉ $restMin phút cho tự nhiên")
-                logger.log("AUTO_LIKE", "Nghỉ $restMin phút", "SESSION_REST")
+                logger.log(LogTag.STATE, "Nghỉ $restMin phút", "SESSION_REST")
                 sessionLikeCount = 0
                 likedAuthorsThisSession.clear()
                 delay(restMs)
                 continue
             }
 
-            val root = rootInActiveWindow ?: run { delay(500); rootInActiveWindow }
+            val root = acquireRootOrNull(
+                maxAttempts = 5,
+                delayRangeMs = 100L..280L,
+                logTag = LogTag.STATE
+            )
+
             if (root == null) {
                 consecutiveNullCount++
                 updateStatus("⚠️ Zalo không phản hồi ($consecutiveNullCount lần)")
+                logger.log(LogTag.STATE, "consecutiveNull=$consecutiveNullCount", "ROOT_NULL_LOOP")
                 if (consecutiveNullCount >= 3) {
-                    showToast("⚠️ Không đọc được màn hình Zalo — kiểm tra Accessibility")
-                    logger.log("AUTO_LIKE", "Zalo không phản hồi", "ZALO_SLEEP")
+                    showToast("⚠️ Không đọc được màn hình Zalo — đang thử lại")
+                    logger.log(LogTag.STATE, "root null streak", "ZALO_SLEEP")
                 }
-                delay(5000)
+                delay((1_000L..2_000L).random())
                 continue
             }
 
@@ -272,25 +416,31 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             if (!liked) {
                 val progress = progressManager.load()
                 updateStatus("📜 Cuộn xuống... (đã like ${progress.todayLikeCount}/${settings.dailyLimit})")
-                // Random scroll speed: đôi khi scroll nhanh, đôi khi chậm
                 delay((200..600).random().toLong())
-                scrollDown()
-                // Đợi feed load + giả lập mắt đọc
+                val scrollMode = settingsManager.getInteractMode()
+                if (scrollMode == InteractMode.TAP) {
+                    val scrolled = root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                    logger.log(LogTag.SCROLL, "ACTION_SCROLL_FORWARD", if (scrolled) "OK" else "FAILED")
+                } else {
+                    scrollDown()
+                    logger.log(LogTag.SCROLL, "gesture swipe up", "DISPATCHED")
+                }
                 delay((1200..2500).random().toLong())
             }
         }
     }
 
     private suspend fun runFeedMode(
-        root: android.view.accessibility.AccessibilityNodeInfo,
+        root: AccessibilityNodeInfo,
         settings: LikeSettings
     ): Boolean {
         val likeNodes = nodeFinder.findLikeButtons(root)
         var likedThisScan = false
 
         if (likeNodes.isEmpty()) {
+            updateDebugNodeHighlights(emptyList(), null)
             updateStatus("🔍 Không thấy nút Thích trên màn hình này")
-            logger.log("SCAN", "Không thấy nút Thích", "EMPTY")
+            logger.log(LogTag.SCAN, "feed like buttons", "EMPTY")
             val now = System.currentTimeMillis()
             if (now - lastDebugDumpMs > 30_000) {
                 lastDebugDumpMs = now
@@ -299,44 +449,61 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             return false
         }
 
+        updateDebugNodeHighlights(likeNodes, null)
+
         for (node in likeNodes) {
             if (!isRunning) break
             if (!nodeFinder.shouldLike(node)) {
-                logger.log("LIKE_SKIP", "Đã like rồi", "SKIP")
+                logger.log(LogTag.STATE, "Đã like / không hợp lệ — ${boundsSummary(node)}", "SKIP")
                 continue
             }
 
             val author = nodeFinder.getAuthorName(node)
             if (author != null && likedAuthorsThisSession.contains(author)) {
-                logger.log("LIKE_SKIP", author, "AUTHOR_ALREADY_LIKED")
+                logger.log(LogTag.STATE, author, "AUTHOR_ALREADY_LIKED")
                 continue
             }
 
             updateStatus("👍 Đang like bài của ${author ?: "..."}...")
-            // Delay ngẫu nhiên 0.8-2s giả lập đọc bài trước khi like
             delay((800..2000).random().toLong())
 
-            // Tap tọa độ thật trước, fallback ACTION_CLICK nếu cần
-            val clicked = tapNodeByCoordinate(node).let { tapped ->
-                if (tapped) true else performClickWithFallback(node)
+            val interactMode = settingsManager.getInteractMode()
+            val useTap = when (interactMode) {
+                InteractMode.TAP -> true
+                InteractMode.SWIPE -> false
+                InteractMode.MIX -> listOf(true, false).random()
             }
+
+            updateDebugNodeHighlights(likeNodes, node)
+
+            logger.log(LogTag.CLICK, "author=${author ?: "?"} mode=${if (useTap) "TAP" else "COORD"}", boundsSummary(node))
+
+            val clicked = if (useTap) {
+                performClickWithFallback(node)
+            } else {
+                tapNodeByCoordinate(node).let { tapped ->
+                    if (tapped) true else performClickWithFallback(node)
+                }
+            }
+
+            updateDebugNodeHighlights(likeNodes, null)
 
             if (clicked) {
                 val progress = progressManager.incrementAndSave()
                 sessionLikeCount++
                 likedThisScan = true
                 if (author != null) likedAuthorsThisSession.add(author)
-                logger.log("LIKE", author ?: "unknown", "SUCCESS")
+                logger.log(LogTag.CLICK, author ?: "unknown", "SUCCESS")
                 updateStatus("✅ Like #${progress.todayLikeCount} — ${author ?: "unknown"}")
                 sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                 randomDelay(settings.delayMinMs, settings.delayMaxMs)
             } else {
                 updateStatus("❌ Click thất bại — thử lại lần sau")
-                logger.log("LIKE", author ?: "unknown", "CLICK_FAILED")
+                logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_FAILED:${boundsSummary(node)}")
             }
 
             if (progressManager.isLimitReached()) {
-                logger.log("AUTO_LIKE", "", "DAILY_LIMIT_REACHED")
+                logger.log(LogTag.STATE, "autoLike", "DAILY_LIMIT_REACHED")
                 stopAutoLike()
                 return true
             }
@@ -345,13 +512,23 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         return likedThisScan
     }
 
-    // ─── Status Overlay ──────────────────────────────────────────
+    private fun boundsSummary(node: AccessibilityNodeInfo): String {
+        val r = Rect()
+        node.getBoundsInScreen(r)
+        return "bounds=[${r.left},${r.top},${r.right},${r.bottom}] clickable=${node.isClickable}"
+    }
 
     private fun showStatusOverlay(msg: String) {
         mainHandler.post {
             try {
-                if (isOverlayShowing) { updateStatus(msg); return@post }
-                val wm = windowManager ?: return@post
+                if (isOverlayShowing) {
+                    updateStatus(msg)
+                    return@post
+                }
+                val wm = windowManager ?: run {
+                    logger.log(LogTag.STATE, "overlay", "WINDOW_MANAGER_NULL")
+                    return@post
+                }
 
                 val params = WindowManager.LayoutParams(
                     WindowManager.LayoutParams.WRAP_CONTENT,
@@ -383,7 +560,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 wm.addView(layout, params)
                 isOverlayShowing = true
             } catch (e: Exception) {
-                logger.log("OVERLAY", e.message ?: "", "ERROR")
+                logger.logError("showStatusOverlay", e)
             }
         }
     }
@@ -402,7 +579,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         mainHandler.post {
             try {
                 statusView?.let { windowManager?.removeView(it) }
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+                logger.logError("hideStatusOverlay", e)
+            }
             statusView = null
             statusText = null
             isOverlayShowing = false
@@ -414,8 +593,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
         }
     }
-
-    // ─── Scroll ──────────────────────────────────────────────────
 
     private fun scrollDown() {
         val metrics = resources.displayMetrics
@@ -432,22 +609,20 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         dispatchGesture(gesture, null, null)
     }
 
-    /**
-     * Tap vào tọa độ thật của node trên màn hình.
-     * Giống ngón tay chạm thật — tự nhiên hơn ACTION_CLICK.
-     */
-    private suspend fun tapNodeByCoordinate(node: android.view.accessibility.AccessibilityNodeInfo): Boolean {
-        val rect = android.graphics.Rect()
+    private suspend fun tapNodeByCoordinate(node: AccessibilityNodeInfo): Boolean {
+        val rect = Rect()
         node.getBoundsInScreen(rect)
-        if (rect.isEmpty) return false
+        if (rect.isEmpty) {
+            logger.log(LogTag.CLICK, "tap", "ABORT_EMPTY_BOUNDS")
+            return false
+        }
 
-        // Tap vào giữa node, lệch random ±4px cho tự nhiên
         val x = (rect.centerX() + (-4..4).random()).toFloat()
         val y = (rect.centerY() + (-4..4).random()).toFloat()
 
         val path = Path().apply { moveTo(x, y) }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 80)) // 80ms giống tap thật
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 80))
             .build()
 
         var result = false
@@ -457,25 +632,106 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 result = true
                 latch.countDown()
             }
+
             override fun onCancelled(gestureDescription: GestureDescription) {
+                logger.log(LogTag.CLICK, "x=$x y=$y", "GESTURE_CANCELLED")
                 latch.countDown()
             }
         }, null)
         latch.await(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+        val label = if (result) "OK" else "TIMEOUT_OR_FAIL"
+        logger.log(LogTag.CLICK, "x=$x y=$y rect=$rect", label)
         return result
     }
 
-    private fun performClickWithFallback(node: android.view.accessibility.AccessibilityNodeInfo): Boolean {
-        if (node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)) return true
+    private fun performClickWithFallback(node: AccessibilityNodeInfo): Boolean {
+        val summary = boundsSummary(node)
+        if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            logger.log(LogTag.CLICK, summary, "ACTION_CLICK_OK_SELF")
+            return true
+        }
+        logger.log(LogTag.CLICK, summary, "ACTION_CLICK_FAIL_SELF_TRY_PARENT")
         var parent = node.parent
-        repeat(4) {
-            if (parent == null) return false
-            if (parent!!.isClickable &&
-                parent!!.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)) {
+        repeat(4) { level ->
+            if (parent == null) {
+                logger.log(LogTag.CLICK, "after level=$level $summary", "NO_PARENT_GIVEUP")
+                return false
+            }
+            val p = parent!!
+            val pSum = boundsSummary(p)
+            if (p.isClickable && p.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                logger.log(LogTag.CLICK, "parentLevel=${level + 1} $pSum", "ACTION_CLICK_OK_PARENT")
                 return true
             }
-            parent = parent!!.parent
+            parent = p.parent
         }
+        logger.log(LogTag.CLICK, summary, "ALL_PARENTS_FAILED")
         return false
+    }
+
+    private fun syncDebugHighlightFromPrefsInternal() {
+        mainHandler.post {
+            if (!debugHighlightPrefs.isNodeHighlightEnabled()) {
+                detachNodeHighlightOverlay()
+            }
+        }
+    }
+
+    private fun updateDebugNodeHighlights(
+        candidates: List<AccessibilityNodeInfo>,
+        clickTarget: AccessibilityNodeInfo?
+    ) {
+        if (!debugHighlightPrefs.isNodeHighlightEnabled()) {
+            mainHandler.post { detachNodeHighlightOverlay() }
+            return
+        }
+        val rects = ArrayList<Rect>(candidates.size)
+        for (n in candidates) {
+            val r = Rect()
+            n.getBoundsInScreen(r)
+            if (!r.isEmpty) rects.add(Rect(r))
+        }
+        val clickRect = clickTarget?.let { t ->
+            val r = Rect()
+            t.getBoundsInScreen(r)
+            if (r.isEmpty) null else Rect(r)
+        }
+        mainHandler.post {
+            try {
+                val wm = windowManager ?: return@post
+                if (nodeHighlightView == null) {
+                    nodeHighlightView = NodeHighlightOverlayView(this)
+                    val lp = WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                        PixelFormat.TRANSLUCENT
+                    ).apply {
+                        gravity = Gravity.TOP or Gravity.START
+                    }
+                    wm.addView(nodeHighlightView, lp)
+                }
+                nodeHighlightView?.setHighlights(rects, clickRect)
+            } catch (e: Exception) {
+                logger.logError("updateDebugNodeHighlights", e)
+            }
+        }
+    }
+
+    private fun detachNodeHighlightOverlay() {
+        mainHandler.post {
+            val v = nodeHighlightView ?: return@post
+            nodeHighlightView = null
+            try {
+                v.clearHighlights()
+                windowManager?.removeView(v)
+            } catch (e: Exception) {
+                logger.logError("detachNodeHighlightOverlay", e)
+            }
+        }
     }
 }

@@ -10,8 +10,10 @@ import android.os.Environment
 import android.provider.Settings
 import android.widget.Toast
 import java.io.File
+import java.util.Locale
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -33,6 +35,8 @@ import android.content.ClipboardManager
 import com.zalopilot.app.accessibility.NodeFinder
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
 import com.zalopilot.app.floating.FloatingMenuService
+import com.zalopilot.app.util.DebugHighlightPrefs
+import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.*
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -44,6 +48,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var settingsManager: LikeSettingsManager
     @Inject lateinit var logger: Logger
     @Inject lateinit var nodeFinder: NodeFinder
+    @Inject lateinit var debugHighlightPrefs: DebugHighlightPrefs
 
     private val zaloBlue = Color(0xFF0068FF)
 
@@ -316,6 +321,9 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun SettingsScreen(settings: LikeSettings, onSave: (LikeSettings) -> Unit) {
         var dailyLimit by remember { mutableIntStateOf(settings.dailyLimit) }
+        var interactMode by remember { mutableStateOf(
+            try { InteractMode.valueOf(settings.interactModeStr) } catch (e: Exception) { InteractMode.MIX }
+        ) }
         var delayMin by remember { mutableStateOf((settings.delayMinMs / 1000).toString()) }
         var delayMax by remember { mutableStateOf((settings.delayMaxMs / 1000).toString()) }
         var sessionLimit by remember { mutableIntStateOf(settings.sessionLimit) }
@@ -323,6 +331,7 @@ class MainActivity : ComponentActivity() {
         var restMax by remember { mutableIntStateOf(settings.restMaxMinutes) }
         var quietStart by remember { mutableIntStateOf(settings.quietHourStart) }
         var quietEnd by remember { mutableIntStateOf(settings.quietHourEnd) }
+        var nodeHighlightDebug by remember { mutableStateOf(debugHighlightPrefs.isNodeHighlightEnabled()) }
 
         LazyColumn(modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)),
             contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -402,6 +411,65 @@ class MainActivity : ComponentActivity() {
                 }
             }
             item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("CHẾ ĐỘ TƯƠNG TÁC", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Cách bot chạm màn hình khi like", fontSize = 12.sp, color = Color.Gray)
+                        Spacer(Modifier.height(10.dp))
+                        listOf(
+                            InteractMode.TAP   to "👆 Tap — Click ảo vào ID node (nhanh, ít tự nhiên)",
+                            InteractMode.SWIPE to "👋 Vuốt — Kéo màn hình + chạm tọa độ thật (chậm hơn, tự nhiên)",
+                            InteractMode.MIX   to "🎲 Mix — Ngẫu nhiên giữa Tap và Vuốt (tự nhiên nhất)"
+                        ).forEach { (mode, label) ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (interactMode == mode) zaloBlue.copy(alpha = 0.1f) else Color.Transparent)
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = interactMode == mode,
+                                    onClick = { interactMode = mode },
+                                    colors = RadioButtonDefaults.colors(selectedColor = zaloBlue)
+                                )
+                                Text(label, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp))
+                            }
+                        }
+                    }
+                }
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("VIỀN DEBUG (NÚT THÍCH)", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Vẽ bounds các node bot vừa tìm được; viền dày = node sắp click. Không chặn chạm.",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                        }
+                        Switch(
+                            checked = nodeHighlightDebug,
+                            onCheckedChange = { on ->
+                                nodeHighlightDebug = on
+                                debugHighlightPrefs.setNodeHighlightEnabled(on)
+                                ZaloPilotAccessibilityService.syncDebugHighlightFromPrefs()
+                            },
+                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
+                        )
+                    }
+                }
+            }
+            item {
                 Button(onClick = {
                     onSave(settings.copy(
                         dailyLimit = dailyLimit,
@@ -411,7 +479,8 @@ class MainActivity : ComponentActivity() {
                         restMinMinutes = restMin,
                         restMaxMinutes = restMax,
                         quietHourStart = quietStart,
-                        quietHourEnd = quietEnd
+                        quietHourEnd = quietEnd,
+                        interactModeStr = interactMode.name
                     ))
                     Toast.makeText(this@MainActivity, "✅ Đã lưu cài đặt", Toast.LENGTH_SHORT).show()
                 }, modifier = Modifier.fillMaxWidth().height(50.dp),
@@ -492,6 +561,13 @@ class MainActivity : ComponentActivity() {
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                         ) { Text("💾 Lưu", color = Color.White, fontSize = 13.sp) }
+
+                        Button(
+                            onClick = { copyUiTreeJson() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(0.2f)),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        ) { Text("📋 Copy JSON", color = Color.White, fontSize = 13.sp) }
                     }
                 }
             }
@@ -559,20 +635,34 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun LogScreen(logs: List<LogEntry>) {
-        val colorMap = mapOf(
-            "SUCCESS" to Color(0xFF27AE60), "SKIP" to Color(0xFF888888),
-            "REST" to Color(0xFFBA7517), "ERROR" to Color(0xFFE24B4A),
-            "STARTED" to Color(0xFF0068FF), "STOPPED" to Color(0xFF888888),
-            "CONNECTED" to Color(0xFF0068FF)
-        )
+        fun tagColor(tag: LogTag): Color = when (tag) {
+            LogTag.POLL -> Color(0xFF5C6BC0)
+            LogTag.EVENT_HINT -> Color(0xFF8E24AA)
+            LogTag.SCAN -> Color(0xFF00838F)
+            LogTag.FOUND -> Color(0xFF2E7D32)
+            LogTag.CLICK -> Color(0xFFE65100)
+            LogTag.SCROLL -> Color(0xFF1565C0)
+            LogTag.ERROR -> Color(0xFFC62828)
+            LogTag.STATE -> Color(0xFF546E7A)
+        }
+
+        fun isClickFailure(log: LogEntry): Boolean {
+            if (log.tag != LogTag.CLICK) return false
+            val r = log.result.uppercase(Locale.getDefault())
+            return r.contains("FAIL") || r.contains("CLICK_FAILED") || r.contains("GIVEUP") ||
+                r.contains("ALL_PARENTS_FAILED") || r.contains("TIMEOUT_OR_FAIL") || r.contains("ABORT")
+        }
+
+        fun isScrollFailure(log: LogEntry): Boolean =
+            log.tag == LogTag.SCROLL && log.result.contains("FAIL", ignoreCase = true)
 
         Column(Modifier.fillMaxSize().background(Color(0xFFF5F5F5))) {
             Box(Modifier.fillMaxWidth().background(zaloBlue).padding(20.dp)) {
                 Column {
                     Text("Nhật ký", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
-                    Text("${logs.size} hoạt động gần nhất", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
+                    Text("${logs.size} dòng gần nhất · POLL / SCAN / CLICK / STATE…", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
                     Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         Button(onClick = { exportLog() },
                             colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
@@ -604,32 +694,58 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             } else {
-                LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(logs) { log ->
-                        val dotColor = colorMap.entries.find { log.result.contains(it.key) }?.value ?: Color.Gray
-                        Card(modifier = Modifier.fillMaxWidth()) {
+                        val accent = tagColor(log.tag)
+                        val failure = isClickFailure(log) || isScrollFailure(log)
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = when {
+                                    failure -> Color(0xFFFFEBEE)
+                                    log.tag == LogTag.ERROR -> Color(0xFFFFCDD2)
+                                    else -> Color.White
+                                }
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            border = if (failure) androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE57373)) else null
+                        ) {
                             Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Box(Modifier.size(8.dp).clip(CircleShape).background(dotColor).align(Alignment.CenterVertically))
+                                Box(
+                                    Modifier.size(10.dp).clip(CircleShape).background(accent).align(Alignment.Top)
+                                )
                                 Column(Modifier.weight(1f)) {
-                                    Text(when (log.action) {
-                                        "LIKE" -> "👍 Like thành công — ${log.target}"
-                                        "LIKE_SKIP" -> "⏭ Bỏ qua — ${log.target}"
-                                        "AUTO_LIKE" -> when (log.result) {
-                                            "STARTED" -> "▶ Bắt đầu (${log.target})"
-                                            "STOPPED" -> "■ Dừng"
-                                            "SESSION_REST" -> "😴 ${log.target}"
-                                            "DAILY_LIMIT_REACHED" -> "✅ Đã đủ giới hạn hôm nay"
-                                            "QUIET_HOUR_PAUSE" -> "🌙 Giờ nghỉ — dừng"
-                                            "ZALO_NOT_FOREGROUND" -> "⚠️ Zalo không mở"
-                                            "PAUSED_ZALO_CLOSED" -> "⏸ Zalo tắt — tạm dừng"
-                                            else -> "${log.action} ${log.result}"
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Surface(
+                                            color = accent.copy(alpha = 0.15f),
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                log.tag.name,
+                                                Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = accent
+                                            )
                                         }
-                                        "ZALO" -> if (log.result == "FOREGROUND") "📱 Zalo mở lên" else "📴 Zalo tắt"
-                                        "SERVICE" -> "🔧 Service ${log.result}"
-                                        "SCANNER" -> "🔍 ${log.target}"
-                                        else -> "${log.action} — ${log.target}"
-                                    }, fontSize = 13.sp, color = Color(0xFF222222))
-                                    Text(log.timestamp, fontSize = 11.sp, color = Color.Gray)
+                                        if (failure) {
+                                            Text("THẤT BẠI", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFC62828))
+                                        }
+                                    }
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(log.target, fontSize = 13.sp, color = Color(0xFF222222))
+                                    Text(log.result, fontSize = 12.sp, color = Color(0xFF555555))
+                                    Spacer(Modifier.height(4.dp))
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text(log.timestamp, fontSize = 11.sp, color = Color.Gray)
+                                        val meta = buildList {
+                                            if (!log.foregroundPkg.isNullOrBlank()) add("pkg ${log.foregroundPkg}")
+                                            log.durationMs?.let { add("${it}ms") }
+                                        }.joinToString(" · ")
+                                        if (meta.isNotEmpty()) {
+                                            Text(meta, fontSize = 10.sp, color = Color(0xFF888888), maxLines = 2)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -640,6 +756,18 @@ class MainActivity : ComponentActivity() {
     }
 
     // ─── Helpers ─────────────────────────────────────────────────
+
+    private fun copyUiTreeJson() {
+        try {
+            val text = logger.uiTreeFile.takeIf { it.exists() }?.readText()
+                ?: "Chưa có dữ liệu — bấm Quét trước"
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("ZaloPilot UI Tree", text))
+            Toast.makeText(this, "✅ Đã copy uitree.json vào clipboard", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "❌ ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     private fun copyLogs() {
         try {
@@ -672,14 +800,14 @@ class MainActivity : ComponentActivity() {
 
     private fun exportLog() {
         try {
-            val src = java.io.File(filesDir, "ZaloPilot/log.txt")
+            val src = logger.logFile
             if (!src.exists()) {
                 Toast.makeText(this, "⚠️ Chưa có log nào", Toast.LENGTH_SHORT).show()
                 return
             }
             val dest = java.io.File(
                 android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
-                "ZaloPilot_log_${System.currentTimeMillis()}.txt"
+                "ZaloPilot_log_${System.currentTimeMillis()}.json"
             )
             src.copyTo(dest, overwrite = true)
             Toast.makeText(this, "✅ Đã lưu vào Downloads: ${dest.name}", Toast.LENGTH_LONG).show()
@@ -699,10 +827,8 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "⚠️ Không đọc được UI — hãy mở Zalo trước", Toast.LENGTH_SHORT).show()
             return
         }
-        logger.log("DEBUG_DUMP", "manual trigger", "START")
-        com.zalopilot.app.accessibility.NodeFinder(
-            com.zalopilot.app.data.model.ZaloIDStore(this), logger
-        ).debugDump(root, maxNodes = 800)
+        logger.log(LogTag.SCAN, "manual debugDump", "START")
+        nodeFinder.debugDump(root, maxNodes = 800)
         Toast.makeText(this, "🔍 Đã dump UI vào log — bấm Lưu log để lấy file", Toast.LENGTH_LONG).show()
     }
 
