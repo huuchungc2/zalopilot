@@ -1,6 +1,7 @@
 package com.zalopilot.app.accessibility
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureResultCallback
 import android.accessibilityservice.GestureDescription
 import android.content.Context
 import android.content.Intent
@@ -37,7 +38,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
+import kotlin.coroutines.resume
 
 @AndroidEntryPoint
 class ZaloPilotAccessibilityService : AccessibilityService() {
@@ -68,6 +72,10 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private var lastContentEventLogMs = 0L
     private var lastRootNullWallLogMs = 0L
 
+    /** Tránh spam click cùng vùng bounds khi Zalo chưa kịp cập nhật UI. */
+    private var lastLikeClickBoundsKey: String? = null
+    private var lastLikeClickAttemptAtMs: Long = 0L
+
     private var windowManager: WindowManager? = null
     private var statusView: LinearLayout? = null
     private var statusText: TextView? = null
@@ -91,6 +99,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         private const val POLL_ROOT_ASSUME_BACKGROUND = 6
         private const val CONTENT_EVENT_LOG_THROTTLE_MS = 3_000L
         private const val ROOT_NULL_WALL_LOG_MS = 8_000L
+        private const val DUPLICATE_LIKE_CLICK_SUPPRESS_MS = 2_500L
     }
 
     override fun onServiceConnected() {
@@ -468,24 +477,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             updateStatus("👍 Đang like bài của ${author ?: "..."}...")
             delay((800..2000).random().toLong())
 
-            val interactMode = settingsManager.getInteractMode()
-            val useTap = when (interactMode) {
-                InteractMode.TAP -> true
-                InteractMode.SWIPE -> false
-                InteractMode.MIX -> listOf(true, false).random()
-            }
-
             updateDebugNodeHighlights(likeNodes, node)
 
-            logger.log(LogTag.CLICK, "author=${author ?: "?"} mode=${if (useTap) "TAP" else "COORD"}", boundsSummary(node))
-
-            val clicked = if (useTap) {
-                performClickWithFallback(node)
-            } else {
-                tapNodeByCoordinate(node).let { tapped ->
-                    if (tapped) true else performClickWithFallback(node)
-                }
-            }
+            val clicked = performLikeClickWithFallbacks(node)
 
             updateDebugNodeHighlights(likeNodes, null)
 
@@ -517,6 +511,64 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         val r = Rect()
         node.getBoundsInScreen(r)
         return "bounds=[${r.left},${r.top},${r.right},${r.bottom}] clickable=${node.isClickable}"
+    }
+
+    private fun boundsDedupeKey(node: AccessibilityNodeInfo): String {
+        val r = Rect()
+        node.getBoundsInScreen(r)
+        return "${r.left},${r.top},${r.right},${r.bottom}"
+    }
+
+    private fun shouldSuppressDuplicateBoundsClick(node: AccessibilityNodeInfo): Boolean {
+        val key = boundsDedupeKey(node)
+        val now = System.currentTimeMillis()
+        val prev = lastLikeClickBoundsKey
+        if (prev != null && key == prev &&
+            (now - lastLikeClickAttemptAtMs) < DUPLICATE_LIKE_CLICK_SUPPRESS_MS
+        ) {
+            logger.log(
+                LogTag.CLICK,
+                "bounds=$key deltaMs=${now - lastLikeClickAttemptAtMs}",
+                "DUPLICATE_BOUNDS_SKIP"
+            )
+            return true
+        }
+        return false
+    }
+
+    private fun markLikeClickAttemptForBounds(node: AccessibilityNodeInfo) {
+        lastLikeClickBoundsKey = boundsDedupeKey(node)
+        lastLikeClickAttemptAtMs = System.currentTimeMillis()
+    }
+
+    private fun nodeSnapshotForLog(node: AccessibilityNodeInfo): String {
+        val r = Rect()
+        node.getBoundsInScreen(r)
+        val text = node.text?.toString()?.replace("\n", "↵") ?: ""
+        val desc = node.contentDescription?.toString()?.replace("\n", "↵") ?: ""
+        val cls = node.className?.toString() ?: ""
+        val id = node.viewIdResourceName ?: ""
+        return "text=\"$text\" desc=\"$desc\" class=\"$cls\" id=\"$id\" " +
+            "clickable=${node.isClickable} enabled=${node.isEnabled} " +
+            "boundsInScreen=[${r.left},${r.top},${r.right},${r.bottom}]"
+    }
+
+    private suspend fun performLikeClickWithFallbacks(node: AccessibilityNodeInfo): Boolean {
+        if (shouldSuppressDuplicateBoundsClick(node)) return false
+        if (!node.isVisibleToUser) {
+            logger.log(LogTag.CLICK, boundsSummary(node), "SKIP_NOT_VISIBLE")
+            return false
+        }
+        markLikeClickAttemptForBounds(node)
+        logger.log(LogTag.CLICK, nodeSnapshotForLog(node), "CLICK_CANDIDATE")
+        if (performClickWithFallback(node)) return true
+        val gestureOk = tapNodeByCoordinate(node)
+        logger.log(
+            LogTag.CLICK,
+            boundsSummary(node),
+            if (gestureOk) "GESTURE_FALLBACK_OK" else "GESTURE_FALLBACK_FAIL"
+        )
+        return gestureOk
     }
 
     private fun showStatusOverlay(msg: String) {
@@ -623,50 +675,53 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
         val path = Path().apply { moveTo(x, y) }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 80))
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 150))
             .build()
 
-        var result = false
-        val latch = java.util.concurrent.CountDownLatch(1)
-        dispatchGesture(gesture, object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription) {
-                result = true
-                latch.countDown()
-            }
+        return withTimeoutOrNull(600L) {
+            suspendCancellableCoroutine { cont ->
+                val callback = object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription) {
+                        if (cont.isActive) cont.resume(true)
+                    }
 
-            override fun onCancelled(gestureDescription: GestureDescription) {
-                logger.log(LogTag.CLICK, "x=$x y=$y", "GESTURE_CANCELLED")
-                latch.countDown()
+                    override fun onCancelled(gestureDescription: GestureDescription) {
+                        logger.log(LogTag.CLICK, "x=$x y=$y", "GESTURE_TAP_CANCELLED")
+                        if (cont.isActive) cont.resume(false)
+                    }
+                }
+                val dispatched = dispatchGesture(gesture, callback, null)
+                if (!dispatched) {
+                    logger.log(LogTag.CLICK, "x=$x y=$y", "GESTURE_DISPATCH_REJECTED")
+                    cont.resume(false)
+                }
             }
-        }, null)
-        latch.await(500, java.util.concurrent.TimeUnit.MILLISECONDS)
-        val label = if (result) "OK" else "TIMEOUT_OR_FAIL"
-        logger.log(LogTag.CLICK, "x=$x y=$y rect=$rect", label)
-        return result
+        } ?: run {
+            logger.log(LogTag.CLICK, "x=$x y=$y rect=$rect", "GESTURE_TAP_TIMEOUT")
+            false
+        }
     }
 
     private fun performClickWithFallback(node: AccessibilityNodeInfo): Boolean {
-        val summary = boundsSummary(node)
+        val snap = nodeSnapshotForLog(node)
         if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-            logger.log(LogTag.CLICK, summary, "ACTION_CLICK_OK_SELF")
+            logger.log(LogTag.CLICK, "target=self $snap", "ACTION_CLICK_OK")
             return true
         }
-        logger.log(LogTag.CLICK, summary, "ACTION_CLICK_FAIL_SELF_TRY_PARENT")
-        var parent = node.parent
-        repeat(4) { level ->
-            if (parent == null) {
-                logger.log(LogTag.CLICK, "after level=$level $summary", "NO_PARENT_GIVEUP")
-                return false
-            }
-            val p = parent!!
-            val pSum = boundsSummary(p)
-            if (p.isClickable && p.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                logger.log(LogTag.CLICK, "parentLevel=${level + 1} $pSum", "ACTION_CLICK_OK_PARENT")
+        logger.log(LogTag.CLICK, "target=self $snap", "ACTION_CLICK_FAIL")
+
+        var parent: AccessibilityNodeInfo? = node.parent
+        for (level in 1..6) {
+            val p = parent ?: break
+            val pSnap = nodeSnapshotForLog(p)
+            if (p.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                logger.log(LogTag.CLICK, "target=parent$level $pSnap", "ACTION_CLICK_OK")
                 return true
             }
+            logger.log(LogTag.CLICK, "target=parent$level $pSnap", "ACTION_CLICK_FAIL")
             parent = p.parent
         }
-        logger.log(LogTag.CLICK, summary, "ALL_PARENTS_FAILED")
+        logger.log(LogTag.CLICK, snap, "ACTION_CLICK_CHAIN_FAIL")
         return false
     }
 

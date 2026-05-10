@@ -130,6 +130,7 @@ class NodeFinder @Inject constructor(
 
     fun shouldLike(node: AccessibilityNodeInfo): Boolean {
         if (node.isChecked) return false
+        if (!node.isEnabled) return false
 
         val ownText = node.text?.toString() ?: ""
         val ownDesc = node.contentDescription?.toString() ?: ""
