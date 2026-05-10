@@ -6,6 +6,8 @@ import com.zalopilot.app.data.model.ZaloIDStore
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
 import com.zalopilot.app.util.UiNodeEntry
+import java.util.ArrayDeque
+import java.util.LinkedHashSet
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -114,13 +116,14 @@ class NodeFinder @Inject constructor(
      * Từ 1 node (có thể là TextView text "Thích"),
      * leo lên tối đa 4 cấp để tìm node clickable thật sự.
      */
-    private fun resolveClickable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+    private fun resolveClickable(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (node == null) return null
         if (node.isClickable) return node
         var parent: AccessibilityNodeInfo? = node.parent
         repeat(4) {
-            if (parent == null) return null
-            if (parent!!.isClickable) return parent
-            parent = parent!!.parent
+            val p = parent ?: return null
+            if (p.isClickable) return p
+            parent = p.parent
         }
         return node
     }
