@@ -137,8 +137,19 @@ class NodeFinder @Inject constructor(
                 t.contains("liked", ignoreCase = true)
         }
 
-        if (containsLikedMark(node.text?.toString())) return false
-        if (containsLikedMark(node.contentDescription?.toString())) return false
+        fun ownTextOrDescReject(node: AccessibilityNodeInfo): Boolean {
+            for (raw in listOf(node.text?.toString(), node.contentDescription?.toString())) {
+                val t = raw ?: ""
+                if (t.contains("đã thích", ignoreCase = true)) return true
+                if (t.contains("liked", ignoreCase = true)) return true
+                if (t.contains("bình luận", ignoreCase = true)) return true
+                if (t.contains("nhập", ignoreCase = true)) return true
+                if (t.contains("chia sẻ", ignoreCase = true)) return true
+            }
+            return false
+        }
+
+        if (ownTextOrDescReject(node)) return false
 
         for (i in 0 until node.childCount) {
             val c = node.getChild(i) ?: continue
@@ -299,9 +310,10 @@ class NodeFinder @Inject constructor(
     private fun authorTextOrNull(raw: String?): String? {
         val t = raw?.trim().orEmpty()
         if (t.length <= 1) return null
-        if (AUTHOR_ACTION_LABELS.any { it.equals(t, ignoreCase = true) }) return null
+        val skipSubstrings = listOf(
+            "thích", "bình luận", "nhập", "chia sẻ", "comment", "like"
+        )
+        if (skipSubstrings.any { t.contains(it, ignoreCase = true) }) return null
         return t
     }
-
-    private val AUTHOR_ACTION_LABELS = listOf("Thích", "Đã thích", "Bình luận", "Chia sẻ")
 }

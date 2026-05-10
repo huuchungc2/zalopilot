@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- fix: `boundsDedupeKey` làm tròn left/top theo 16px + `viewIdResourceName`; `authorTextOrNull` bỏ qua chuỗi chứa thích/bình luận/nhập/chia sẻ/comment/like; `shouldLike` lọc text/desc node (đã thích/liked/bình luận/nhập/chia sẻ), không chặn chỉ "Thích".
 - feat(settings): `FeedMode` (SCROLL / MANUAL / MIX) lưu prefs `feed_mode`, mặc định SCROLL; UI Cài đặt (Cuộn tự động / Đẩy tay / Kết hợp); `autoLikeLoop` — MANUAL không scroll, MIX 50% `scrollDown` hoặc chờ, SCROLL giữ hành vi cũ theo `InteractMode`.
 - fix(accessibility): `GestureResultCallback` dùng `AccessibilityService.GestureResultCallback` (sửa unresolved reference khi build).
 - fix(NodeFinder): `getAuthorName` bỏ qua nhãn hành động (Thích, Đã thích, Bình luận, Chia sẻ); `shouldLike` — `btn_like` không text/desc vẫn cho thử click; lọc `isEnabled`.

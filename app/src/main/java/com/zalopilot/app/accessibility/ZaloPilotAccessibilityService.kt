@@ -533,10 +533,12 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         return "bounds=[${r.left},${r.top},${r.right},${r.bottom}] clickable=${node.isClickable}"
     }
 
+    private fun roundTo16(v: Int) = (v / 16) * 16
+
     private fun boundsDedupeKey(node: AccessibilityNodeInfo): String {
         val r = Rect()
         node.getBoundsInScreen(r)
-        return "${r.left},${r.top},${r.right},${r.bottom}"
+        return "${roundTo16(r.left)}_${roundTo16(r.top)}_${node.viewIdResourceName ?: ""}"
     }
 
     private fun shouldSuppressDuplicateBoundsClick(node: AccessibilityNodeInfo): Boolean {
