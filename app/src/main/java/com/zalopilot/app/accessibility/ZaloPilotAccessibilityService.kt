@@ -310,7 +310,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             }
 
             updateStatus("👍 Đang like bài của ${author ?: "..."}...")
-            val clicked = node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+            // Thử click node, nếu fail thì leo lên parent thử tiếp
+            val clicked = performClickWithFallback(node)
 
             if (clicked) {
                 val progress = progressManager.incrementAndSave()
@@ -322,7 +323,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                 randomDelay(settings.delayMinMs, settings.delayMaxMs)
             } else {
-                updateStatus("❌ Click thất bại — node không clickable")
+                updateStatus("❌ Click thất bại — thử lại lần sau")
                 logger.log("LIKE", author ?: "unknown", "CLICK_FAILED")
             }
 

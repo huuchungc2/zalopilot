@@ -3,6 +3,7 @@ package com.zalopilot.app.accessibility
 import android.view.accessibility.AccessibilityNodeInfo
 import com.zalopilot.app.data.model.ZaloIDStore
 import com.zalopilot.app.util.Logger
+import com.zalopilot.app.util.UiNodeEntry
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -18,21 +19,45 @@ class NodeFinder @Inject constructor(
     fun findLikeButtons(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
         val result = mutableListOf<AccessibilityNodeInfo>()
 
-        // Thử dùng ID đã học trước
+        // 1. Thử dùng ID đã học
         val savedId = idStore.getLikeButtonID()
         if (savedId != null) {
             val byId = root.findAccessibilityNodeInfosByViewId(savedId)
             if (byId.isNotEmpty()) {
-                result.addAll(byId)
-                return result
+                // ID tìm được → resolve về node clickable thật
+                byId.mapNotNull { resolveClickable(it) }.forEach { result.add(it) }
+                if (result.isNotEmpty()) return result
             }
-            // ID không còn tìm được → ZaloUIScanner sẽ tự học ID mới ở scan tiếp theo
+            logger.log("FINDER", "savedId=$savedId not found, fallback text", "ID_MISS")
         }
 
-        // Fallback: tìm bằng text "Thích"
+        // 2. Fallback: tìm text "Thích" → resolve về node clickable thật
         val byText = root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKE)
-        result.addAll(byText)
+        byText.mapNotNull { resolveClickable(it) }.forEach { result.add(it) }
+
+        // 3. Fallback nữa: tìm "Đã thích" để biết đã like rồi (không add vào result)
+        if (result.isEmpty()) {
+            logger.log("FINDER", "no like button found in UI", "EMPTY")
+        }
+
         return result
+    }
+
+    /**
+     * Từ 1 node (có thể là TextView text "Thích"),
+     * leo lên tối đa 4 cấp để tìm node clickable thật sự.
+     * Zalo thường wrap TextView trong FrameLayout/LinearLayout clickable.
+     */
+    private fun resolveClickable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isClickable) return node
+        var parent: AccessibilityNodeInfo? = node.parent
+        repeat(4) {
+            if (parent == null) return null
+            if (parent!!.isClickable) return parent
+            parent = parent!!.parent
+        }
+        // Không tìm được node clickable → dùng chính node đó và thử performClick
+        return node
     }
 
     /**
@@ -42,10 +67,19 @@ class NodeFinder @Inject constructor(
      */
     fun shouldLike(node: AccessibilityNodeInfo): Boolean {
         if (node.isChecked) return false
-        val text = node.text?.toString() ?: return false
-        if (text == ZaloIDStore.TEXT_LIKED) return false
-        if (text.contains("Đã")) return false
-        return text == ZaloIDStore.TEXT_LIKE || text.contains("Thích")
+
+        // Check text của chính node và các con
+        val ownText = node.text?.toString() ?: ""
+        val childText = (0 until node.childCount)
+            .mapNotNull { node.getChild(it)?.text?.toString() }
+            .joinToString("")
+
+        val text = (ownText + childText).trim()
+        if (text.isEmpty()) return true // ImageButton không có text → cứ thử like
+
+        if (text.contains("Đã thích", ignoreCase = true)) return false
+        if (text.contains("Đã", ignoreCase = true)) return false
+        return text.contains("Thích", ignoreCase = true)
     }
 
     /**
@@ -129,6 +163,41 @@ class NodeFinder @Inject constructor(
 
         val endResult = if (visited >= maxNodes) "TRUNCATED" else "DONE"
         logger.log("DEBUG_DUMP", "visited=$visited", endResult)
+    }
+
+    /**
+     * Dump toàn bộ UI tree → lưu vào uitree.json qua logger.
+     * Tab UI Tree đọc file này để hiển thị.
+     */
+    fun dumpToFile(root: AccessibilityNodeInfo?, maxNodes: Int = 1000) {
+        root ?: run {
+            logger.log("UI_TREE", "root=null", "EMPTY")
+            return
+        }
+
+        val result = mutableListOf<UiNodeEntry>()
+        val stack = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+        stack.addLast(root to 0)
+
+        while (stack.isNotEmpty() && result.size < maxNodes) {
+            val (node, depth) = stack.removeLast()
+            result.add(UiNodeEntry(
+                depth      = depth,
+                text       = node.text?.toString()?.replace("\n", "↵") ?: "",
+                resourceId = node.viewIdResourceName ?: "",
+                className  = node.className?.toString()?.substringAfterLast(".") ?: "",
+                clickable  = node.isClickable,
+                checked    = node.isChecked
+            ))
+            if (node.childCount > 0 && depth < 60) {
+                for (i in node.childCount - 1 downTo 0) {
+                    val child = node.getChild(i) ?: continue
+                    stack.addLast(child to (depth + 1))
+                }
+            }
+        }
+
+        logger.saveUiTree(result)
     }
 
     // ─── Helpers ──────────────────────────────────────────────────

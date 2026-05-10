@@ -51,8 +51,9 @@ class ZaloUIScanner @Inject constructor(
         val candidates = (byThich + byDaThich)
 
         for (node in candidates) {
-            val id = node.viewIdResourceName ?: continue
-            if (id.contains("zalo", ignoreCase = true) && id.isNotBlank()) {
+            // Thử lấy ID từ chính node, nếu không có thì leo lên parent
+            val id = findIdFromNodeOrParent(node) ?: continue
+            if (id.contains("zalo", ignoreCase = true)) {
                 val current = idStore.getLikeButtonID()
                 if (current != id) {
                     idStore.saveLikeButtonID(id)
@@ -61,7 +62,21 @@ class ZaloUIScanner @Inject constructor(
                 return true
             }
         }
+
+        // Không tìm được ID nào — log để debug
+        logger.log("SCANNER", "candidates=${candidates.size} but no zalo ID found", "LIKE_ID_MISS")
         return false
+    }
+
+    private fun findIdFromNodeOrParent(node: AccessibilityNodeInfo): String? {
+        node.viewIdResourceName?.takeIf { it.isNotBlank() }?.let { return it }
+        var parent: AccessibilityNodeInfo? = node.parent
+        repeat(4) {
+            val id = parent?.viewIdResourceName?.takeIf { it.isNotBlank() }
+            if (id != null) return id
+            parent = parent?.parent
+        }
+        return null
     }
 
     private fun scanTabTimeline(root: AccessibilityNodeInfo): Boolean {

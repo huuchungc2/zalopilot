@@ -6,8 +6,10 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
 import android.provider.Settings
 import android.widget.Toast
+import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -26,6 +28,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import com.zalopilot.app.accessibility.NodeFinder
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
 import com.zalopilot.app.floating.FloatingMenuService
 import com.zalopilot.app.util.*
@@ -38,6 +44,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var progressManager: LikeProgressManager
     @Inject lateinit var settingsManager: LikeSettingsManager
     @Inject lateinit var logger: Logger
+    @Inject lateinit var nodeFinder: NodeFinder
 
     private val zaloBlue = Color(0xFF0068FF)
 
@@ -200,12 +207,15 @@ class MainActivity : ComponentActivity() {
 
         Scaffold(bottomBar = {
             NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                listOf("Trang chủ", "Cài đặt", "Nhật ký").forEachIndexed { i, label ->
+                listOf("Trang chủ", "Cài đặt", "Nhật ký", "UI Tree").forEachIndexed { i, label ->
                     NavigationBarItem(
                         selected = selectedTab == i,
-                        onClick = { selectedTab = i; if (i == 2) logs = logger.readLogs() },
-                        icon = { Text(listOf("🏠", "⚙️", "📋")[i], fontSize = 18.sp) },
-                        label = { Text(label, fontSize = 11.sp) }
+                        onClick = {
+                            selectedTab = i
+                            if (i == 2) logs = logger.readLogs()
+                        },
+                        icon = { Text(listOf("🏠", "⚙️", "📋", "🌳")[i], fontSize = 18.sp) },
+                        label = { Text(label, fontSize = 10.sp) }
                     )
                 }
             }
@@ -215,6 +225,7 @@ class MainActivity : ComponentActivity() {
                     0 -> HomeScreen(isRunning, progress, settings)
                     1 -> SettingsScreen(settings) { settings = it; settingsManager.save(it) }
                     2 -> LogScreen(logs)
+                    3 -> UiTreeScreen()
                 }
             }
         }
@@ -413,6 +424,138 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ─── UI Tree Screen ──────────────────────────────────────────
+
+    @Composable
+    fun UiTreeScreen() {
+        var treeResult by remember { mutableStateOf(logger.readUiTree()) }
+        var filter by remember { mutableStateOf("") }
+        var showOnlyClickable by remember { mutableStateOf(false) }
+        var showOnlyWithId by remember { mutableStateOf(false) }
+
+        val nodes = treeResult?.nodes ?: emptyList()
+        val filtered = remember(nodes, filter, showOnlyClickable, showOnlyWithId) {
+            nodes.filter { node ->
+                val matchText = filter.isEmpty()
+                    || node.text.contains(filter, ignoreCase = true)
+                    || node.resourceId.contains(filter, ignoreCase = true)
+                    || node.className.contains(filter, ignoreCase = true)
+                val matchClickable = !showOnlyClickable || node.clickable
+                val matchId = !showOnlyWithId || node.resourceId.isNotEmpty()
+                matchText && matchClickable && matchId
+            }
+        }
+
+        Column(Modifier.fillMaxSize().background(Color(0xFFF5F5F5))) {
+            Box(Modifier.fillMaxWidth().background(Color(0xFF1a1a2e)).padding(16.dp)) {
+                Column {
+                    Text("UI Tree Zalo", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    if (treeResult != null) {
+                        Text("${treeResult!!.count} nodes · quét lúc ${treeResult!!.scannedAt}",
+                            color = Color.White.copy(0.7f), fontSize = 12.sp)
+                    } else {
+                        Text("Chưa có dữ liệu — mở Zalo rồi bấm Quét", color = Color.White.copy(0.7f), fontSize = 12.sp)
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                val root = ZaloPilotAccessibilityService.instance?.rootInActiveWindow
+                                if (root == null) {
+                                    Toast.makeText(this@MainActivity, "⚠️ Mở Zalo trước rồi quét", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    nodeFinder.dumpToFile(root)
+                                    // Đợi file ghi xong rồi load lại
+                                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                                        treeResult = logger.readUiTree()
+                                        Toast.makeText(this@MainActivity, "✅ Quét xong ${treeResult?.count} nodes", Toast.LENGTH_SHORT).show()
+                                    }, 800)
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0068FF)),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        ) { Text("🔍 Quét", color = Color.White, fontSize = 13.sp) }
+
+                        Button(
+                            onClick = {
+                                treeResult = logger.readUiTree()
+                                Toast.makeText(this@MainActivity, "🔄 Đã load lại", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(0.2f)),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        ) { Text("🔄 Load lại", color = Color.White, fontSize = 13.sp) }
+
+                        Button(
+                            onClick = { exportUiTree() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(0.2f)),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        ) { Text("💾 Lưu", color = Color.White, fontSize = 13.sp) }
+                    }
+                }
+            }
+
+            Column(Modifier.background(Color.White).padding(12.dp)) {
+                OutlinedTextField(
+                    value = filter, onValueChange = { filter = it },
+                    placeholder = { Text("Tìm text / id / class...", fontSize = 13.sp) },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = showOnlyClickable, onClick = { showOnlyClickable = !showOnlyClickable },
+                        label = { Text("Clickable", fontSize = 11.sp) })
+                    FilterChip(selected = showOnlyWithId, onClick = { showOnlyWithId = !showOnlyWithId },
+                        label = { Text("Có ID", fontSize = 11.sp) })
+                    Text("${filtered.size} / ${nodes.size}", fontSize = 11.sp, color = Color.Gray,
+                        modifier = Modifier.align(Alignment.CenterVertically))
+                }
+            }
+
+            if (nodes.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("🌳", fontSize = 40.sp)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Mở Zalo tab Nhật ký → bấm Quét", color = Color.Gray, fontSize = 13.sp, textAlign = TextAlign.Center)
+                    }
+                }
+            } else {
+                LazyColumn(contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    items(filtered) { node -> UiNodeCard(node) }
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun UiNodeCard(node: UiNodeEntry) {
+        val indentDp = (node.depth * 8).coerceAtMost(80)
+        val bgColor = when {
+            node.text.contains("Thích", ignoreCase = true) -> Color(0xFFE8F5E9)
+            node.text.contains("Bình luận", ignoreCase = true) -> Color(0xFFE3F2FD)
+            node.clickable && node.resourceId.isNotEmpty() -> Color(0xFFFFF8E1)
+            else -> Color.White
+        }
+        Card(modifier = Modifier.fillMaxWidth().padding(start = indentDp.dp),
+            colors = CardDefaults.cardColors(containerColor = bgColor),
+            shape = RoundedCornerShape(6.dp)) {
+            Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (node.clickable) Text("👆", fontSize = 10.sp)
+                    if (node.checked) Text("✅", fontSize = 10.sp)
+                    Text(node.className, fontSize = 10.sp, color = Color.Gray)
+                }
+                if (node.text.isNotEmpty())
+                    Text(node.text, fontSize = 13.sp, fontWeight = FontWeight.W500, color = Color(0xFF111111))
+                if (node.resourceId.isNotEmpty())
+                    Text(node.resourceId, fontSize = 10.sp, color = Color(0xFF0068FF))
+            }
+        }
+    }
+
     // ─── Log Screen ──────────────────────────────────────────────
 
     @Composable
@@ -429,6 +572,27 @@ class MainActivity : ComponentActivity() {
                 Column {
                     Text("Nhật ký", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
                     Text("${logs.size} hoạt động gần nhất", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { exportLog() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(8.dp)) {
+                            Text("💾 Lưu log", color = Color.White, fontSize = 12.sp)
+                        }
+                        Button(onClick = { dumpZaloUI() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(8.dp)) {
+                            Text("🔍 Dump UI Zalo", color = Color.White, fontSize = 12.sp)
+                        }
+                        Button(onClick = { copyLogs() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(8.dp)) {
+                            Text("📋 Copy log", color = Color.White, fontSize = 12.sp)
+                        }
+                    }
                 }
             }
             if (logs.isEmpty()) {
@@ -477,6 +641,71 @@ class MainActivity : ComponentActivity() {
     }
 
     // ─── Helpers ─────────────────────────────────────────────────
+
+    private fun copyLogs() {
+        try {
+            val text = logger.logFile.takeIf { it.exists() }?.readText() ?: "Chưa có log"
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("ZaloPilot Log", text))
+            Toast.makeText(this, "✅ Đã copy log vào clipboard", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "❌ ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun exportUiTree() {
+        try {
+            val src = logger.uiTreeFile
+            if (!src.exists()) {
+                Toast.makeText(this, "⚠️ Chưa có uitree — bấm Quét trước", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val dest = java.io.File(
+                android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
+                "ZaloPilot_uitree_${System.currentTimeMillis()}.json"
+            )
+            src.copyTo(dest, overwrite = true)
+            Toast.makeText(this, "✅ Đã lưu: ${dest.name}", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "❌ ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun exportLog() {
+        try {
+            val src = java.io.File(filesDir, "ZaloPilot/log.txt")
+            if (!src.exists()) {
+                Toast.makeText(this, "⚠️ Chưa có log nào", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val dest = java.io.File(
+                android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
+                "ZaloPilot_log_${System.currentTimeMillis()}.txt"
+            )
+            src.copyTo(dest, overwrite = true)
+            Toast.makeText(this, "✅ Đã lưu vào Downloads: ${dest.name}", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "❌ Lỗi: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun dumpZaloUI() {
+        val svc = ZaloPilotAccessibilityService.instance
+        if (svc == null) {
+            Toast.makeText(this, "⚠️ Accessibility chưa bật", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val root = svc.rootInActiveWindow
+        if (root == null) {
+            Toast.makeText(this, "⚠️ Không đọc được UI — hãy mở Zalo trước", Toast.LENGTH_SHORT).show()
+            return
+        }
+        logger.log("DEBUG_DUMP", "manual trigger", "START")
+        com.zalopilot.app.accessibility.NodeFinder(
+            com.zalopilot.app.data.model.ZaloIDStore(this), logger
+        ).debugDump(root, maxNodes = 800)
+        Toast.makeText(this, "🔍 Đã dump UI vào log — bấm Lưu log để lấy file", Toast.LENGTH_LONG).show()
+    }
 
     private fun isSetupComplete() = isAccessibilityServiceEnabled() && Settings.canDrawOverlays(this)
 
