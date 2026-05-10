@@ -11,6 +11,7 @@ import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Build
+import android.util.Log
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -70,8 +71,13 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private var consecutivePollRootNull = 0
     private val likedAuthorsThisSession = mutableSetOf<String>()
     private val clickedPositionsThisSession = mutableSetOf<String>()
+    /** Đã like xong trong phiên — tránh like/unlike cùng bài khi rescan ngay. */
+    private val processedPosts = mutableSetOf<String>()
+    /** Cùng bounds đã xử lý — bổ sung cho postKey. */
+    private val processedBoundsKeys = mutableSetOf<String>()
+    private var lastClickedPostKey = ""
+    private var lastClickedPostAt = 0L
     private var consecutiveEmptyScrolls = 0
-    private var lastLikedBoundsKey: String? = null
     private var lastDebugDumpMs = 0L
     private var lastContentEventLogMs = 0L
     private var lastRootNullWallLogMs = 0L
@@ -106,7 +112,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         private const val POLL_ROOT_ASSUME_BACKGROUND = 6
         private const val CONTENT_EVENT_LOG_THROTTLE_MS = 3_000L
         private const val ROOT_NULL_WALL_LOG_MS = 8_000L
-        private const val DUPLICATE_LIKE_CLICK_SUPPRESS_MS = 2_500L
+        /** Cooldown / chống double-click cùng bài (Zalo không cập nhật isChecked đáng tin). */
+        private const val POST_CLICK_COOLDOWN_MS = 5_000L
+        private const val DUPLICATE_LIKE_CLICK_SUPPRESS_MS = POST_CLICK_COOLDOWN_MS
     }
 
     private val dumpUiTreeReceiver = object : BroadcastReceiver() {
@@ -353,6 +361,10 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 consecutivePollRootNull = 0
                 likedAuthorsThisSession.clear()
                 clickedPositionsThisSession.clear()
+                processedPosts.clear()
+                processedBoundsKeys.clear()
+                lastClickedPostKey = ""
+                lastClickedPostAt = 0L
                 consecutiveEmptyScrolls = 0
 
                 val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -451,32 +463,31 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 uiScanner.scan(root)
             }
 
-            lastLikedBoundsKey = null
             val liked = runFeedMode(root, settings)
 
-            if (liked && lastLikedBoundsKey != null && isRunning) {
-                clickedPositionsThisSession.add(lastLikedBoundsKey!!)
-                lastLikedBoundsKey = null
-                delay(1000)
-                scrollDown()
-                logger.log(LogTag.SCROLL, "after like", "SCROLL_DOWN")
+            if (liked && isRunning) {
+                delay((1_000L..1_800L).random())
+                scrollFeedWithVerification(root)
                 consecutiveEmptyScrolls = 0
+                delay((400L..1_000L).random())
+                randomDelay(settings.delayMinMs, settings.delayMaxMs)
             } else if (!liked) {
-                scrollDown()
-                logger.log(LogTag.SCROLL, "empty or skip", "SCROLL_DOWN")
+                scrollFeedWithVerification(root)
                 consecutiveEmptyScrolls++
+                logger.log(LogTag.SCROLL, "consecutiveEmpty=$consecutiveEmptyScrolls", "EMPTY_OR_SKIP_SCROLL")
                 if (consecutiveEmptyScrolls >= 5) {
                     showToast("✅ Đã hết feed — dừng tự động")
                     stopAutoLike()
                     return
                 }
+                delay((400L..900L).random())
             }
         }
     }
 
     private suspend fun runFeedMode(
         root: AccessibilityNodeInfo,
-        settings: LikeSettings
+        @Suppress("UNUSED_PARAMETER") settings: LikeSettings
     ): Boolean {
         val likeNodes = nodeFinder.findLikeButtons(root)
         var likedThisScan = false
@@ -498,18 +509,44 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         for (node in likeNodes) {
             if (!isRunning) break
             if (!nodeFinder.shouldLike(node)) {
-                logger.log(LogTag.STATE, "Đã like / không hợp lệ — ${boundsSummary(node)}", "SKIP")
+                logger.log(LogTag.STATE, "Đã like / không hợp lệ — ${boundsSummary(node)}", "SKIP_SHOULD_LIKE")
                 continue
             }
 
             val author = nodeFinder.getAuthorName(node)
             if (author != null && likedAuthorsThisSession.contains(author)) {
-                logger.log(LogTag.STATE, author, "AUTHOR_ALREADY_LIKED")
+                logger.log(LogTag.STATE, author, "SKIP_AUTHOR_ALREADY_LIKED")
                 continue
             }
 
+            val postKey = makePostKey(node)
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            val boundsKey = "${rect.left}_${rect.top}_${rect.right}_${rect.bottom}"
+
+            if (postKey in processedPosts) {
+                logger.log(LogTag.STATE, postKey, "SKIP_ALREADY_PROCESSED")
+                continue
+            }
+            if (boundsKey in processedBoundsKeys) {
+                logger.log(LogTag.STATE, "bounds=$boundsKey postKey=$postKey", "SKIP_DUPLICATE_BOUNDS")
+                continue
+            }
+
+            val nowMs = System.currentTimeMillis()
+            if (postKey == lastClickedPostKey && nowMs - lastClickedPostAt < POST_CLICK_COOLDOWN_MS) {
+                logger.log(
+                    LogTag.STATE,
+                    "postKey=$postKey deltaMs=${nowMs - lastClickedPostAt}",
+                    "SKIP_COOLDOWN"
+                )
+                continue
+            }
+
+            logAutoBeforeClick(postKey, node, rect)
+
             updateStatus("👍 Đang like bài của ${author ?: "..."}...")
-            delay((800..2000).random().toLong())
+            delay((200L..500L).random())
 
             updateDebugNodeHighlights(likeNodes, node)
 
@@ -518,9 +555,18 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             updateDebugNodeHighlights(likeNodes, null)
 
             if (clicked) {
-                val br = Rect()
-                node.getBoundsInScreen(br)
-                lastLikedBoundsKey = "${br.left}_${br.top}"
+                processedPosts.add(postKey)
+                processedBoundsKeys.add(boundsKey)
+                clickedPositionsThisSession.add("${rect.left}_${rect.top}")
+                lastClickedPostKey = postKey
+                lastClickedPostAt = System.currentTimeMillis()
+                logger.log(
+                    LogTag.STATE,
+                    "postKey=$postKey processed=${processedPosts.size}",
+                    "PROCESSED_ADD"
+                )
+                Log.d("AUTO", "PROCESSED_ADD postKey=$postKey cooldownSet lastClick=$lastClickedPostAt")
+
                 val progress = progressManager.incrementAndSave()
                 sessionLikeCount++
                 likedThisScan = true
@@ -528,20 +574,75 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 logger.log(LogTag.CLICK, author ?: "unknown", "SUCCESS")
                 updateStatus("✅ Like #${progress.todayLikeCount} — ${author ?: "unknown"}")
                 sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
-                randomDelay(settings.delayMinMs, settings.delayMaxMs)
-            } else {
-                updateStatus("❌ Click thất bại — thử lại lần sau")
-                logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_FAILED:${boundsSummary(node)}")
-            }
 
-            if (progressManager.isLimitReached()) {
-                logger.log(LogTag.STATE, "autoLike", "DAILY_LIMIT_REACHED")
-                stopAutoLike()
+                if (progressManager.isLimitReached()) {
+                    logger.log(LogTag.STATE, "autoLike", "DAILY_LIMIT_REACHED")
+                    stopAutoLike()
+                    return true
+                }
                 return true
             }
+
+            updateStatus("❌ Click thất bại — thử bài khác")
+            logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_FAILED:${boundsSummary(node)}")
         }
 
         return likedThisScan
+    }
+
+    private fun makePostKey(likeNode: AccessibilityNodeInfo): String {
+        val rect = Rect()
+        likeNode.getBoundsInScreen(rect)
+        val author = nodeFinder.getAuthorName(likeNode)?.trim().orEmpty().take(64)
+        val snippet = nodeFinder.getPostSnippetForKey(likeNode).take(96)
+        return "${rect.left}_${rect.top}_${rect.right}_${rect.bottom}|$author|$snippet"
+    }
+
+    private fun logAutoBeforeClick(postKey: String, node: AccessibilityNodeInfo, rect: Rect) {
+        Log.d(
+            "AUTO",
+            """
+            POST_KEY=$postKey
+            TEXT=${node.text}
+            DESC=${node.contentDescription}
+            BOUNDS=$rect
+            """.trimIndent()
+        )
+        logger.log(LogTag.STATE, "POST_KEY=$postKey BOUNDS=$rect", "BEFORE_CLICK")
+    }
+
+    /** Top nhỏ nhất của nút Thích đang thấy — proxy để biết feed có cuộn không. */
+    private fun measureFeedAnchorTop(root: AccessibilityNodeInfo): Int? {
+        val nodes = nodeFinder.findLikeButtons(root)
+        if (nodes.isEmpty()) return null
+        var minTop = Int.MAX_VALUE
+        for (n in nodes) {
+            val r = Rect()
+            n.getBoundsInScreen(r)
+            if (!r.isEmpty) minTop = minOf(minTop, r.top)
+        }
+        return if (minTop == Int.MAX_VALUE) null else minTop
+    }
+
+    private suspend fun scrollFeedWithVerification(rootBeforeScroll: AccessibilityNodeInfo) {
+        val beforeTop = measureFeedAnchorTop(rootBeforeScroll)
+        scrollDown()
+        logger.log(LogTag.SCROLL, "gesture swipe up beforeTop=$beforeTop", "DISPATCHED")
+        delay(1_200)
+        val rootAfter = acquireRootOrNull(
+            maxAttempts = 4,
+            delayRangeMs = 80L..220L,
+            logTag = LogTag.SCROLL
+        )
+        val afterTop = rootAfter?.let { measureFeedAnchorTop(it) }
+        when {
+            beforeTop == null || afterTop == null ->
+                logger.log(LogTag.SCROLL, "beforeTop=$beforeTop afterTop=$afterTop", "SCROLL_VERIFY_UNKNOWN")
+            beforeTop == afterTop ->
+                logger.log(LogTag.SCROLL, "beforeTop=$beforeTop afterTop=$afterTop", "SCROLL_FAILED")
+            else ->
+                logger.log(LogTag.SCROLL, "beforeTop=$beforeTop afterTop=$afterTop", "SCROLL_SUCCESS")
+        }
     }
 
     private fun boundsSummary(node: AccessibilityNodeInfo): String {
@@ -613,7 +714,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             gestureOk
         }
         if (ok) {
-            delay(800)
             logLikeButtonContextDump(node, "POST_LIKE_DUMP")
         }
         return ok

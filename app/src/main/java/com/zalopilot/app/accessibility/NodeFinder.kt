@@ -161,6 +161,40 @@ class NodeFinder @Inject constructor(
         return null
     }
 
+    /**
+     * Đoạn text bài viết gần nút like (BFS nông trên vài cấp cha) — dùng ghép [postKey], không dựa isChecked.
+     */
+    fun getPostSnippetForKey(likeNode: AccessibilityNodeInfo): String {
+        var host: AccessibilityNodeInfo? = likeNode.parent
+        repeat(5) {
+            val h = host ?: return@repeat
+            var best = ""
+            fun consider(raw: String?) {
+                val t = raw?.trim().orEmpty()
+                if (t.length < 10) return
+                if (t.equals(ZaloIDStore.TEXT_LIKE, ignoreCase = true)) return
+                if (t.contains(ZaloIDStore.TEXT_LIKED, ignoreCase = true)) return
+                if (t.length > best.length) best = t.take(120)
+            }
+            val q = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+            q.addLast(h to 0)
+            while (q.isNotEmpty()) {
+                val (n, d) = q.removeFirst()
+                if (d > 3) continue
+                consider(n.text?.toString())
+                consider(n.contentDescription?.toString())
+                for (i in 0 until n.childCount) {
+                    n.getChild(i)?.let { child -> q.addLast(child to (d + 1)) }
+                }
+            }
+            if (best.isNotEmpty()) {
+                return best.replace("\\s+".toRegex(), " ")
+            }
+            host = h.parent
+        }
+        return ""
+    }
+
     /** Anh/chị/em cùng cấp với parent của nút like có id chứa [reaction_info] → đã thích. */
     private fun hasReactionInfoSiblingOfParent(likeNode: AccessibilityNodeInfo): Boolean {
         val parent = likeNode.parent ?: return false
@@ -175,8 +209,6 @@ class NodeFinder @Inject constructor(
     }
 
     fun shouldLike(node: AccessibilityNodeInfo): Boolean {
-        if (node.isChecked) return false
-
         fun containsLikedMark(s: String?): Boolean {
             val t = s ?: ""
             return t.contains("Đã thích", ignoreCase = true) ||
