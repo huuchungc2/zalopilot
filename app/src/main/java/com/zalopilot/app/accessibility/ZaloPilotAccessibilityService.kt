@@ -608,16 +608,61 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             logger.log(LogTag.CLICK, boundsSummary(node), "SKIP_NOT_VISIBLE")
             return false
         }
+        logLikeButtonContextDump(node, "PRE_LIKE_DUMP")
         markLikeClickAttemptForBounds(node)
         logger.log(LogTag.CLICK, nodeSnapshotForLog(node), "CLICK_CANDIDATE")
-        if (performClickWithFallback(node)) return true
-        val gestureOk = tapNodeByCoordinate(node)
-        logger.log(
-            LogTag.CLICK,
-            boundsSummary(node),
-            if (gestureOk) "GESTURE_FALLBACK_OK" else "GESTURE_FALLBACK_FAIL"
-        )
-        return gestureOk
+        val ok = if (performClickWithFallback(node)) {
+            true
+        } else {
+            val gestureOk = tapNodeByCoordinate(node)
+            logger.log(
+                LogTag.CLICK,
+                boundsSummary(node),
+                if (gestureOk) "GESTURE_FALLBACK_OK" else "GESTURE_FALLBACK_FAIL"
+            )
+            gestureOk
+        }
+        if (ok) {
+            delay(800)
+            logLikeButtonContextDump(node, "POST_LIKE_DUMP")
+        }
+        return ok
+    }
+
+    /**
+     * btn_like + subtree, then parent + parent's direct children (siblings). Dedupe by node instance.
+     * [dumpResult] is written to log JSON `result` (e.g. PRE_LIKE_DUMP / POST_LIKE_DUMP).
+     */
+    private fun logLikeButtonContextDump(btnLike: AccessibilityNodeInfo, dumpResult: String) {
+        val seen = HashSet<Int>()
+        fun logOne(n: AccessibilityNodeInfo) {
+            if (!seen.add(System.identityHashCode(n))) return
+            val r = Rect()
+            n.getBoundsInScreen(r)
+            val text = n.text?.toString()?.replace("\n", "↵") ?: ""
+            val desc = n.contentDescription?.toString()?.replace("\n", "↵") ?: ""
+            val id = n.viewIdResourceName ?: ""
+            val line =
+                "text=\"$text\" contentDescription=\"$desc\" viewIdResourceName=\"$id\" " +
+                    "isChecked=${n.isChecked} bounds=[${r.left},${r.top},${r.right},${r.bottom}]"
+            logger.log(LogTag.SCAN, line, dumpResult)
+        }
+        fun dfsSubtree(n: AccessibilityNodeInfo) {
+            logOne(n)
+            for (i in 0 until n.childCount) {
+                val ch = n.getChild(i) ?: continue
+                dfsSubtree(ch)
+                ch.recycle()
+            }
+        }
+        dfsSubtree(btnLike)
+        val parent = btnLike.parent ?: return
+        logOne(parent)
+        for (i in 0 until parent.childCount) {
+            val ch = parent.getChild(i) ?: continue
+            logOne(ch)
+            if (ch !== btnLike) ch.recycle()
+        }
     }
 
     private fun showStatusOverlay(msg: String) {
