@@ -16,6 +16,8 @@ enum class LikeMode { FEED, VISIT }
  */
 enum class InteractMode { TAP, SWIPE, MIX }
 
+enum class FeedMode { SCROLL, MANUAL, MIX }
+
 data class LikeSettings(
     val dailyLimit: Int = 100,
     val delayMinMs: Long = 1000,
@@ -90,5 +92,18 @@ class LikeSettingsManager @Inject constructor(
         } catch (e: Exception) {
             InteractMode.MIX
         }
+    }
+
+    fun getFeedMode(): FeedMode {
+        val name = prefs.getString("feed_mode", FeedMode.SCROLL.name) ?: FeedMode.SCROLL.name
+        return try {
+            FeedMode.valueOf(name)
+        } catch (e: Exception) {
+            FeedMode.SCROLL
+        }
+    }
+
+    fun setFeedMode(mode: FeedMode) {
+        prefs.edit().putString("feed_mode", mode.name).apply()
     }
 }

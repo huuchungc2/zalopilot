@@ -324,6 +324,7 @@ class MainActivity : ComponentActivity() {
         var interactMode by remember { mutableStateOf(
             try { InteractMode.valueOf(settings.interactModeStr) } catch (e: Exception) { InteractMode.MIX }
         ) }
+        var feedMode by remember { mutableStateOf(settingsManager.getFeedMode()) }
         var delayMin by remember { mutableStateOf((settings.delayMinMs / 1000).toString()) }
         var delayMax by remember { mutableStateOf((settings.delayMaxMs / 1000).toString()) }
         var sessionLimit by remember { mutableIntStateOf(settings.sessionLimit) }
@@ -413,6 +414,37 @@ class MainActivity : ComponentActivity() {
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
+                        Text("CHẾ ĐỘ FEED", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Cách bot cuộn khi không tìm thấy like", fontSize = 12.sp, color = Color.Gray)
+                        Spacer(Modifier.height(10.dp))
+                        listOf(
+                            FeedMode.SCROLL to "Cuộn tự động",
+                            FeedMode.MANUAL to "Đẩy tay",
+                            FeedMode.MIX to "Kết hợp"
+                        ).forEach { (mode, label) ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (feedMode == mode) zaloBlue.copy(alpha = 0.1f) else Color.Transparent)
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = feedMode == mode,
+                                    onClick = { feedMode = mode },
+                                    colors = RadioButtonDefaults.colors(selectedColor = zaloBlue)
+                                )
+                                Text(label, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp))
+                            }
+                        }
+                    }
+                }
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
                         Text("CHẾ ĐỘ TƯƠNG TÁC", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
                         Spacer(Modifier.height(8.dp))
                         Text("Cách bot chạm màn hình khi like", fontSize = 12.sp, color = Color.Gray)
@@ -471,6 +503,7 @@ class MainActivity : ComponentActivity() {
             }
             item {
                 Button(onClick = {
+                    settingsManager.setFeedMode(feedMode)
                     onSave(settings.copy(
                         dailyLimit = dailyLimit,
                         delayMinMs = (delayMin.toLongOrNull() ?: 1L) * 1000L,

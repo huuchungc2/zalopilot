@@ -18,6 +18,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import com.zalopilot.app.util.FeedMode
 import com.zalopilot.app.util.InteractMode
 import com.zalopilot.app.util.LikeProgressManager
 import com.zalopilot.app.util.LikeSettings
@@ -424,17 +425,37 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
             if (!liked) {
                 val progress = progressManager.load()
-                updateStatus("📜 Cuộn xuống... (đã like ${progress.todayLikeCount}/${settings.dailyLimit})")
-                delay((200..600).random().toLong())
-                val scrollMode = settingsManager.getInteractMode()
-                if (scrollMode == InteractMode.TAP) {
-                    val scrolled = root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
-                    logger.log(LogTag.SCROLL, "ACTION_SCROLL_FORWARD", if (scrolled) "OK" else "FAILED")
-                } else {
-                    scrollDown()
-                    logger.log(LogTag.SCROLL, "gesture swipe up", "DISPATCHED")
+                val feedMode = settingsManager.getFeedMode()
+                when (feedMode) {
+                    FeedMode.MANUAL -> {
+                        updateStatus("👆 Chế độ tay — cuộn để tìm bài (${progress.todayLikeCount}/${settings.dailyLimit})")
+                        delay((800..1500).random().toLong())
+                    }
+                    FeedMode.MIX -> {
+                        updateStatus("📜 Kết hợp... (đã like ${progress.todayLikeCount}/${settings.dailyLimit})")
+                        delay((200..600).random().toLong())
+                        if (listOf(true, false).random()) {
+                            scrollDown()
+                            logger.log(LogTag.SCROLL, "gesture swipe up", "MIX_DISPATCHED")
+                        } else {
+                            logger.log(LogTag.SCROLL, "mix", "SKIP_SCROLL_WAIT")
+                        }
+                        delay((1200..2500).random().toLong())
+                    }
+                    FeedMode.SCROLL -> {
+                        updateStatus("📜 Cuộn xuống... (đã like ${progress.todayLikeCount}/${settings.dailyLimit})")
+                        delay((200..600).random().toLong())
+                        val scrollMode = settingsManager.getInteractMode()
+                        if (scrollMode == InteractMode.TAP) {
+                            val scrolled = root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                            logger.log(LogTag.SCROLL, "ACTION_SCROLL_FORWARD", if (scrolled) "OK" else "FAILED")
+                        } else {
+                            scrollDown()
+                            logger.log(LogTag.SCROLL, "gesture swipe up", "DISPATCHED")
+                        }
+                        delay((1200..2500).random().toLong())
+                    }
                 }
-                delay((1200..2500).random().toLong())
             }
         }
     }

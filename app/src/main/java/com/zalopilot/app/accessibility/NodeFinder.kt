@@ -134,6 +134,13 @@ class NodeFinder @Inject constructor(
 
         val ownText = node.text?.toString() ?: ""
         val ownDesc = node.contentDescription?.toString() ?: ""
+        val resId = node.viewIdResourceName ?: ""
+        if (resId.contains("btn_like", ignoreCase = true) && !node.isChecked &&
+            ownText.isBlank() && ownDesc.isBlank()
+        ) {
+            return true
+        }
+
         val childText = (0 until node.childCount)
             .mapNotNull { node.getChild(it)?.text?.toString() }
             .joinToString("")
@@ -159,7 +166,7 @@ class NodeFinder @Inject constructor(
             if (authorId != null) {
                 val authorNodes = parent!!.findAccessibilityNodeInfosByViewId(authorId)
                 if (authorNodes.isNotEmpty()) {
-                    return authorNodes.first().text?.toString()
+                    authorTextOrNull(authorNodes.first().text?.toString())?.let { return it }
                 }
             }
         }
@@ -278,10 +285,7 @@ class NodeFinder @Inject constructor(
 
     private fun findFirstMeaningfulText(root: AccessibilityNodeInfo?): String? {
         root ?: return null
-        val text = root.text?.toString()
-        if (!text.isNullOrBlank() && text.length > 1 && !text.contains("Thích") && !text.contains("Bình luận")) {
-            return text
-        }
+        authorTextOrNull(root.text?.toString())?.let { return it }
         for (i in 0 until root.childCount) {
             val child = root.getChild(i) ?: continue
             val found = findFirstMeaningfulText(child)
@@ -289,4 +293,14 @@ class NodeFinder @Inject constructor(
         }
         return null
     }
+
+    /** Tên tác giả: không trả về nhãn nút hành động (tránh khớp session theo "Thích"). */
+    private fun authorTextOrNull(raw: String?): String? {
+        val t = raw?.trim().orEmpty()
+        if (t.length <= 1) return null
+        if (AUTHOR_ACTION_LABELS.any { it.equals(t, ignoreCase = true) }) return null
+        return t
+    }
+
+    private val AUTHOR_ACTION_LABELS = listOf("Thích", "Đã thích", "Bình luận", "Chia sẻ")
 }
