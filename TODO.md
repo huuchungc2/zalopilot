@@ -18,6 +18,9 @@
 - [x] WakeLock — giữ CPU khi bot chạy
 - [x] Detect Zalo foreground/background
 - [x] Auto mode / Manual mode
+- [x] FeedMode (SCROLL / MANUAL / MIX) — prefs `feed_mode` + UI Cài đặt + `autoLikeLoop`
+- [x] Click like — log chi tiết, parent ACTION_CLICK, gesture fallback, dedupe bounds, `isVisibleToUser`
+- [x] NodeFinder — `getAuthorName` không trả về text nút Thích; `shouldLike` + `btn_like` không text
 - [x] GitHub Actions build APK
 - [x] App icon
 
@@ -32,7 +35,7 @@
 - [ ] Xử lý trường hợp Zalo đang ở sai tab → tự navigate sang tab Nhật ký
 
 ### Ổn định
-- [ ] Retry khi click fail — thử lại 1 lần trước khi skip
+- [x] Retry khi click fail — gesture fallback sau ACTION_CLICK (đã có trong service)
 - [ ] Detect khi bot bị stuck (scroll nhưng không có nút Thích mãi) → dừng báo lỗi
 - [ ] Handle trường hợp Zalo hiện popup quảng cáo / dialog → tự đóng
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- feat(settings): `FeedMode` (SCROLL / MANUAL / MIX) lưu prefs `feed_mode`, mặc định SCROLL; UI Cài đặt (Cuộn tự động / Đẩy tay / Kết hợp); `autoLikeLoop` — MANUAL không scroll, MIX 50% `scrollDown` hoặc chờ, SCROLL giữ hành vi cũ theo `InteractMode`.
+- fix(accessibility): `GestureResultCallback` dùng `AccessibilityService.GestureResultCallback` (sửa unresolved reference khi build).
+- fix(NodeFinder): `getAuthorName` bỏ qua nhãn hành động (Thích, Đã thích, Bình luận, Chia sẻ); `shouldLike` — `btn_like` không text/desc vẫn cho thử click; lọc `isEnabled`.
+- feat(accessibility): độ tin cậy click — log candidate (`CLICK_CANDIDATE`), `ACTION_CLICK` self + parent tới 6 cấp (thử cả parent không `clickable`), `GESTURE_FALLBACK`, chặn trùng bounds ngắn hạn, `SKIP_NOT_VISIBLE`, gesture tap không block main (`suspendCancellableCoroutine` + timeout), stroke tap 150ms.
 - feat: overlay debug nhẹ — viền bounds các nút Thích `findLikeButtons` + viền dày node sắp click; bật/tắt Cài đặt (`DebugHighlightPrefs`); `FLAG_NOT_TOUCHABLE`, không đổi scanner.
 - feat(logging): `LogTag` (POLL, EVENT_HINT, SCAN, FOUND, CLICK, SCROLL, ERROR, STATE), `Logger.log(tag,…)` + `pkg`/`ms` JSON, `lastForegroundPackage` + `logError()`; tab Nhật ký hiển thị tag màu, timestamp ms, pkg, thời gian scan; làm nổi bật lỗi click/scroll; đọc log cũ map tag tương thích.
 - refactor(accessibility): vòng poll 1–2s làm nguồn chính (root + package + `ZaloUIScanner`); event chỉ gợi ý + log `EVENT_HINT`; `acquireRootOrNull()` retry 5 lần; nhận diện app `contains("zalo")` qua `isZaloRelatedPackage()`; log chi tiết click/tap/scroll/root; `NodeFinder` thêm traversal text+contentDescription + bounds trong debug dump.

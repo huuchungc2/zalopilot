@@ -129,11 +129,11 @@ data class LikeProgress(
 - Nút Like text: "Thích"
 - Nút đã Like text: "Đã thích"
 
-## Sau mỗi task
-Luôn cập nhật:
-1. `TODO.md` — đánh dấu [x] task xong
-2. `CHANGELOG.md` — thêm vào [Unreleased]
-3. Báo nếu có dependency mới cần thêm vào build.gradle.kts
+## Sau mỗi task (bắt buộc — không chờ user nhắc)
+Ngay trong cùng session sau khi sửa code xong, tự làm luôn (không hỏi có cần không):
+1. `TODO.md` — đánh [x] / thêm mục hoàn thành cho phần đã làm
+2. `CHANGELOG.md` — thêm bullet vào `[Unreleased]` (tiếng Việt ngắn, đủ ý)
+3. Báo nếu có dependency mới trong `build.gradle.kts`
 
 ## 3. OUTPUT & WORKFLOW
 - Trả về code sửa đổi (diff), hạn chế viết lại cả file dài.

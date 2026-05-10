@@ -130,30 +130,31 @@ class NodeFinder @Inject constructor(
 
     fun shouldLike(node: AccessibilityNodeInfo): Boolean {
         if (node.isChecked) return false
-        if (!node.isEnabled) return false
 
-        val ownText = node.text?.toString() ?: ""
-        val ownDesc = node.contentDescription?.toString() ?: ""
-        val resId = node.viewIdResourceName ?: ""
-        if (resId.contains("btn_like", ignoreCase = true) && !node.isChecked &&
-            ownText.isBlank() && ownDesc.isBlank()
-        ) {
-            return true
+        fun containsLikedMark(s: String?): Boolean {
+            val t = s ?: ""
+            return t.contains("Đã thích", ignoreCase = true) ||
+                t.contains("liked", ignoreCase = true)
         }
 
-        val childText = (0 until node.childCount)
-            .mapNotNull { node.getChild(it)?.text?.toString() }
-            .joinToString("")
-        val childDesc = (0 until node.childCount)
-            .mapNotNull { node.getChild(it)?.contentDescription?.toString() }
-            .joinToString("")
+        if (containsLikedMark(node.text?.toString())) return false
+        if (containsLikedMark(node.contentDescription?.toString())) return false
 
-        val text = (ownText + ownDesc + childText + childDesc).trim()
-        if (text.isEmpty()) return true
+        for (i in 0 until node.childCount) {
+            val c = node.getChild(i) ?: continue
+            if (containsLikedMark(c.text?.toString())) return false
+            if (containsLikedMark(c.contentDescription?.toString())) return false
+        }
 
-        if (text.contains("Đã thích", ignoreCase = true)) return false
-        if (text.contains("Đã", ignoreCase = true)) return false
-        return text.contains("Thích", ignoreCase = true)
+        var p: AccessibilityNodeInfo? = node.parent
+        repeat(3) {
+            val parent = p ?: return@repeat
+            if (containsLikedMark(parent.text?.toString())) return false
+            if (containsLikedMark(parent.contentDescription?.toString())) return false
+            p = parent.parent
+        }
+
+        return true
     }
 
     fun getAuthorName(likeNode: AccessibilityNodeInfo): String? {
