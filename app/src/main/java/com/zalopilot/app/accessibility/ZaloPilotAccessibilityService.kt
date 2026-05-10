@@ -1,7 +1,6 @@
 package com.zalopilot.app.accessibility
 
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.GestureResultCallback
 import android.accessibilityservice.GestureDescription
 import android.content.Context
 import android.content.Intent
@@ -680,7 +679,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
         return withTimeoutOrNull(600L) {
             suspendCancellableCoroutine { cont ->
-                val callback = object : GestureResultCallback() {
+                val callback = object : AccessibilityService.GestureResultCallback() {
                     override fun onCompleted(gestureDescription: GestureDescription) {
                         if (cont.isActive) cont.resume(true)
                     }
