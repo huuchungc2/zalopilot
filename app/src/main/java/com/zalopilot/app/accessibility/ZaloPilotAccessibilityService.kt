@@ -799,6 +799,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
             if (likeNodes.isEmpty()) {
                 updateDebugNodeHighlights(emptyList(), null)
+                if (nodeFinder.hasVisibleSelfAlreadyLikedLikeControl(scanRoot)) {
+                    updateStatus("⏩ Bạn đã thích các bài trên màn hình — cuộn tiếp...")
+                    logger.log(LogTag.SCAN, "feed", "EMPTY_BUT_SELF_ALREADY_LIKED_TREAT_AS_ALL_SKIPPED")
+                    return FeedScanResult.ALL_SKIPPED
+                }
                 updateStatus("🔍 Không thấy nút Thích trên màn hình này")
                 logger.log(LogTag.SCAN, "feed like buttons", "EMPTY_AFTER_RETRY")
                 when {
@@ -869,7 +874,33 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     updateDebugNodeHighlights(likeNodes, null)
 
                     if (clicked) {
-                        // Đợi Zalo animate "Thích" → "Đã thích" (thường chậm hơn 900ms trên một số máy).
+                        delayEco(240L..420L)
+                        val peekRoot = acquireRootOrNull(3, 60L..180L, LogTag.CLICK, quietLog = true)
+                        if (peekRoot != null) {
+                            try {
+                                val dm = resources.displayMetrics
+                                if (nodeFinder.isLikelyZaloImageViewer(
+                                        peekRoot,
+                                        dm.widthPixels,
+                                        dm.heightPixels
+                                    )
+                                ) {
+                                    performGlobalAction(GLOBAL_ACTION_BACK)
+                                    logger.log(
+                                        LogTag.CLICK,
+                                        author ?: "unknown",
+                                        "IMAGE_VIEWER_BACK_SKIP_POST"
+                                    )
+                                    updateStatus("↩ Đã đóng xem ảnh — bỏ qua bài này")
+                                    delayEco(400L..700L)
+                                    continue
+                                }
+                            } finally {
+                                runCatching { peekRoot.recycle() }
+                            }
+                        }
+
+                        // Đợi Zalo animate / cập nhật state (checked/selected), không tin mỗi text "Thích".
                         delay(ecoVerifyMs(1500L))
 
                         var confirmedLiked = nodeFinder.isAlreadyLiked(nodeForClick)
@@ -1143,15 +1174,14 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             logger.log(LogTag.CLICK, boundsSummary(node),
                 if (gestureOk) "GESTURE_PRIMARY_OK" else "GESTURE_PRIMARY_FAIL")
             if (!gestureOk) {
-                // fallback sang ACTION_CLICK
-                val clickOk = performClickWithFallback(node)
+                val clickOk = performClickLikeTargetNoParent(node)
                 logger.log(LogTag.CLICK, boundsSummary(node),
                     if (clickOk) "ACTION_CLICK_FALLBACK_OK" else "ACTION_CLICK_FALLBACK_FAIL")
                 clickOk
             } else true
         } else {
-            // TAP mode: ACTION_CLICK trước
-            if (performClickWithFallback(node)) {
+            // TAP mode: ACTION_CLICK chỉ trên target like — không leo RecyclerView/FrameLayout cha
+            if (performClickLikeTargetNoParent(node)) {
                 true
             } else {
                 val gestureOk = tapNodeByCoordinate(node)
@@ -1487,6 +1517,17 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             logger.log(LogTag.CLICK, "x=$x y=$y rect=$rect", "GESTURE_TAP_TIMEOUT")
             false
         }
+    }
+
+    /** Like: chỉ click đúng node target (btn_like_text / icon / …), không đụng parent container. */
+    private fun performClickLikeTargetNoParent(node: AccessibilityNodeInfo): Boolean {
+        val snap = nodeSnapshotForLog(node)
+        if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            logger.log(LogTag.CLICK, "target=self $snap", "ACTION_CLICK_OK")
+            return true
+        }
+        logger.log(LogTag.CLICK, "target=self $snap", "ACTION_CLICK_FAIL")
+        return false
     }
 
     private fun performClickWithFallback(node: AccessibilityNodeInfo): Boolean {

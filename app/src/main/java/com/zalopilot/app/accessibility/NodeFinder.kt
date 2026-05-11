@@ -1,6 +1,7 @@
 package com.zalopilot.app.accessibility
 
 import android.graphics.Rect
+import android.os.Build
 import android.view.accessibility.AccessibilityNodeInfo
 import com.zalopilot.app.data.model.ZaloIDStore
 import com.zalopilot.app.util.LogTag
@@ -33,8 +34,10 @@ class NodeFinder @Inject constructor(
         }
 
         fun addResolved(raw: AccessibilityNodeInfo?) {
-            val node = resolveClickable(raw) ?: return
+            val node = resolveLikeClickTarget(raw) ?: return
             if (!node.hasValidScreenBounds()) return
+            if (LikeViewIdRules.shouldRejectNodeForLike(node)) return
+            if (!LikeViewIdRules.isWhitelistedLikeResourceId(node.viewIdResourceName)) return
             if (isAlreadyLiked(node)) return
             val key = dedupeKey(node)
             if (key !in seen) {
@@ -43,14 +46,20 @@ class NodeFinder @Inject constructor(
             }
         }
 
-        val savedId = idStore.getLikeButtonID()
+        var savedId = idStore.getLikeButtonID()
+        if (savedId != null && LikeViewIdRules.isBlacklistedResourceId(savedId)) {
+            logger.log(LogTag.SCAN, "savedId=$savedId", "LIKE_ID_BLACKLIST_CLEARED")
+            idStore.clearLikeButtonID()
+            savedId = null
+        }
         if (savedId != null) {
             val byId = root.findAccessibilityNodeInfosByViewId(savedId)
             if (byId.isNotEmpty()) {
-                // Lọc bỏ nút đã like trước khi addResolved — tránh trường hợp
-                // savedId khớp cả nút "Thích" lẫn nút "Đã thích" (cùng resource-id,
-                // khác text/contentDescription).
-                byId.filter { !isAlreadyLiked(it) }.forEach { addResolved(it) }
+                byId.filter {
+                    LikeViewIdRules.isWhitelistedLikeResourceId(it.viewIdResourceName) &&
+                        !LikeViewIdRules.shouldRejectNodeForLike(it) &&
+                        !isAlreadyLiked(it)
+                }.forEach { addResolved(it) }
                 if (result.isNotEmpty()) {
                     logFoundSummary(result)
                     return result
@@ -62,11 +71,22 @@ class NodeFinder @Inject constructor(
         // findAccessibilityNodeInfosByText("Thích") có thể khớp cả "Đã thích" (substring).
         val byText = root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKE)
         for (raw in byText) {
-            if (isAlreadyLiked(raw)) continue
+            if (LikeViewIdRules.shouldRejectNodeForLike(raw) &&
+                !LikeViewIdRules.isWhitelistedLikeResourceId(raw.viewIdResourceName)
+            ) {
+                continue
+            }
             addResolved(raw)
         }
 
-        collectLikeHintsByTraversal(root, maxNodes = 2800).forEach { addResolved(it) }
+        collectLikeHintsByTraversal(root, maxNodes = 2800).forEach { raw ->
+            if (LikeViewIdRules.shouldRejectNodeForLike(raw) &&
+                !LikeViewIdRules.isWhitelistedLikeResourceId(raw.viewIdResourceName)
+            ) {
+                return@forEach
+            }
+            addResolved(raw)
+        }
 
         if (result.isNotEmpty()) {
             logFoundSummary(result)
@@ -75,6 +95,53 @@ class NodeFinder @Inject constructor(
         }
 
         return result
+    }
+
+    /**
+     * Có ít nhất một target like (id whitelist) trên màn hình mà **tài khoản hiện tại** đã like
+     * ([isAlreadyLiked]). Dùng khi [findLikeButtons] rỗng nhưng feed vẫn toàn bài mình đã thích —
+     * cần cuộn tiếp như ALL_SKIPPED, không xử lý như NO_BUTTONS (kẹt empty).
+     */
+    fun hasVisibleSelfAlreadyLikedLikeControl(root: AccessibilityNodeInfo): Boolean {
+        fun probeRaw(raw: AccessibilityNodeInfo?): Boolean {
+            if (raw == null) return false
+            val t = resolveLikeClickTarget(raw) ?: return false
+            if (!t.hasValidScreenBounds()) return false
+            if (LikeViewIdRules.shouldRejectNodeForLike(t)) return false
+            if (!LikeViewIdRules.isWhitelistedLikeResourceId(t.viewIdResourceName)) return false
+            return isAlreadyLiked(t)
+        }
+
+        var savedId = idStore.getLikeButtonID()
+        if (savedId != null && LikeViewIdRules.isBlacklistedResourceId(savedId)) {
+            savedId = null
+        }
+        if (savedId != null) {
+            val byId = root.findAccessibilityNodeInfosByViewId(savedId)
+            try {
+                if (byId != null) {
+                    for (n in byId) {
+                        if (probeRaw(n)) return true
+                    }
+                }
+            } finally {
+                byId?.forEach { runCatching { it.recycle() } }
+            }
+        }
+
+        val byText = root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKE)
+        try {
+            for (raw in byText) {
+                if (probeRaw(raw)) return true
+            }
+        } finally {
+            byText.forEach { runCatching { it.recycle() } }
+        }
+
+        for (raw in collectLikeHintsByTraversal(root, maxNodes = 2800)) {
+            if (probeRaw(raw)) return true
+        }
+        return false
     }
 
     private fun logFoundSummary(nodes: List<AccessibilityNodeInfo>) {
@@ -126,57 +193,119 @@ class NodeFinder @Inject constructor(
     }
 
     /**
-     * Từ 1 node (có thể là TextView text "Thích"),
-     * leo lên tối đa 4 cấp để tìm node clickable thật sự.
+     * Từ node gợi ý (text "Thích", scan…), tìm target thật trong subtree + vài cấp cha:
+     * ưu tiên id whitelist (btn_like_text → btn_like_icon → btn_like → like_component), không dùng container blacklist.
      */
-    private fun resolveClickable(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
-        if (node == null) return null
-        if (node.isClickable) return node
-        var parent: AccessibilityNodeInfo? = node.parent
-        repeat(4) {
-            val p = parent ?: return null
-            if (p.isClickable) return p
-            parent = p.parent
+    private fun resolveLikeClickTarget(raw: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (raw == null) return null
+        var current: AccessibilityNodeInfo? = raw
+        repeat(8) {
+            val host = current ?: return null
+            val best = findBestLikeClickTargetInSubtree(host, maxDepth = 12)
+            if (best != null) return best
+            current = host.parent
         }
-        return node
+        return null
+    }
+
+    private fun findBestLikeClickTargetInSubtree(
+        root: AccessibilityNodeInfo,
+        maxDepth: Int
+    ): AccessibilityNodeInfo? {
+        var best: AccessibilityNodeInfo? = null
+        var bestP = Int.MAX_VALUE
+        var bestArea = Int.MAX_VALUE
+        val q = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+        q.addLast(root to 0)
+        while (q.isNotEmpty()) {
+            val (n, d) = q.removeFirst()
+            if (d > maxDepth) continue
+            val id = n.viewIdResourceName
+            if (LikeViewIdRules.isWhitelistedLikeResourceId(id) &&
+                !LikeViewIdRules.shouldRejectNodeForLike(n) &&
+                n.hasValidScreenBounds()
+            ) {
+                val p = LikeViewIdRules.likeClickPriority(id)
+                val r = Rect()
+                n.getBoundsInScreen(r)
+                val area = r.width() * r.height()
+                if (p < bestP || (p == bestP && area < bestArea)) {
+                    bestP = p
+                    bestArea = area
+                    best = n
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { child -> q.addLast(child to (d + 1)) }
+            }
+        }
+        return best
+    }
+
+    private fun collectNearbyNodesForLikeState(anchor: AccessibilityNodeInfo, cap: Int): List<AccessibilityNodeInfo> {
+        val out = ArrayList<AccessibilityNodeInfo>()
+        val seen = HashSet<Int>()
+        fun addSafe(n: AccessibilityNodeInfo) {
+            if (out.size >= cap) return
+            val code = System.identityHashCode(n)
+            if (seen.add(code)) out.add(n)
+        }
+        var host: AccessibilityNodeInfo? = anchor
+        repeat(7) {
+            val h = host ?: return@repeat
+            val q = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+            q.addLast(h to 0)
+            while (q.isNotEmpty() && out.size < cap) {
+                val (n, d) = q.removeFirst()
+                if (d > 9) continue
+                addSafe(n)
+                for (i in 0 until n.childCount) {
+                    n.getChild(i)?.let { child -> q.addLast(child to (d + 1)) }
+                }
+            }
+            host = h.parent
+        }
+        return out
+    }
+
+    private fun idTailImpliesUserReaction(id: String?): Boolean {
+        val t = LikeViewIdRules.resourceIdTail(id)
+        return t.contains("my_reaction") || t.contains("myreact") || t.contains("user_reaction")
     }
 
     /**
-     * @return true = label "Thích"; false = không like; null = không đọc được (btn_like_text)
+     * Viewer ảnh toàn màn (vd. share / album) — [vpager] hoặc ViewPager lớn.
      */
-    private fun evaluateBtnLikeText(node: AccessibilityNodeInfo): Boolean? {
-        fun scanHost(host: AccessibilityNodeInfo): Boolean? {
-            var foundBtnLikeText = false
-            var sawThich = false
-            for (i in 0 until host.childCount) {
-                val c = host.getChild(i) ?: continue
-                val id = c.viewIdResourceName ?: ""
-                if (!id.contains("btn_like_text")) continue
-                foundBtnLikeText = true
-                val t = c.text?.toString()?.trim().orEmpty()
-                when {
-                    t == ZaloIDStore.TEXT_LIKE -> sawThich = true
-                    // Chỉ kết luận "đã like" khi text rõ ràng là "Đã thích".
-                    // KHÔNG return false với text tùy ý (số reaction, emoji...) —
-                    // bài có người khác like sẽ có node reaction text bên cạnh btn_like_text
-                    // gây false positive "đã like".
-                    textIndicatesCurrentUserLiked(t) -> return false
-                    // t.isNotEmpty() nhưng không phải "Đã thích" → không kết luận, tiếp tục scan
-                }
+    fun isLikelyZaloImageViewer(root: AccessibilityNodeInfo?, screenW: Int, screenH: Int): Boolean {
+        if (root == null || screenW <= 0 || screenH <= 0) return false
+        val thresh = (screenW * screenH * 0.42f).toInt().coerceAtLeast(1)
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 2200) {
+            val n = stack.removeLast()
+            visited++
+            val id = n.viewIdResourceName
+            if (LikeViewIdRules.isBlacklistedResourceId(id) &&
+                LikeViewIdRules.resourceIdTail(id).contains("vpager")
+            ) {
+                val r = Rect()
+                n.getBoundsInScreen(r)
+                if (r.width() * r.height() >= thresh) return true
             }
-            if (sawThich) return true
-            if (foundBtnLikeText) return null
-            return null
+            val simple = n.className?.toString()?.substringAfterLast('.') ?: ""
+            if (simple.equals("ViewPager", ignoreCase = true) ||
+                simple.equals("ViewPager2", ignoreCase = true)
+            ) {
+                val r = Rect()
+                n.getBoundsInScreen(r)
+                if (r.width() * r.height() >= thresh) return true
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
         }
-
-        scanHost(node)?.let { return it }
-        val parent = node.parent ?: return null
-        for (i in 0 until parent.childCount) {
-            val sib = parent.getChild(i) ?: continue
-            if (sib === node) continue
-            scanHost(sib)?.let { return it }
-        }
-        return null
+        return false
     }
 
     /** Text placeholder ô bình luận / IME — không phải nội dung bài; dùng làm snippet sẽ gây postKey trùng. */
@@ -253,39 +382,48 @@ class NodeFinder @Inject constructor(
     }
 
     /**
-     * Kiểm tra node đã ở trạng thái "Đã thích" **của tài khoản hiện tại** chưa — tập trung tại đây.
-     *
-     * Chỉ dùng: label nút like / btn_like_text, [isChecked], [isSelected] — không suy từ
-     * reaction count hay presence của reaction_info (bài có like từ người khác vẫn có).
+     * Đã like **của user hiện tại** — không kết luận "chưa like" chỉ vì text vẫn "Thích" (Zalo đôi khi stale).
+     * Ưu tiên: [isChecked]/[isSelected]/stateDescription trên vùng id like / reaction của user;
+     * chỉ tin text "Đã thích" rõ ràng, không dùng "Thích" làm bằng chứng chưa like.
      */
     fun isAlreadyLiked(node: AccessibilityNodeInfo): Boolean {
-        // 1. Zalo dùng TextView btn_like_text: "Thích" vs "Đã thích"
-        when (evaluateBtnLikeText(node)) {
-            false -> return true
-            true -> return false
-            null -> { /* tiếp tục */ }
+        for (n in collectNearbyNodesForLikeState(node, cap = 140)) {
+            if (LikeViewIdRules.shouldRejectNodeForLike(n)) continue
+            val id = n.viewIdResourceName
+            val tail = LikeViewIdRules.resourceIdTail(id)
+
+            val whitelistedOrMine =
+                LikeViewIdRules.isWhitelistedLikeResourceId(id) || idTailImpliesUserReaction(id)
+
+            if (whitelistedOrMine) {
+                if (n.isChecked || n.isSelected) return true
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    val st = n.stateDescription?.toString().orEmpty()
+                    if (st.isNotBlank()) {
+                        if (textIndicatesCurrentUserLiked(st)) return true
+                        if (st.contains("selected", ignoreCase = true) ||
+                            st.contains("đã chọn", ignoreCase = true)
+                        ) {
+                            return true
+                        }
+                    }
+                }
+            }
+
+            if (tail.contains("btn_like_text") || tail.contains("btn_like_icon")) {
+                if (textIndicatesCurrentUserLiked(n.text?.toString())) return true
+                if (textIndicatesCurrentUserLiked(n.contentDescription?.toString())) return true
+            }
+
+            if (whitelistedOrMine &&
+                textIndicatesCurrentUserLiked(n.contentDescription?.toString())
+            ) {
+                return true
+            }
         }
 
-        // 2. Text / contentDescription rõ ràng (không match số lượng reaction)
         if (textIndicatesCurrentUserLiked(node.text?.toString())) return true
         if (textIndicatesCurrentUserLiked(node.contentDescription?.toString())) return true
-
-        // 3. Không dùng isChecked/isSelected ở node gốc — Zalo/RecyclerView hay gán focus/row state
-        //    gây false positive "đã thích". Chỉ tin checked/selected trên child id like (mục 4).
-
-        // 4. Children trực tiếp: chỉ id nút like (tránh text bài / reaction count)
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            val cid = child.viewIdResourceName ?: ""
-            if (!cid.contains("btn_like", ignoreCase = true) &&
-                !cid.contains("like_btn", ignoreCase = true)
-            ) {
-                continue
-            }
-            if (textIndicatesCurrentUserLiked(child.text?.toString())) return true
-            if (textIndicatesCurrentUserLiked(child.contentDescription?.toString())) return true
-            if (child.isChecked || child.isSelected) return true
-        }
 
         return false
     }

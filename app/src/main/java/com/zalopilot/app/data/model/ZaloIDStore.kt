@@ -54,6 +54,10 @@ class ZaloIDStore @Inject constructor(
     fun getAuthorNameID(): String? = getID(KEY_AUTHOR_NAME)
 
     fun saveLikeButtonID(id: String) = saveID(KEY_LIKE_BUTTON, id)
+
+    fun clearLikeButtonID() {
+        prefs.edit().remove(KEY_LIKE_BUTTON).apply()
+    }
     fun saveTabTimelineID(id: String) = saveID(KEY_TAB_TIMELINE, id)
     fun saveFeedRecyclerID(id: String) = saveID(KEY_FEED_RECYCLER, id)
     fun saveAuthorNameID(id: String) = saveID(KEY_AUTHOR_NAME, id)

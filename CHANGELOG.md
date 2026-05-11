@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- fix(accessibility): màn hình toàn bài **mình đã like** (`isAlreadyLiked`) — `findLikeButtons` rỗng nhưng vẫn có vùng like; `hasVisibleSelfAlreadyLikedLikeControl` → trả `ALL_SKIPPED` (cuộn tiếp, reset empty streak) thay vì `NO_BUTTONS`.
+- fix(accessibility/like): `LikeViewIdRules` — chỉ whitelist `btn_like_text` / `btn_like_icon` / `btn_like` / `like_component`; blacklist `vpager`, `layoutSocialFeed`, `feedItemGroupHorizontal` + class ViewPager/RecyclerView/FrameLayout; xóa prefs like id nếu đã lưu blacklist (vd. vpager). `ZaloUIScanner` chỉ lưu id whitelist. `NodeFinder` resolve target theo ưu tiên id, không `resolveClickable` lên container; `isLikelyZaloImageViewer` + sau click `BACK` + skip bài. Like click: `performClickLikeTargetNoParent` (không chain parent).
+- fix(NodeFinder): `isAlreadyLiked` — không dùng text "Thích" làm chưa like; ưu tiên `isChecked`/`isSelected`/`stateDescription` (API 30+) và "Đã thích" trên vùng id like / `my_reaction`.
 - feat(accessibility): `scrollDownByGesture` — tọa độ X ngẫu nhiên trong dải an toàn, điểm cuối lệch X, đường `quadTo` hơi cong, jitter dọc + thời lượng; giả lập vuốt tay gần người hơn (trước đây luôn một đường thẳng giữa màn hình).
 - fix(accessibility): cuộn feed sau like — tăng quãng vuốt màn hình (SMALL/NORMAL/LARGE) và gọi `ACTION_SCROLL_FORWARD` thêm một lần khi RecyclerView đã học cuộn được lần đầu (Zalo thường chỉ dịch một đoạn ngắn mỗi lần).
 - fix(NodeFinder): `getPostSnippetForKey` bỏ qua placeholder ô bình luận (ví dụ "Nhập bình luận") + `hintText`; tránh postKey `CONTENT||…` trùng giữa nhiều bài.

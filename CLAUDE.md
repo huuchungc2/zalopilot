@@ -79,6 +79,8 @@ Sau cuộn/gesture: chờ feed ổn định (~800–1500ms, `delayFeedSettleAfte
 - `ALL_SKIPPED` — thấy nút Thích nhưng tất cả đã like → scroll nhanh (300–600ms), KHÔNG đếm consecutiveEmptyScrolls
 - `NO_BUTTONS` — không thấy nút Thích nào → đếm consecutiveEmptyScrolls → dừng khi >= 5
 
+> **Đã like (mình)** trên toàn màn hình: `findLikeButtons` có thể rỗng vì đã lọc `isAlreadyLiked`. Khi `hasVisibleSelfAlreadyLikedLikeControl` = true → coi như **`ALL_SKIPPED`** (luôn cuộn tiếp, kể cả FeedMode MANUAL), không nhầm với `NO_BUTTONS`.
+
 > `ALL_SKIPPED` KHÔNG được nhầm với `NO_BUTTONS`. Nếu thấy node nhưng tất cả `isAlreadyLiked()` → `ALL_SKIPPED`. Nếu `findLikeButtons()` trả về list rỗng → `NO_BUTTONS`.
 
 ### 5. InteractMode và FeedMode phải được đọc từ settingsManager
@@ -109,11 +111,16 @@ Sau `performLikeClickWithFallbacks()` thành công, **bắt buộc delay 1500ms*
 
 ### 7. isAlreadyLiked() là nguồn truth duy nhất
 
-Mọi logic phân biệt "đã like / chưa like" đều phải qua `NodeFinder.isAlreadyLiked()`. Không duplicate logic này ở chỗ khác. Hàm chỉ coi **tài khoản hiện tại** đã like — không suy từ reaction count / `reaction_info` của người khác. Thứ tự:
-1. `evaluateBtnLikeText` (child `btn_like_text`: "Thích" vs "Đã thích")
-2. text / contentDescription rõ "Đã thích" hoặc nhãn "Liked" ngắn (không chứa số — tránh "1.2K likes")
-3. Không còn dùng `isChecked`/`isSelected` ở node gốc (tránh false positive row/focus); chỉ trên child id like.
-4. Children có id `btn_like` / `like_btn` + text/desc hoặc checked/selected
+Mọi logic phân biệt "đã like / chưa like" đều phải qua `NodeFinder.isAlreadyLiked()`. Không duplicate logic này ở chỗ khác. Hàm chỉ coi **tài khoản hiện tại** đã like — không suy từ reaction count / `reaction_info` của người khác.
+
+**Không** kết luận "chưa like" chỉ vì text vẫn là "Thích" (Zalo có thể stale). **Không** dùng chuỗi "Thích" làm bằng chứng để click lại (tránh unlike).
+
+Thứ tự ưu tiên (trên vùng id whitelist / `my_reaction` gần nút like):
+1. `isChecked` / `isSelected` trên node id like hợp lệ (`LikeViewIdRules`)
+2. API 30+ `stateDescription`: "Đã thích", "Liked", hoặc selected/đã chọn trên vùng like
+3. Text / contentDescription rõ "Đã thích" / "Liked" (không chứa số) trên `btn_like_text` / `btn_like_icon` hoặc id whitelist
+
+Target click like: chỉ id whitelist (`btn_like_text`, `btn_like_icon`, `btn_like`, `like_component`); blacklist tuyệt đối `vpager`, layout feed, RecyclerView/FrameLayout/ViewPager làm target. Học ID qua `ZaloUIScanner` phải qua whitelist — không lưu `vpager`. Like: `performClickLikeTargetNoParent` (không leo parent). Mở nhầm image viewer → `GLOBAL_ACTION_BACK` + skip bài.
 
 ### 8. Giữ màn hình khi bot chạy
 

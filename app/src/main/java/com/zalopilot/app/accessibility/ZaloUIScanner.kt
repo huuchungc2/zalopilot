@@ -90,21 +90,63 @@ class ZaloUIScanner @Inject constructor(
         val candidates = mergeUniqueNodes(byThich + byDaThich + byTraversal)
 
         for (node in candidates) {
-            // Thử lấy ID từ chính node, nếu không có thì leo lên parent
-            val id = findIdFromNodeOrParent(node) ?: continue
-            if (id.contains("zalo", ignoreCase = true)) {
-                val current = idStore.getLikeButtonID()
-                if (current != id) {
-                    idStore.saveLikeButtonID(id)
-                    logger.log(LogTag.SCAN, "like_button = $id", "ID_SAVED")
-                }
-                return true
+            if (LikeViewIdRules.shouldRejectNodeForLike(node) &&
+                !LikeViewIdRules.isWhitelistedLikeResourceId(node.viewIdResourceName)
+            ) {
+                continue
             }
+            val id = findWhitelistedLikeIdNear(node) ?: continue
+            if (LikeViewIdRules.isBlacklistedResourceId(id)) continue
+            val current = idStore.getLikeButtonID()
+            if (current != id) {
+                idStore.saveLikeButtonID(id)
+                logger.log(LogTag.SCAN, "like_button = $id", "ID_SAVED")
+            }
+            return true
         }
 
-        // Không tìm được ID nào — log để debug
         logger.log(LogTag.SCAN, "candidates=${candidates.size}", "LIKE_ID_MISS")
         return false
+    }
+
+    /** Chỉ id whitelist trong subtree / vài cấp cha — không lấy [vpager] / layout feed. */
+    private fun findWhitelistedLikeIdNear(node: AccessibilityNodeInfo): String? {
+        node.viewIdResourceName?.let { id ->
+            if (LikeViewIdRules.isWhitelistedLikeResourceId(id)) return id
+        }
+        var host: AccessibilityNodeInfo? = node
+        repeat(6) {
+            val h = host ?: return null
+            val best = findBestWhitelistedIdInSubtree(h, maxDepth = 10)
+            if (best != null) return best
+            host = h.parent
+        }
+        return null
+    }
+
+    private fun findBestWhitelistedIdInSubtree(root: AccessibilityNodeInfo, maxDepth: Int): String? {
+        var bestId: String? = null
+        var bestP = Int.MAX_VALUE
+        val q = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+        q.addLast(root to 0)
+        while (q.isNotEmpty()) {
+            val (n, d) = q.removeFirst()
+            if (d > maxDepth) continue
+            val id = n.viewIdResourceName
+            if (LikeViewIdRules.isWhitelistedLikeResourceId(id) &&
+                !LikeViewIdRules.shouldRejectNodeForLike(n)
+            ) {
+                val p = LikeViewIdRules.likeClickPriority(id)
+                if (p < bestP) {
+                    bestP = p
+                    bestId = id
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { child -> q.addLast(child to (d + 1)) }
+            }
+        }
+        return bestId
     }
 
     /** Gợi ý nút like từ contentDescription / text khi API theo chuỗi không đủ. */
@@ -212,7 +254,7 @@ class ZaloUIScanner @Inject constructor(
             root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKE) + collectTraversalLikeHints(root)
         )
         for (likeNode in likeNodes) {
-            val id = findIdFromNodeOrParent(likeNode) ?: continue
+            val id = findWhitelistedLikeIdNear(likeNode) ?: continue
             if (!id.contains("zalo", ignoreCase = true)) continue
 
             val feedItem = findFeedItemParent(likeNode, depth = 4) ?: continue
