@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- feat(debug): dump UI feed item đã like/chưa like ra `filesDir/ui_dump_liked.json` và `ui_dump_unliked.json` (mỗi file 1 lần) khi bot quét feed; thêm nút export tương ứng trong tab Nhật ký (copy ra Downloads + toast đường dẫn). Thêm nút "Dump UI" trong floating overlay để ghi `filesDir/ui_dump.json` và export trong tab Nhật ký.
 - docs: thêm checklist “CI-safe Kotlin” trong `CLAUDE.md` (import `SystemClock`, tránh `continue/break` trong inline lambda, range `0L..`, ...).
 - feat(ui/accessibility): thêm nút "Quét UI" (force scan) và export map id ra `ui_map.json` (internal storage); `ZaloUIScanner` bỏ whitelist khi scan (chỉ reject blacklist class/id, package != `com.zing.zalo`, bounds > 20% màn hình). `NodeFinder.findLikeButtons`/`hasVisibleSelfAlreadyLikedLikeControl` bỏ filter theo whitelist (chỉ giữ `shouldRejectNodeForLike`).
 - fix(accessibility): màn hình toàn bài **mình đã like** (`isAlreadyLiked`) — `findLikeButtons` rỗng nhưng vẫn có vùng like; `hasVisibleSelfAlreadyLikedLikeControl` → trả `ALL_SKIPPED` (cuộn tiếp, reset empty streak) thay vì `NO_BUTTONS`.

@@ -16,6 +16,7 @@ import android.util.Log
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import java.io.File
 import android.view.Gravity
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
@@ -48,6 +49,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import org.json.JSONObject
 import javax.inject.Inject
 import kotlin.coroutines.resume
 import kotlin.random.Random
@@ -813,6 +816,10 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 }
             }
 
+            // Side-effect debug dump for feed items (1-time per file) — không đổi logic like.
+            runCatching { maybeDumpFeedItemTrees(scanRoot) }
+                .onFailure { e -> logger.logError("maybeDumpFeedItemTrees", e) }
+
             if (likeNodes.isEmpty()) {
                 updateDebugNodeHighlights(emptyList(), null)
                 if (nodeFinder.hasVisibleSelfAlreadyLikedLikeControl(scanRoot)) {
@@ -972,6 +979,110 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             return FeedScanResult.ALL_SKIPPED
         } finally {
             acquiredExtra?.recycle()
+        }
+    }
+
+    private fun maybeDumpFeedItemTrees(root: AccessibilityNodeInfo) {
+        val outUnliked = File(filesDir, "ui_dump_unliked.json")
+        val outLiked = File(filesDir, "ui_dump_liked.json")
+        if (outUnliked.exists() && outLiked.exists()) return
+
+        val lvMediaStoreId = ZaloIDStore.FEED_LAYOUT_ANCHOR_IDS.firstOrNull { it.contains("lv_media_store") } ?: return
+        val anchors = runCatching { root.findAccessibilityNodeInfosByViewId(lvMediaStoreId) }.getOrNull()
+        val lv = anchors?.firstOrNull() ?: return
+
+        val itemCount = lv.childCount.coerceAtMost(60)
+        for (i in 0 until itemCount) {
+            val item = lv.getChild(i) ?: continue
+
+            try {
+                if (!outUnliked.exists() && itemHasUnlikedLike(item)) {
+                    outUnliked.writeText(dumpNodeTreeJson(item).toString(2))
+                    logger.log(LogTag.SCAN, "ui_dump_unliked.json itemIndex=$i", "DUMP_SAVED")
+                    // continue to allow liked too in same pass if possible
+                }
+
+                if (!outLiked.exists() && itemHasLikedLike(item)) {
+                    outLiked.writeText(dumpNodeTreeJson(item).toString(2))
+                    logger.log(LogTag.SCAN, "ui_dump_liked.json itemIndex=$i", "DUMP_SAVED")
+                }
+            } finally {
+                runCatching { item.recycle() }
+            }
+
+            if (outUnliked.exists() && outLiked.exists()) return
+        }
+    }
+
+    private fun itemHasUnlikedLike(item: AccessibilityNodeInfo): Boolean {
+        // Theo yêu cầu: btn_like text="Thích" và chưa checked/selected.
+        val byText = runCatching { item.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKE) }.getOrNull()
+            ?: emptyList()
+        for (n in byText) {
+            val t = n.text?.toString()?.trim().orEmpty()
+            if (t == ZaloIDStore.TEXT_LIKE && !n.isChecked && !n.isSelected) return true
+        }
+        return false
+    }
+
+    private fun itemHasLikedLike(item: AccessibilityNodeInfo): Boolean {
+        // Không dùng để quyết định like, chỉ phân loại dump.
+        if (nodeFinder.hasVisibleSelfAlreadyLikedLikeControl(item)) return true
+        val byLikedText = runCatching { item.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKED) }.getOrNull()
+            ?: emptyList()
+        return byLikedText.isNotEmpty()
+    }
+
+    private fun dumpNodeTreeJson(root: AccessibilityNodeInfo): JSONObject {
+        var nodeCount = 0
+        val depthLimit = 60
+        val nodeLimit = 4_500
+
+        fun rectJson(n: AccessibilityNodeInfo): JSONObject {
+            val r = Rect()
+            n.getBoundsInScreen(r)
+            return JSONObject().apply {
+                put("l", r.left); put("t", r.top); put("r", r.right); put("b", r.bottom)
+                put("w", r.width()); put("h", r.height())
+            }
+        }
+
+        fun toJson(n: AccessibilityNodeInfo, depth: Int): JSONObject {
+            nodeCount++
+            val o = JSONObject().apply {
+                put("id", n.viewIdResourceName?.toString().orEmpty())
+                put("class", n.className?.toString().orEmpty())
+                put("text", n.text?.toString().orEmpty())
+                put("contentDescription", n.contentDescription?.toString().orEmpty())
+                put("bounds", rectJson(n))
+                put("clickable", n.isClickable)
+                put("longClickable", n.isLongClickable)
+                put("checked", n.isChecked)
+                put("selected", n.isSelected)
+                put("childCount", n.childCount)
+            }
+
+            if (depth >= depthLimit || nodeCount >= nodeLimit) return o
+
+            val children = JSONArray()
+            for (i in 0 until n.childCount) {
+                if (nodeCount >= nodeLimit) break
+                val c = n.getChild(i) ?: continue
+                try {
+                    children.put(toJson(c, depth + 1))
+                } finally {
+                    runCatching { c.recycle() }
+                }
+            }
+            o.put("children", children)
+            return o
+        }
+
+        return JSONObject().apply {
+            put("scannedAtMs", System.currentTimeMillis())
+            put("nodeCount", 0)
+            put("tree", toJson(root, 0))
+            put("nodeCount", nodeCount)
         }
     }
 

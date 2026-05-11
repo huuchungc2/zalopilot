@@ -4,10 +4,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.ContentValues
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.os.Build
 import android.provider.Settings
+import android.provider.MediaStore
 import android.widget.Toast
 import java.io.File
 import java.util.Locale
@@ -872,6 +875,29 @@ class MainActivity : ComponentActivity() {
                             shape = RoundedCornerShape(8.dp)) {
                             Text("🔍 Dump UI Zalo", color = Color.White, fontSize = 12.sp)
                         }
+                        Button(onClick = { exportUiDumpJson() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(8.dp)) {
+                            Text("💾 Xuất UI Dump", color = Color.White, fontSize = 12.sp)
+                        }
+                        val unlikedDumpExists = File(filesDir, "ui_dump_unliked.json").exists()
+                        Button(
+                            onClick = { exportInternalDumpJson("ui_dump_unliked.json", "ZaloPilot_ui_dump_unliked") },
+                            enabled = unlikedDumpExists,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(8.dp)
+                        ) { Text("💾 Xuất dump chưa like", color = Color.White, fontSize = 12.sp) }
+
+                        val likedDumpExists = File(filesDir, "ui_dump_liked.json").exists()
+                        Button(
+                            onClick = { exportInternalDumpJson("ui_dump_liked.json", "ZaloPilot_ui_dump_liked") },
+                            enabled = likedDumpExists,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(8.dp)
+                        ) { Text("💾 Xuất dump đã like", color = Color.White, fontSize = 12.sp) }
                         Button(onClick = {
                             val txt = when (subTab) {
                                 0 -> logger.getSlimLogText()
@@ -1039,6 +1065,61 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "✅ Đã xuất vào Downloads: ${dest.name}", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             Toast.makeText(this, "❌ Lỗi: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun exportUiDumpJson() {
+        try {
+            val src = File(filesDir, "ui_dump.json")
+            if (!src.exists()) {
+                Toast.makeText(this, "⚠️ Chưa có ui_dump.json — hãy bấm Dump UI ở nút ZP nổi", Toast.LENGTH_LONG).show()
+                return
+            }
+
+            val name = "ZaloPilot_ui_dump_${System.currentTimeMillis()}.json"
+            val saved = copyFileToDownloads(src, name)
+            Toast.makeText(this, "✅ Đã xuất: $saved", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "❌ Lỗi: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun exportInternalDumpJson(internalName: String, prefix: String) {
+        try {
+            val src = File(filesDir, internalName)
+            if (!src.exists()) {
+                Toast.makeText(this, "⚠️ Chưa có $internalName", Toast.LENGTH_LONG).show()
+                return
+            }
+            val name = "${prefix}_${System.currentTimeMillis()}.json"
+            val saved = copyFileToDownloads(src, name)
+            Toast.makeText(this, "✅ Đã xuất: $saved", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "❌ Lỗi: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun copyFileToDownloads(src: File, displayName: String): String {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val resolver = contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, displayName)
+                put(MediaStore.Downloads.MIME_TYPE, "application/json")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("Không tạo được file trong Downloads")
+            resolver.openOutputStream(uri)?.use { out ->
+                src.inputStream().use { it.copyTo(out) }
+            } ?: throw IllegalStateException("Không mở được output stream Downloads")
+            "Downloads/$displayName ($uri)"
+        } else {
+            val dest = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                displayName
+            )
+            src.copyTo(dest, overwrite = true)
+            dest.absolutePath
         }
     }
 

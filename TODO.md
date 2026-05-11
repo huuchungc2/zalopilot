@@ -31,6 +31,7 @@
 
 ### Debug & Test
 - [x] `NodeFinder.debugDump(root)` — in toàn bộ node tree ra log để debug
+- [x] Dump feed item UI tree (liked/unliked) ra filesDir + export Downloads trong tab Nhật ký
 - [ ] Màn hình debug trong app — hiện ID đã học được từ ZaloIDStore
 - [ ] Test thực tế trên máy Samsung — xác nhận tìm được nút Thích
 - [ ] Xử lý trường hợp Zalo đang ở sai tab → tự navigate sang tab Nhật ký
