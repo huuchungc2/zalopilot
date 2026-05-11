@@ -253,6 +253,39 @@ git push
 
 ---
 
+## CI-safe Kotlin — tránh lỗi build “cú pháp”
+
+Các lỗi dưới đây hay **lọt qua local** nhưng **fail trên CI** (Kotlin FIR/Gradle strict). Khi sửa code (đặc biệt trong `ZaloPilotAccessibilityService.kt`) phải tự check:
+
+### 1) Import Android util/time rõ ràng
+- Dùng `SystemClock.elapsedRealtime()` → luôn có `import android.os.SystemClock`
+
+### 2) Tuyệt đối không `break/continue` trong inline lambda
+Không viết kiểu:
+
+```kotlin
+val x = foo() ?: run { continue }
+list.forEach { if (cond) return@forEach /* hoặc continue */ }
+```
+
+Thay bằng `if` cùng scope vòng lặp:
+
+```kotlin
+val x = foo()
+if (x == null) continue
+```
+
+### 3) Range `in` phải đồng nhất kiểu Long/Int
+- Đúng: `sinceBack in 0L..1_000L`
+- Sai: `sinceBack in 0..1_000L` (trộn Int/Long)
+
+### 4) Tránh “trick” Elvis phức tạp trong code loop
+Trong loop ưu tiên code rõ ràng:
+- `val x = ...; if (x == null) { ...; continue }`
+Thay vì chain `?: run { ... }` dài.
+
+---
+
 ## Những thứ KHÔNG được làm
 - KHÔNG hardcode resource-id Zalo trong code
 - KHÔNG dùng Thread.sleep() — luôn dùng coroutine delay()

@@ -11,6 +11,7 @@ import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import android.os.Handler
 import android.os.Looper
@@ -334,7 +335,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             if (isZaloForeground) {
                 // Grace period 1s sau BACK: tránh false-positive "Zalo closed" khi transition về feed.
                 val sinceBack = SystemClock.elapsedRealtime() - lastGlobalBackAtElapsedMs
-                if (lastGlobalBackAtElapsedMs > 0L && sinceBack in 0..1_000L) {
+                if (lastGlobalBackAtElapsedMs > 0L && sinceBack in 0L..1_000L) {
                     logger.log(LogTag.STATE, "pkg=$pkg sinceBackMs=$sinceBack", "BACKGROUND_POLL_GRACE")
                     return
                 }
@@ -927,7 +928,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                                         delayRangeMs = 80L..180L,
                                         logTag = LogTag.CLICK,
                                         quietLog = true
-                                    ) ?: run {
+                                    )
+                                    if (newRoot == null) {
                                         updateStatus("⚠️ Không lấy được root sau BACK — thử bài khác")
                                         delayEco(400L..700L)
                                         continue
@@ -937,7 +939,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                                         nodeFinder.reResolveLikeNodeForClick(newRoot, nodeForClick)
                                     } finally {
                                         runCatching { newRoot.recycle() }
-                                    } ?: run {
+                                    }
+                                    if (retryNode == null) {
                                         logger.log(LogTag.CLICK, author ?: "unknown", "IMAGE_VIEWER_RETRY_RERESOLVE_NULL")
                                         delayEco(400L..700L)
                                         continue
