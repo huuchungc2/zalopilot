@@ -177,6 +177,8 @@ class MainActivity : ComponentActivity() {
         var progress by remember { mutableStateOf(progressManager.load()) }
         var settings by remember { mutableStateOf(settingsManager.load()) }
         var logs by remember { mutableStateOf(logger.readLogs()) }
+        var verboseUiTreeLog by remember { mutableStateOf(debugHighlightPrefs.isVerboseUiTreeLoggingEnabled()) }
+        var verboseLikeContextLog by remember { mutableStateOf(debugHighlightPrefs.isVerboseLikeContextLoggingEnabled()) }
 
         DisposableEffect(Unit) {
             val receiver = object : BroadcastReceiver() {
@@ -228,7 +230,25 @@ class MainActivity : ComponentActivity() {
                 when (selectedTab) {
                     0 -> HomeScreen(isRunning, progress, settings)
                     1 -> SettingsScreen(settings) { settings = it; settingsManager.save(it) }
-                    2 -> LogScreen(logs)
+                    2 -> LogScreen(
+                        logs = logs,
+                        verboseUiTreeLog = verboseUiTreeLog,
+                        verboseLikeContextLog = verboseLikeContextLog,
+                        onVerboseUiTreeChange = {
+                            verboseUiTreeLog = it
+                            debugHighlightPrefs.setVerboseUiTreeLoggingEnabled(it)
+                        },
+                        onVerboseLikeContextChange = {
+                            verboseLikeContextLog = it
+                            debugHighlightPrefs.setVerboseLikeContextLoggingEnabled(it)
+                        },
+                        onClearLogs = {
+                            logger.clearDebugArtifacts()
+                            sendBroadcast(Intent(ZaloPilotAccessibilityService.ACTION_CLEAR_DEBUG_STATE))
+                            logs = logger.readLogs()
+                            Toast.makeText(this@MainActivity, "Đã xóa log & file tạm", Toast.LENGTH_SHORT).show()
+                        }
+                    )
                     3 -> UiTreeScreen()
                 }
             }
@@ -332,6 +352,7 @@ class MainActivity : ComponentActivity() {
         var restMax by remember { mutableIntStateOf(settings.restMaxMinutes) }
         var quietStart by remember { mutableIntStateOf(settings.quietHourStart) }
         var quietEnd by remember { mutableIntStateOf(settings.quietHourEnd) }
+        var ecoMode by remember { mutableStateOf(settings.ecoMode) }
         var nodeHighlightDebug by remember { mutableStateOf(debugHighlightPrefs.isNodeHighlightEnabled()) }
 
         LazyColumn(modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)),
@@ -408,6 +429,30 @@ class MainActivity : ComponentActivity() {
                                     valueRange = 0f..23f, steps = 22, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
                             }
                         }
+                    }
+                }
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("TIẾT KIỆM PIN (NGỦ TRƯA)", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Poll/scan chậm hơn, delay like dài hơn (~×1.5), màn tắt ít dừng nhầm. Mượt, ít nóng hơn; like chậm hơn. Nên bật khi cắm sạc hoặc để máy nghỉ.",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                        }
+                        Switch(
+                            checked = ecoMode,
+                            onCheckedChange = { ecoMode = it },
+                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
+                        )
                     }
                 }
             }
@@ -513,7 +558,8 @@ class MainActivity : ComponentActivity() {
                         restMaxMinutes = restMax,
                         quietHourStart = quietStart,
                         quietHourEnd = quietEnd,
-                        interactModeStr = interactMode.name
+                        interactModeStr = interactMode.name,
+                        ecoMode = ecoMode
                     ))
                     Toast.makeText(this@MainActivity, "✅ Đã lưu cài đặt", Toast.LENGTH_SHORT).show()
                 }, modifier = Modifier.fillMaxWidth().height(50.dp),
@@ -667,7 +713,14 @@ class MainActivity : ComponentActivity() {
     // ─── Log Screen ──────────────────────────────────────────────
 
     @Composable
-    fun LogScreen(logs: List<LogEntry>) {
+    fun LogScreen(
+        logs: List<LogEntry>,
+        verboseUiTreeLog: Boolean,
+        verboseLikeContextLog: Boolean,
+        onVerboseUiTreeChange: (Boolean) -> Unit,
+        onVerboseLikeContextChange: (Boolean) -> Unit,
+        onClearLogs: () -> Unit
+    ) {
         fun tagColor(tag: LogTag): Color = when (tag) {
             LogTag.POLL -> Color(0xFF5C6BC0)
             LogTag.EVENT_HINT -> Color(0xFF8E24AA)
@@ -693,9 +746,15 @@ class MainActivity : ComponentActivity() {
             Box(Modifier.fillMaxWidth().background(zaloBlue).padding(20.dp)) {
                 Column {
                     Text("Nhật ký", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
-                    Text("${logs.size} dòng gần nhất · POLL / SCAN / CLICK / STATE…", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
+                    Text("${logs.size} dòng phiên hiện tại · POLL / SCAN / CLICK / STATE…", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(onClick = onClearLogs,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(8.dp)) {
+                            Text("🗑 Xóa log", color = Color.White, fontSize = 12.sp)
+                        }
                         Button(onClick = { exportLog() },
                             colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
@@ -714,6 +773,29 @@ class MainActivity : ComponentActivity() {
                             shape = RoundedCornerShape(8.dp)) {
                             Text("📋 Copy log", color = Color.White, fontSize = 12.sp)
                         }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Dump cây UI khi lỗi", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                        Switch(
+                            checked = verboseUiTreeLog,
+                            onCheckedChange = onVerboseUiTreeChange
+                        )
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Log chi tiết nút Like", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                        Switch(
+                            checked = verboseLikeContextLog,
+                            onCheckedChange = onVerboseLikeContextChange
+                        )
                     }
                 }
             }
@@ -804,10 +886,10 @@ class MainActivity : ComponentActivity() {
 
     private fun copyLogs() {
         try {
-            val text = logger.logFile.takeIf { it.exists() }?.readText() ?: "Chưa có log"
+            val text = logger.getSessionLogText().ifBlank { "Chưa có log phiên hiện tại" }
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText("ZaloPilot Log", text))
-            Toast.makeText(this, "✅ Đã copy log vào clipboard", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "✅ Đã copy log phiên vào clipboard", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, "❌ ${e.message}", Toast.LENGTH_SHORT).show()
         }
@@ -833,17 +915,17 @@ class MainActivity : ComponentActivity() {
 
     private fun exportLog() {
         try {
-            val src = logger.logFile
-            if (!src.exists()) {
-                Toast.makeText(this, "⚠️ Chưa có log nào", Toast.LENGTH_SHORT).show()
+            val text = logger.getSessionLogText()
+            if (text.isBlank()) {
+                Toast.makeText(this, "⚠️ Chưa có log phiên — chạy bot hoặc bật automation trước", Toast.LENGTH_LONG).show()
                 return
             }
             val dest = java.io.File(
                 android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
                 "ZaloPilot_log_${System.currentTimeMillis()}.json"
             )
-            src.copyTo(dest, overwrite = true)
-            Toast.makeText(this, "✅ Đã lưu vào Downloads: ${dest.name}", Toast.LENGTH_LONG).show()
+            dest.writeText(text)
+            Toast.makeText(this, "✅ Đã lưu log phiên vào Downloads: ${dest.name}", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             Toast.makeText(this, "❌ Lỗi: ${e.message}", Toast.LENGTH_LONG).show()
         }

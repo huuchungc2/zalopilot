@@ -52,7 +52,7 @@ Bot **không lưu** danh sách bài đã like. Mỗi lần chạy đọc trạng
 
 **Lý do:** Feed Zalo không có stable ID. Lưu dễ gây false positive (bỏ qua bài chưa like). Cuộn qua bài đã like nhanh hơn maintain database có thể sai.
 
-**Cách phân biệt bài đã like:** dùng `NodeFinder.isAlreadyLiked()` — đọc text/contentDescription/isChecked của node thực trên màn hình.
+**Cách phân biệt bài đã like:** dùng `NodeFinder.isAlreadyLiked()` — nhãn nút like / `btn_like_text`, `isChecked`/`isSelected` của control like; không suy từ reaction count hay `reaction_info` của người khác.
 
 ### 2. postKey KHÔNG dùng bounds tuyệt đối
 
@@ -69,6 +69,8 @@ Bot **không lưu** danh sách bài đã like. Mỗi lần chạy đọc trạng
 ### 3. processedPosts phải clear sau mỗi lần scroll
 
 `processedPosts` chỉ dùng để tránh like lại trong **cùng 1 lần scan**. Sau `scrollFeedWithVerification()` phải gọi `processedPosts.clear()` ngay — feed đã cuộn sang nội dung mới.
+
+Sau cuộn/gesture: chờ feed ổn định (~800–1500ms, `delayFeedSettleAfterScroll`) rồi mới `acquireRoot` + quét lại — tránh empty scan khi RecyclerView lazy-load.
 
 ### 4. FeedScanResult — 3 trạng thái, không phải Boolean
 
@@ -107,11 +109,15 @@ Sau `performLikeClickWithFallbacks()` thành công, **bắt buộc delay 900ms**
 
 ### 7. isAlreadyLiked() là nguồn truth duy nhất
 
-Mọi logic phân biệt "đã like / chưa like" đều phải qua `NodeFinder.isAlreadyLiked()`. Không duplicate logic này ở chỗ khác. Hàm kiểm tra theo thứ tự:
-1. text / contentDescription của node chứa "Đã thích" / "liked"
-2. `node.isChecked == true`
-3. Children có text/desc "Đã thích"
-4. Sibling của parent có id chứa `reaction_info` hoặc `my_reaction`
+Mọi logic phân biệt "đã like / chưa like" đều phải qua `NodeFinder.isAlreadyLiked()`. Không duplicate logic này ở chỗ khác. Hàm chỉ coi **tài khoản hiện tại** đã like — không suy từ reaction count / `reaction_info` của người khác. Thứ tự:
+1. `evaluateBtnLikeText` (child `btn_like_text`: "Thích" vs "Đã thích")
+2. text / contentDescription rõ "Đã thích" hoặc nhãn "Liked" ngắn (không chứa số — tránh "1.2K likes")
+3. Không còn dùng `isChecked`/`isSelected` ở node gốc (tránh false positive row/focus); chỉ trên child id like.
+4. Children có id `btn_like` / `like_btn` + text/desc hoặc checked/selected
+
+### 8. Giữ màn hình khi bot chạy
+
+Status overlay (thanh trạng thái trên Zalo) bật `FLAG_KEEP_SCREEN_ON` + `View.keepScreenOn` trong lúc `isRunning` — màn hình **không tự tắt** theo cài đặt timeout, để accessibility vẫn đọc được feed. `stopAutoLike()` / `hideStatusOverlay()` → gỡ cờ, máy tắt màn bình thường lại.
 
 ---
 
@@ -184,17 +190,18 @@ logger.log(LogTag.SCAN, "Không thấy nút Thích", "EMPTY")
 ```kotlin
 // LikeSettings — lưu SharedPreferences "like_settings" dạng JSON (Gson)
 data class LikeSettings(
-    val dailyLimit: Int = 100,
-    val delayMinMs: Long = 1000,
-    val delayMaxMs: Long = 3000,
-    val sessionLimit: Int = 30,
-    val restMinMinutes: Int = 5,
-    val restMaxMinutes: Int = 10,
-    val quietHourStart: Int = 22,
-    val quietHourEnd: Int = 6,
-    val autoStart: Boolean = false,
-    val likeModeStr: String = "FEED",
-    val interactModeStr: String = "MIX"
+ val dailyLimit: Int = 100,
+ val delayMinMs: Long = 1000,
+ val delayMaxMs: Long = 3000,
+ val sessionLimit: Int = 30,
+ val restMinMinutes: Int = 5,
+ val restMaxMinutes: Int = 10,
+ val quietHourStart: Int = 22,
+ val quietHourEnd: Int = 6,
+ val autoStart: Boolean = false,
+ val likeModeStr: String = "FEED",
+ val interactModeStr: String = "MIX",
+ val ecoMode: Boolean = false
 )
 
 // FeedMode — cách cuộn feed

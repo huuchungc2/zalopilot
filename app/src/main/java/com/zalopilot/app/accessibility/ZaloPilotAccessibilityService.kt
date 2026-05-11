@@ -32,6 +32,7 @@ import com.zalopilot.app.util.LikeSettingsManager
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
 import com.zalopilot.app.util.isZaloRelatedPackage
+import com.zalopilot.app.util.hasValidScreenBounds
 import com.zalopilot.app.util.random
 import com.zalopilot.app.util.randomDelay
 import dagger.hilt.android.AndroidEntryPoint
@@ -43,10 +44,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 import kotlin.coroutines.resume
+import kotlin.random.Random
 
 @AndroidEntryPoint
 class ZaloPilotAccessibilityService : AccessibilityService() {
@@ -79,8 +82,14 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private val processedPosts = mutableSetOf<String>()
     private var lastClickedPostKey = ""
     private var lastClickedPostAt = 0L
-    private var consecutiveEmptyScrolls = 0
-    private var lastDebugDumpMs = 0L
+    /** Cuộn không đổi nội dung (đo bằng anchor / scroll action) — LIKED / ALL_SKIPPED. */
+    private var consecutiveScrollNoProgress = 0
+    /** Không thấy nút Thích (cây rỗng / lazy-load) — tách khỏi scroll-stuck, ngưỡng dừng riêng. */
+    private var consecutiveEmptyLikeScanStreak = 0
+    /** Lần đầu vào loop sau Start — chờ neo feed + settle. */
+    private var initialFeedSettled = false
+    /** Một lần dump ngắn khi scan fail (không spam mỗi vòng). */
+    private var noButtonsDiagnosticDumpDone = false
     private var lastContentEventLogMs = 0L
     private var lastRootNullWallLogMs = 0L
 
@@ -96,12 +105,18 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     /** Viền debug nút like — tách khỏi status overlay. */
     private var nodeHighlightView: NodeHighlightOverlayView? = null
 
+    private val powerManager: PowerManager
+        get() = getSystemService(Context.POWER_SERVICE) as PowerManager
+
     companion object {
         var instance: ZaloPilotAccessibilityService? = null
         var isActive = false
 
         /** Broadcast: foreground notification "📋 Dump UI" → [performDumpUiTreeFromActiveWindow]. */
         const val ACTION_DUMP_UI_TREE = "com.zalopilot.DUMP_UI_TREE"
+
+        /** MainActivity "Clear Logs" — xóa state debug tạm trong service. */
+        const val ACTION_CLEAR_DEBUG_STATE = "com.zalopilot.CLEAR_DEBUG_STATE"
 
         /** Áp dụng ngay khi bật/tắt trong Cài đặt (không cần khởi động lại service). */
         fun syncDebugHighlightFromPrefs() {
@@ -112,17 +127,50 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         private const val POLL_MS_MAX = 2_000L
         private const val ROOT_RETRY_DEFAULT = 5
         private const val POLL_ROOT_ASSUME_BACKGROUND = 6
+        /** Màn tắt + bot chạy: root hay null nhưng Zalo vẫn foreground — đừng dừng sớm. */
+        private const val POLL_ROOT_ASSUME_BACKGROUND_SCREEN_OFF = 22
         private const val CONTENT_EVENT_LOG_THROTTLE_MS = 3_000L
+        private const val BOT_EVENT_LOG_THROTTLE_MS = 10_000L
         private const val ROOT_NULL_WALL_LOG_MS = 8_000L
         /** Cooldown / chống double-click cùng bài (Zalo không cập nhật isChecked đáng tin). */
         private const val POST_CLICK_COOLDOWN_MS = 5_000L
         private const val DUPLICATE_LIKE_CLICK_SUPPRESS_MS = POST_CLICK_COOLDOWN_MS
+        /** Dừng sau N lần cuộn mà feed không dịch (like / all-skipped). */
+        private const val FEED_END_STOP_STREAK = 5
+        /** NO_BUTTONS: nhiều lần thử trước khi coi hết feed (lazy-load / RecyclerView). */
+        private const val NO_BUTTONS_END_STOP_STREAK = 24
+    }
+
+    private enum class GestureScrollProfile {
+        /** Cuộn ngắn, mượt */
+        SMALL,
+        NORMAL,
+        /** Kẹt feed — vuốt dài hơn */
+        LARGE
+    }
+
+    private fun combinedStuckLevel(): Int =
+        maxOf(consecutiveScrollNoProgress, consecutiveEmptyLikeScanStreak / 4)
+
+    private fun gestureProfileForStreak(): GestureScrollProfile = when {
+        combinedStuckLevel() >= 3 -> GestureScrollProfile.LARGE
+        combinedStuckLevel() >= 1 -> GestureScrollProfile.NORMAL
+        else -> GestureScrollProfile.SMALL
     }
 
     private val dumpUiTreeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != ACTION_DUMP_UI_TREE) return
             performDumpUiTreeFromActiveWindow()
+        }
+    }
+
+    private val clearDebugStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != ACTION_CLEAR_DEBUG_STATE) return
+            lastContentEventLogMs = 0L
+            lastRootNullWallLogMs = 0L
+            uiScanner.resetTransientState()
         }
     }
 
@@ -137,9 +185,16 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     IntentFilter(ACTION_DUMP_UI_TREE),
                     Context.RECEIVER_NOT_EXPORTED
                 )
+                registerReceiver(
+                    clearDebugStateReceiver,
+                    IntentFilter(ACTION_CLEAR_DEBUG_STATE),
+                    Context.RECEIVER_NOT_EXPORTED
+                )
             } else {
                 @Suppress("DEPRECATION")
                 registerReceiver(dumpUiTreeReceiver, IntentFilter(ACTION_DUMP_UI_TREE))
+                @Suppress("DEPRECATION")
+                registerReceiver(clearDebugStateReceiver, IntentFilter(ACTION_CLEAR_DEBUG_STATE))
             }
         }.onFailure { e -> logger.logError("registerDumpUiReceiver", e) }
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -150,12 +205,72 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         foregroundPollJob?.cancel()
         foregroundPollJob = scope.launch {
             while (isActive) {
-                delay((POLL_MS_MIN..POLL_MS_MAX).random())
+                delay(computePollDelayMs())
                 runCatching { pollOnce() }.onFailure { e ->
                     logger.logError("pollLoop", e)
                 }
             }
         }
+    }
+
+    /** Poll chậm hơn khi Eco / màn tắt + bot chạy → ít thức CPU, bớt nóng. */
+    private fun computePollDelayMs(): Long {
+        val eco = settingsManager.isEcoMode()
+        val screenOff = !powerManager.isInteractive
+        val r = when {
+            screenOff && isRunning ->
+                if (eco) 5200L..9000L else 4000L..7000L
+            eco -> 2200L..4000L
+            else -> POLL_MS_MIN..POLL_MS_MAX
+        }
+        return Random.nextLong(r.first, r.last + 1)
+    }
+
+    private fun scaleEcoRange(range: LongRange): LongRange {
+        if (!settingsManager.isEcoMode()) return range
+        val a = (range.first * 3L + 1L) / 2L
+        val b = (range.last * 3L + 1L) / 2L
+        return a.coerceAtLeast(1L)..maxOf(a, b)
+    }
+
+    private fun pickScaled(range: LongRange): Long {
+        val s = scaleEcoRange(range)
+        return Random.nextLong(s.first, s.last + 1)
+    }
+
+    private suspend fun delayEco(range: LongRange) {
+        delay(pickScaled(range))
+    }
+
+    private fun ecoVerifyMs(base: Long): Long =
+        if (settingsManager.isEcoMode()) (base * 115L / 100L) else base
+
+    /** Sau cuộn/gesture: chờ feed RecyclerView ổn định trước khi quét lại (lazy-load). */
+    private suspend fun delayFeedSettleAfterScroll() {
+        delayEco(800L..1_500L)
+    }
+
+    /**
+     * Trước khi quét like: nếu cây chưa có nút Thích, chờ có giới hạn + lấy root mới — tránh empty scan sớm.
+     * [first] được recycle nếu trả về root khác (caller gán lại biến `root`).
+     */
+    private suspend fun awaitFeedLikeScanRoot(first: AccessibilityNodeInfo): AccessibilityNodeInfo {
+        if (nodeFinder.findLikeButtons(first).isNotEmpty()) return first
+        repeat(4) {
+            delayEco(350L..550L)
+            val next = acquireRootOrNull(
+                maxAttempts = 4,
+                delayRangeMs = 80L..220L,
+                logTag = LogTag.STATE,
+                quietLog = true
+            ) ?: continue
+            if (nodeFinder.findLikeButtons(next).isNotEmpty()) {
+                runCatching { first.recycle() }
+                return next
+            }
+            runCatching { next.recycle() }
+        }
+        return first
     }
 
     /**
@@ -175,8 +290,13 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 lastRootNullWallLogMs = now
                 logger.log(LogTag.POLL, "consecutiveNull=$consecutivePollRootNull", "ROOT_NULL_AFTER_RETRIES")
             }
-            if (consecutivePollRootNull >= POLL_ROOT_ASSUME_BACKGROUND && isZaloForeground) {
-                logger.log(LogTag.STATE, "root persistently null", "BACKGROUND_ASSUMED")
+            val nullStreakLimit = when {
+                !powerManager.isInteractive && isRunning && isZaloForeground ->
+                    POLL_ROOT_ASSUME_BACKGROUND_SCREEN_OFF
+                else -> POLL_ROOT_ASSUME_BACKGROUND
+            }
+            if (consecutivePollRootNull >= nullStreakLimit && isZaloForeground) {
+                logger.log(LogTag.STATE, "root persistently null limit=$nullStreakLimit", "BACKGROUND_ASSUMED")
                 applyZaloBackground(reason = "poll_root_exhausted")
             }
             return
@@ -198,7 +318,10 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     mainHandler.post { startAutoLike() }
                 }
             }
-            uiScanner.scan(root)
+            // Bot đang chạy: vòng autoLikeLoop tự scan + settle sau cuộn — tránh scan sớm khi lazy-load.
+            if (!isRunning) {
+                uiScanner.scan(root)
+            }
         } else {
             if (isZaloForeground) {
                 logger.log(LogTag.STATE, "pkg=$pkg", "BACKGROUND_POLL")
@@ -218,22 +341,28 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Lấy [rootInActiveWindow] với vài lần thử; không nuốt lỗi — luôn log từng bước.
+     * Lấy [rootInActiveWindow] với vài lần thử.
+     * @param quietLog khi true (vòng bot): bớt log từng attempt — chỉ ROOT_GIVEUP.
      */
     private suspend fun acquireRootOrNull(
         maxAttempts: Int = ROOT_RETRY_DEFAULT,
         delayRangeMs: LongRange = 100L..300L,
-        logTag: LogTag = LogTag.POLL
+        logTag: LogTag = LogTag.POLL,
+        quietLog: Boolean = false
     ): AccessibilityNodeInfo? {
         repeat(maxAttempts) { attempt ->
             val root = rootInActiveWindow
             if (root != null) {
                 val pkg = root.packageName?.toString() ?: ""
                 logger.setForegroundPackage(pkg)
-                logger.log(logTag, "attempt=${attempt + 1}/$maxAttempts pkg=$pkg", "ROOT_OK")
+                if (!quietLog) {
+                    logger.log(logTag, "attempt=${attempt + 1}/$maxAttempts pkg=$pkg", "ROOT_OK")
+                }
                 return root
             }
-            logger.log(logTag, "attempt=${attempt + 1}/$maxAttempts", "ROOT_NULL_RETRY")
+            if (!quietLog) {
+                logger.log(logTag, "attempt=${attempt + 1}/$maxAttempts", "ROOT_NULL_RETRY")
+            }
             if (attempt < maxAttempts - 1) {
                 delay(delayRangeMs.random())
             }
@@ -261,16 +390,22 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         val label = eventTypeLabel(event.eventType)
         val className = event.className?.toString() ?: ""
 
+        val eventLogThrottleMs =
+            if (isRunning) BOT_EVENT_LOG_THROTTLE_MS else CONTENT_EVENT_LOG_THROTTLE_MS
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 val now = System.currentTimeMillis()
-                if (now - lastContentEventLogMs > CONTENT_EVENT_LOG_THROTTLE_MS) {
+                if (now - lastContentEventLogMs > eventLogThrottleMs) {
                     lastContentEventLogMs = now
                     logger.log(LogTag.EVENT_HINT, "type=$label pkg=$pkg class=$className", "CONTENT_THROTTLED")
                 }
             }
             else -> {
-                logger.log(LogTag.EVENT_HINT, "type=$label pkg=$pkg class=$className", "HINT")
+                val now = System.currentTimeMillis()
+                if (!isRunning || now - lastContentEventLogMs > BOT_EVENT_LOG_THROTTLE_MS) {
+                    if (isRunning) lastContentEventLogMs = now
+                    logger.log(LogTag.EVENT_HINT, "type=$label pkg=$pkg class=$className", "HINT")
+                }
             }
         }
 
@@ -293,6 +428,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         runCatching { unregisterReceiver(dumpUiTreeReceiver) }
             .onFailure { e -> logger.logError("unregisterDumpUiReceiver", e) }
+        runCatching { unregisterReceiver(clearDebugStateReceiver) }
+            .onFailure { e -> logger.logError("unregisterClearDebugReceiver", e) }
         super.onDestroy()
         foregroundPollJob?.cancel()
         foregroundPollJob = null
@@ -354,6 +491,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
                 isZaloForeground = true
                 logger.setForegroundPackage(pkg)
+
+                withContext(Dispatchers.IO) {
+                    logger.beginAutomationSession()
+                }
+
                 logger.log(LogTag.STATE, "pkg=$pkg", "START_CLICKED")
                 uiScanner.forceScan(root)
 
@@ -366,7 +508,10 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 processedPosts.clear()
                 lastClickedPostKey = ""
                 lastClickedPostAt = 0L
-                consecutiveEmptyScrolls = 0
+                consecutiveScrollNoProgress = 0
+                consecutiveEmptyLikeScanStreak = 0
+                initialFeedSettled = false
+                noButtonsDiagnosticDumpDone = false
 
                 val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
                 wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ZaloPilot:AutoLike")
@@ -428,7 +573,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             val settings = settingsManager.load()
 
             if (sessionLikeCount >= settings.sessionLimit) {
-                val restMs = ((settings.restMinMinutes * 60_000L)..(settings.restMaxMinutes * 60_000L)).random()
+                val restMs = pickScaled(
+                    (settings.restMinMinutes * 60_000L)..(settings.restMaxMinutes * 60_000L)
+                )
                 val restMin = restMs / 60000
                 updateStatus("😴 Nghỉ $restMin phút (đã like $sessionLikeCount bài)")
                 showToast("😴 Nghỉ $restMin phút cho tự nhiên")
@@ -439,10 +586,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 continue
             }
 
-            val root = acquireRootOrNull(
+            var root: AccessibilityNodeInfo? = acquireRootOrNull(
                 maxAttempts = 5,
                 delayRangeMs = 100L..280L,
-                logTag = LogTag.STATE
+                logTag = LogTag.STATE,
+                quietLog = true
             )
 
             if (root == null) {
@@ -453,71 +601,159 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     showToast("⚠️ Không đọc được màn hình Zalo — đang thử lại")
                     logger.log(LogTag.STATE, "root null streak", "ZALO_SLEEP")
                 }
-                delay((1_000L..2_000L).random())
+                delayEco(1_000L..2_000L)
                 continue
             }
 
             consecutiveNullCount = 0
 
-            if (!uiScanner.hasScannedRecently()) {
-                updateStatus("🔍 Đang scan giao diện Zalo...")
-                uiScanner.scan(root)
-            }
+            loopBody@ try {
+                if (!initialFeedSettled) {
+                    if (rootContainsFeedAnchor(root!!)) {
+                        delayEco(1_000L..2_000L)
+                    } else {
+                        waitForFeedLayoutRendered()
+                    }
+                    runCatching { root!!.recycle() }
+                    val refreshed = acquireRootOrNull(
+                        maxAttempts = 5,
+                        delayRangeMs = 120L..300L,
+                        logTag = LogTag.STATE,
+                        quietLog = true
+                    )
+                    if (refreshed == null) {
+                        delayEco(400L..800L)
+                        root = null
+                        return@loopBody
+                    }
+                    root = refreshed
+                    initialFeedSettled = true
+                }
 
-            val scanResult = runFeedMode(root, settings)
-            val feedMode = settingsManager.getFeedMode()
-            val interactMode = settingsManager.getInteractMode()
+                root = awaitFeedLikeScanRoot(root!!)
+                val liveRoot = root!!
 
-            when (scanResult) {
-                FeedScanResult.LIKED -> {
-                    delay((1_000L..1_800L).random())
-                    when (feedMode) {
-                        FeedMode.SCROLL -> {
-                            scrollFeedWithVerification(root)
-                        }
-                        FeedMode.MANUAL -> {
-                            // Không tự scroll — chờ sale vuốt tay
-                            updateStatus("✋ Manual mode — vuốt tay để tiếp tục")
-                            logger.log(LogTag.SCROLL, "manual mode, skip auto scroll", "MANUAL")
-                        }
-                        FeedMode.MIX -> {
-                            // 60% tự scroll, 40% chờ tay vuốt (tự nhiên hơn)
-                            if ((1..10).random() <= 6) {
-                                scrollFeedWithVerification(root)
-                            } else {
-                                updateStatus("✋ Mix mode — chờ vuốt tay...")
-                                logger.log(LogTag.SCROLL, "mix mode, skip this scroll", "MIX_SKIP")
-                                delay((800L..1_500L).random())
+                if (!uiScanner.hasScannedRecently()) {
+                    updateStatus("🔍 Đang scan giao diện Zalo...")
+                    uiScanner.scan(liveRoot)
+                }
+
+                val scrollProf = gestureProfileForStreak()
+                val scanResult = runFeedMode(liveRoot, settings)
+                val feedMode = settingsManager.getFeedMode()
+                val interactMode = settingsManager.getInteractMode()
+
+                when (scanResult) {
+                    FeedScanResult.LIKED -> {
+                        consecutiveEmptyLikeScanStreak = 0
+                        delayEco(1_000L..1_800L)
+                        var feedMoved = true
+                        var didAutoScroll = false
+                        when (feedMode) {
+                            FeedMode.SCROLL -> {
+                                feedMoved = scrollFeedWithVerification(liveRoot, scrollProf)
+                                didAutoScroll = true
+                            }
+                            FeedMode.MANUAL -> {
+                                updateStatus("✋ Manual mode — vuốt tay để tiếp tục")
+                                logger.log(LogTag.SCROLL, "manual mode, skip auto scroll", "MANUAL")
+                            }
+                            FeedMode.MIX -> {
+                                if ((1..10).random() <= 6) {
+                                    feedMoved = scrollFeedWithVerification(liveRoot, scrollProf)
+                                    didAutoScroll = true
+                                } else {
+                                    updateStatus("✋ Mix mode — chờ vuốt tay...")
+                                    logger.log(LogTag.SCROLL, "mix mode, skip this scroll", "MIX_SKIP")
+                                    delayEco(800L..1_500L)
+                                }
                             }
                         }
+                        processedPosts.clear()
+                        if (!feedMoved) {
+                            consecutiveScrollNoProgress++
+                            logger.log(
+                                LogTag.SCROLL,
+                                "consecutiveNoProgress=$consecutiveScrollNoProgress",
+                                "AFTER_LIKED"
+                            )
+                            if (consecutiveScrollNoProgress >= FEED_END_STOP_STREAK) {
+                                showToast("✅ Đã đến cuối feed — dừng tự động")
+                                logger.log(LogTag.STATE, "autoLike", "STOP_END_FEED_NO_SCROLL")
+                                stopAutoLike()
+                                return
+                            }
+                        } else {
+                            consecutiveScrollNoProgress = 0
+                        }
+                        if (didAutoScroll) {
+                            delayFeedSettleAfterScroll()
+                        } else {
+                            delayEco(400L..1_000L)
+                        }
+                        val dMin = if (settingsManager.isEcoMode()) {
+                            (settings.delayMinMs * 3L + 1L) / 2L
+                        } else settings.delayMinMs
+                        val dMax = if (settingsManager.isEcoMode()) {
+                            (settings.delayMaxMs * 3L + 1L) / 2L
+                        } else settings.delayMaxMs
+                        randomDelay(dMin, dMax)
+                        logger.log(LogTag.STATE, "feedMode=$feedMode interactMode=$interactMode", "LOOP_PARAMS")
                     }
-                    processedPosts.clear()
-                    consecutiveEmptyScrolls = 0
-                    delay((400L..1_000L).random())
-                    randomDelay(settings.delayMinMs, settings.delayMaxMs)
-                    logger.log(LogTag.STATE, "feedMode=$feedMode interactMode=$interactMode", "LOOP_PARAMS")
-                }
-                FeedScanResult.ALL_SKIPPED -> {
-                    logger.log(LogTag.SCROLL, "all skipped, fast scroll feedMode=$feedMode", "ALL_SKIPPED")
-                    updateStatus("⏩ Bài đã like — cuộn tiếp...")
-                    // ALL_SKIPPED luôn tự scroll bất kể FeedMode — không lý do gì chờ tay
-                    // khi đang cuộn qua bài đã like
-                    scrollFeedWithVerification(root)
-                    processedPosts.clear()
-                    delay((300L..600L).random())
-                }
-                FeedScanResult.NO_BUTTONS -> {
-                    scrollFeedWithVerification(root)
-                    processedPosts.clear()
-                    consecutiveEmptyScrolls++
-                    logger.log(LogTag.SCROLL, "consecutiveEmpty=$consecutiveEmptyScrolls", "NO_BUTTONS")
-                    if (consecutiveEmptyScrolls >= 5) {
-                        showToast("✅ Đã hết feed — dừng tự động")
-                        stopAutoLike()
-                        return
+                    FeedScanResult.ALL_SKIPPED -> {
+                        consecutiveEmptyLikeScanStreak = 0
+                        logger.log(LogTag.SCROLL, "all skipped, fast scroll feedMode=$feedMode", "ALL_SKIPPED")
+                        updateStatus("⏩ Bài đã like — cuộn tiếp...")
+                        val feedMoved = scrollFeedWithVerification(liveRoot, scrollProf)
+                        processedPosts.clear()
+                        if (!feedMoved) {
+                            consecutiveScrollNoProgress++
+                            logger.log(
+                                LogTag.SCROLL,
+                                "consecutiveNoProgress=$consecutiveScrollNoProgress",
+                                "ALL_SKIPPED"
+                            )
+                            if (consecutiveScrollNoProgress >= FEED_END_STOP_STREAK) {
+                                showToast("✅ Đã đến cuối feed — dừng tự động")
+                                logger.log(LogTag.STATE, "autoLike", "STOP_END_FEED_NO_SCROLL")
+                                stopAutoLike()
+                                return
+                            }
+                        } else {
+                            consecutiveScrollNoProgress = 0
+                        }
+                        delayFeedSettleAfterScroll()
                     }
-                    delay((400L..900L).random())
+                    FeedScanResult.NO_BUTTONS -> {
+                        updateStatus("🔍 Chưa thấy nút Thích — cuộn nhẹ, sẽ quét lại...")
+                        var feedMoved = scrollFeedWithVerification(liveRoot, scrollProf)
+                        if (!feedMoved) {
+                            delayEco(240L..420L)
+                            feedMoved = scrollDownByGesture(GestureScrollProfile.SMALL)
+                            delay(ecoVerifyMs(450L))
+                        }
+                        processedPosts.clear()
+                        if (!feedMoved) {
+                            consecutiveEmptyLikeScanStreak++
+                            logger.log(
+                                LogTag.SCROLL,
+                                "emptyLikeStreak=$consecutiveEmptyLikeScanStreak",
+                                "NO_BUTTONS_NO_SCROLL"
+                            )
+                            if (consecutiveEmptyLikeScanStreak >= NO_BUTTONS_END_STOP_STREAK) {
+                                showToast("✅ Không còn nội dung mới — dừng tự động")
+                                logger.log(LogTag.STATE, "autoLike", "STOP_END_FEED_NO_NEW_CONTENT")
+                                stopAutoLike()
+                                return
+                            }
+                        } else {
+                            consecutiveEmptyLikeScanStreak = 0
+                        }
+                        delayFeedSettleAfterScroll()
+                    }
                 }
+            } finally {
+                runCatching { root?.recycle() }
             }
         }
     }
@@ -533,123 +769,157 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         root: AccessibilityNodeInfo,
         @Suppress("UNUSED_PARAMETER") settings: LikeSettings
     ): FeedScanResult {
-        val likeNodes = nodeFinder.findLikeButtons(root)
-
-        if (likeNodes.isEmpty()) {
-            updateDebugNodeHighlights(emptyList(), null)
-            updateStatus("🔍 Không thấy nút Thích trên màn hình này")
-            logger.log(LogTag.SCAN, "feed like buttons", "EMPTY")
-            val now = System.currentTimeMillis()
-            if (now - lastDebugDumpMs > 30_000) {
-                lastDebugDumpMs = now
-                nodeFinder.debugDump(root, maxNodes = 500)
-            }
-            return FeedScanResult.NO_BUTTONS
-        }
-
-        updateDebugNodeHighlights(likeNodes, null)
-        var anyEligible = false  // có node nào vượt qua shouldLike không
-
-        for (node in likeNodes) {
-            if (!isRunning) break
-            if (!nodeFinder.shouldLike(node)) {
-                logger.log(LogTag.STATE, "Đã like / không hợp lệ — ${boundsSummary(node)}", "SKIP_SHOULD_LIKE")
-                continue
-            }
-
-            anyEligible = true
-
-            val author = nodeFinder.getAuthorName(node)
-            if (author != null && likedAuthorsThisSession.contains(author)) {
-                logger.log(LogTag.STATE, author, "SKIP_AUTHOR_ALREADY_LIKED")
-                continue
+        var scanRoot = root
+        var acquiredExtra: AccessibilityNodeInfo? = null
+        try {
+            var likeNodes: List<AccessibilityNodeInfo> = emptyList()
+            repeat(4) { attempt ->
+                likeNodes = nodeFinder.findLikeButtons(scanRoot)
+                if (likeNodes.isNotEmpty()) return@repeat
+                if (attempt < 3) {
+                    delayEco(500L..900L)
+                    val next = acquireRootOrNull(
+                        4,
+                        80L..240L,
+                        LogTag.SCAN,
+                        quietLog = true
+                    )
+                    if (next != null) {
+                        acquiredExtra?.recycle()
+                        acquiredExtra = next
+                        scanRoot = next
+                    }
+                }
             }
 
-            val postKey = makePostKey(node)
-            val rect = Rect()
-            node.getBoundsInScreen(rect)
-
-            if (postKey in processedPosts) {
-                logger.log(LogTag.STATE, postKey, "SKIP_ALREADY_PROCESSED")
-                continue
+            if (likeNodes.isEmpty()) {
+                updateDebugNodeHighlights(emptyList(), null)
+                updateStatus("🔍 Không thấy nút Thích trên màn hình này")
+                logger.log(LogTag.SCAN, "feed like buttons", "EMPTY_AFTER_RETRY")
+                when {
+                    debugHighlightPrefs.isVerboseUiTreeLoggingEnabled() ->
+                        nodeFinder.debugDump(scanRoot, maxNodes = 400)
+                    !noButtonsDiagnosticDumpDone -> {
+                        noButtonsDiagnosticDumpDone = true
+                        logger.log(LogTag.SCAN, "scan_fail", "ONE_SHOT_DIAGNOSTIC_DUMP")
+                        nodeFinder.debugDump(scanRoot, maxNodes = 220)
+                    }
+                }
+                return FeedScanResult.NO_BUTTONS
             }
-
-            val nowMs = System.currentTimeMillis()
-            if (postKey == lastClickedPostKey && nowMs - lastClickedPostAt < POST_CLICK_COOLDOWN_MS) {
-                logger.log(
-                    LogTag.STATE,
-                    "postKey=$postKey deltaMs=${nowMs - lastClickedPostAt}",
-                    "SKIP_COOLDOWN"
-                )
-                continue
-            }
-
-            logAutoBeforeClick(postKey, node, rect)
-
-            updateStatus("👍 Đang like bài của ${author ?: "..."}...")
-            delay((200L..500L).random())
-
-            updateDebugNodeHighlights(likeNodes, node)
-
-            val clicked = performLikeClickWithFallbacks(node)
 
             updateDebugNodeHighlights(likeNodes, null)
 
-            if (clicked) {
-                // Đợi Zalo animate "Thích" → "Đã thích" xong (~300–800ms thực tế).
-                // Không delay đủ → scan ngay lại thấy vẫn "Thích" → click lại → unlike.
-                delay(900L)
+            var skippedShouldLike = 0
+            for (node in likeNodes) {
+                if (!isRunning) break
+                if (!nodeFinder.shouldLike(node)) {
+                    skippedShouldLike++
+                    continue
+                }
 
-                // Verify: dùng [NodeFinder.isAlreadyLiked] (text, children, checked, reaction_info).
-                val confirmedLiked = nodeFinder.isAlreadyLiked(node)
+                val author = nodeFinder.getAuthorName(node)
+                if (author != null && likedAuthorsThisSession.contains(author)) {
+                    logger.log(LogTag.STATE, author, "SKIP_AUTHOR_ALREADY_LIKED")
+                    continue
+                }
 
-                if (!confirmedLiked) {
-                    // Vẫn chưa chắc — thêm 600ms nữa rồi kiểm tra lần cuối
-                    delay(600L)
-                    val confirmedLiked2 = nodeFinder.isAlreadyLiked(node)
-                    if (!confirmedLiked2) {
-                        // Node không đổi trạng thái — ghi log nghi ngờ, vẫn đếm
-                        // (có thể Zalo dùng icon thay text, không đọc được qua text)
-                        logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_UNCONFIRMED")
+                val postKey = makePostKey(node)
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+
+                if (postKey in processedPosts) {
+                    logger.log(LogTag.STATE, postKey, "SKIP_ALREADY_PROCESSED")
+                    continue
+                }
+
+                val nowMs = System.currentTimeMillis()
+                if (postKey == lastClickedPostKey && nowMs - lastClickedPostAt < POST_CLICK_COOLDOWN_MS) {
+                    logger.log(
+                        LogTag.STATE,
+                        "postKey=$postKey deltaMs=${nowMs - lastClickedPostAt}",
+                        "SKIP_COOLDOWN"
+                    )
+                    continue
+                }
+
+                logAutoBeforeClick(postKey, node, rect)
+
+                updateStatus("👍 Đang like bài của ${author ?: "..."}...")
+                delayEco(200L..500L)
+
+                updateDebugNodeHighlights(likeNodes, node)
+
+                var microRoot: AccessibilityNodeInfo? =
+                    acquireRootOrNull(3, 80L..200L, LogTag.SCAN, quietLog = true)
+                val nodeForClick = microRoot?.let { nodeFinder.reResolveLikeNodeForClick(it, node) }
+                    ?: nodeFinder.reResolveLikeNodeForClick(scanRoot, node)
+                    ?: node
+                if (nodeForClick !== node) {
+                    logger.log(LogTag.STATE, boundsSummary(nodeForClick), "RE_RESOLVED_BEFORE_CLICK")
+                }
+                try {
+                    val clicked = performLikeClickWithFallbacks(nodeForClick)
+
+                    updateDebugNodeHighlights(likeNodes, null)
+
+                    if (clicked) {
+                        // Đợi Zalo animate "Thích" → "Đã thích" xong (~300–800ms thực tế).
+                        delay(ecoVerifyMs(900L))
+
+                        val confirmedLiked = nodeFinder.isAlreadyLiked(nodeForClick)
+
+                        if (!confirmedLiked) {
+                            delay(ecoVerifyMs(600L))
+                            val confirmedLiked2 = nodeFinder.isAlreadyLiked(nodeForClick)
+                            if (!confirmedLiked2) {
+                                logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_UNCONFIRMED")
+                            }
+                        }
+
+                        processedPosts.add(postKey)
+                        clickedPositionsThisSession.add("${rect.left}_${rect.top}")
+                        lastClickedPostKey = postKey
+                        lastClickedPostAt = System.currentTimeMillis()
+                        logger.log(
+                            LogTag.STATE,
+                            "postKey=$postKey processed=${processedPosts.size}",
+                            "PROCESSED_ADD"
+                        )
+                        Log.d("AUTO", "PROCESSED_ADD postKey=$postKey cooldownSet lastClick=$lastClickedPostAt")
+
+                        val progress = progressManager.incrementAndSave()
+                        sessionLikeCount++
+                        if (author != null) likedAuthorsThisSession.add(author)
+                        logger.log(LogTag.CLICK, author ?: "unknown", "SUCCESS")
+                        updateStatus("✅ Like #${progress.todayLikeCount} — ${author ?: "unknown"}")
+                        sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
+
+                        if (progressManager.isLimitReached()) {
+                            logger.log(LogTag.STATE, "autoLike", "DAILY_LIMIT_REACHED")
+                            stopAutoLike()
+                            return FeedScanResult.LIKED
+                        }
+                        return FeedScanResult.LIKED
+                    }
+
+                    updateStatus("❌ Click thất bại — thử bài khác")
+                    logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_FAILED:${boundsSummary(nodeForClick)}")
+                } finally {
+                    if (microRoot != null && microRoot !== scanRoot) {
+                        runCatching { microRoot.recycle() }
                     }
                 }
-
-                processedPosts.add(postKey)
-                clickedPositionsThisSession.add("${rect.left}_${rect.top}")
-                lastClickedPostKey = postKey
-                lastClickedPostAt = System.currentTimeMillis()
-                logger.log(
-                    LogTag.STATE,
-                    "postKey=$postKey processed=${processedPosts.size}",
-                    "PROCESSED_ADD"
-                )
-                Log.d("AUTO", "PROCESSED_ADD postKey=$postKey cooldownSet lastClick=$lastClickedPostAt")
-
-                val progress = progressManager.incrementAndSave()
-                sessionLikeCount++
-                if (author != null) likedAuthorsThisSession.add(author)
-                logger.log(LogTag.CLICK, author ?: "unknown", "SUCCESS")
-                updateStatus("✅ Like #${progress.todayLikeCount} — ${author ?: "unknown"}")
-                sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
-
-                if (progressManager.isLimitReached()) {
-                    logger.log(LogTag.STATE, "autoLike", "DAILY_LIMIT_REACHED")
-                    stopAutoLike()
-                    return FeedScanResult.LIKED
-                }
-                return FeedScanResult.LIKED
             }
 
-            updateStatus("❌ Click thất bại — thử bài khác")
-            logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_FAILED:${boundsSummary(node)}")
-        }
+            if (skippedShouldLike > 0) {
+                logger.log(LogTag.STATE, "count=$skippedShouldLike", "SKIP_SHOULD_LIKE_BATCH")
+            }
 
-        // Có nút Thích nhưng tất cả đều đã like → scroll nhanh
-        return if (anyEligible) FeedScanResult.LIKED.also {
-            // anyEligible = true nhưng không like được bài nào (tất cả skip)
-            // → dùng ALL_SKIPPED để loop xử lý đúng
-        }.let { FeedScanResult.ALL_SKIPPED }
-        else FeedScanResult.ALL_SKIPPED
+            return FeedScanResult.ALL_SKIPPED
+        } finally {
+            acquiredExtra?.recycle()
+        }
     }
 
     private fun makePostKey(likeNode: AccessibilityNodeInfo): String {
@@ -681,56 +951,115 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         logger.log(LogTag.STATE, "POST_KEY=$postKey BOUNDS=$rect", "BEFORE_CLICK")
     }
 
+    /** Neo layout feed (Zalo cố định package) — chờ render trước khi scan bài. */
+    private fun rootContainsFeedAnchor(root: AccessibilityNodeInfo): Boolean {
+        for (id in ZaloIDStore.FEED_LAYOUT_ANCHOR_IDS) {
+            val nodes = root.findAccessibilityNodeInfosByViewId(id)
+            val hit = !nodes.isNullOrEmpty()
+            nodes?.forEach { runCatching { it.recycle() } }
+            if (hit) return true
+        }
+        return false
+    }
+
+    /** Chờ [layoutSocialFeed] / [lv_media_store] + delay settle; timeout vẫn tiếp tục automation. */
+    private suspend fun waitForFeedLayoutRendered() {
+        val deadline = System.currentTimeMillis() + 14_000L
+        while (isRunning && System.currentTimeMillis() < deadline) {
+            val probe = acquireRootOrNull(4, 60L..200L, LogTag.STATE, quietLog = true) ?: run {
+                delay(320)
+                continue
+            }
+            try {
+                if (rootContainsFeedAnchor(probe)) {
+                    logger.log(LogTag.STATE, "feed", "ANCHOR_VISIBLE")
+                    delayEco(1_000L..2_000L)
+                    return
+                }
+            } finally {
+                probe.recycle()
+            }
+            delayEco(280L..520L)
+        }
+        logger.log(LogTag.STATE, "feed anchor", "TIMEOUT_CONTINUE_ANYWAY")
+    }
+
     /** Top nhỏ nhất của nút Thích đang thấy — proxy để biết feed có cuộn không. */
     private fun measureFeedAnchorTop(root: AccessibilityNodeInfo): Int? {
         val nodes = nodeFinder.findLikeButtons(root)
         if (nodes.isEmpty()) return null
         var minTop = Int.MAX_VALUE
         for (n in nodes) {
+            if (!n.hasValidScreenBounds()) continue
             val r = Rect()
             n.getBoundsInScreen(r)
-            if (!r.isEmpty) minTop = minOf(minTop, r.top)
+            minTop = minOf(minTop, r.top)
         }
         return if (minTop == Int.MAX_VALUE) null else minTop
     }
 
-    private suspend fun scrollFeedWithVerification(rootBeforeScroll: AccessibilityNodeInfo) {
-        val beforeTop = measureFeedAnchorTop(rootBeforeScroll)
-        val recyclerOk = tryScrollFeedRecycler(rootBeforeScroll)
-        val gestureOk = if (!recyclerOk) scrollDownByGesture() else false
-        logger.log(
-            LogTag.SCROLL,
-            "beforeTop=$beforeTop recycler=$recyclerOk gestureFallback=$gestureOk",
-            "DISPATCHED"
-        )
-        delay(1_200)
-        var rootAfter = acquireRootOrNull(
-            maxAttempts = 4,
-            delayRangeMs = 80L..220L,
-            logTag = LogTag.SCROLL
-        )
-        var afterTop = rootAfter?.let { measureFeedAnchorTop(it) }
-        if (beforeTop != null && afterTop != null && beforeTop == afterTop) {
-            logger.log(LogTag.SCROLL, "pass1 no movement", "SCROLL_RETRY")
-            val rootRetry = acquireRootOrNull(3, 80L..200L, LogTag.SCROLL)
-            val retryRecycler = rootRetry?.let { tryScrollFeedRecycler(it) } ?: false
-            val retryGesture = if (!retryRecycler) scrollDownByGesture() else false
+    /**
+     * @return `true` khi có bằng chứng cuộn (anchor nút Thích đổi, hoặc chưa có anchor nhưng scroll/gesture thành công).
+     */
+    private suspend fun scrollFeedWithVerification(
+        rootBeforeScroll: AccessibilityNodeInfo,
+        gestureProfile: GestureScrollProfile = GestureScrollProfile.NORMAL
+    ): Boolean {
+        var rootAfter: AccessibilityNodeInfo? = null
+        var rootRetry: AccessibilityNodeInfo? = null
+        return try {
+            val beforeTop = measureFeedAnchorTop(rootBeforeScroll)
+            val recyclerOk = tryScrollFeedRecycler(rootBeforeScroll)
+            val gestureOk = if (!recyclerOk) scrollDownByGesture(gestureProfile) else false
+            var scrollAttemptSucceeded = recyclerOk || gestureOk
             logger.log(
                 LogTag.SCROLL,
-                "retry recycler=$retryRecycler gesture=$retryGesture",
+                "beforeTop=$beforeTop recycler=$recyclerOk gesture=$gestureProfile gestureOk=$gestureOk",
                 "DISPATCHED"
             )
-            delay(1_000)
-            rootAfter = acquireRootOrNull(4, 80L..220L, LogTag.SCROLL)
-            afterTop = rootAfter?.let { measureFeedAnchorTop(it) }
-        }
-        when {
-            beforeTop == null || afterTop == null ->
-                logger.log(LogTag.SCROLL, "beforeTop=$beforeTop afterTop=$afterTop", "SCROLL_VERIFY_UNKNOWN")
-            beforeTop == afterTop ->
-                logger.log(LogTag.SCROLL, "beforeTop=$beforeTop afterTop=$afterTop", "SCROLL_FAILED")
-            else ->
-                logger.log(LogTag.SCROLL, "beforeTop=$beforeTop afterTop=$afterTop", "SCROLL_SUCCESS")
+            delay(ecoVerifyMs(1_200L))
+            rootAfter = acquireRootOrNull(
+                maxAttempts = 4,
+                delayRangeMs = 80L..220L,
+                logTag = LogTag.SCROLL,
+                quietLog = isRunning
+            )
+            var afterTop = rootAfter?.let { measureFeedAnchorTop(it) }
+            if (beforeTop != null && afterTop != null && beforeTop == afterTop) {
+                logger.log(LogTag.SCROLL, "pass1 no movement", "SCROLL_RETRY")
+                rootRetry = acquireRootOrNull(3, 80L..200L, LogTag.SCROLL, quietLog = isRunning)
+                val retryRecycler = rootRetry?.let { tryScrollFeedRecycler(it) } ?: false
+                val retryProfile = if (gestureProfile == GestureScrollProfile.SMALL) {
+                    GestureScrollProfile.NORMAL
+                } else {
+                    GestureScrollProfile.LARGE
+                }
+                val retryGesture = if (!retryRecycler) scrollDownByGesture(retryProfile) else false
+                scrollAttemptSucceeded = scrollAttemptSucceeded || retryRecycler || retryGesture
+                logger.log(
+                    LogTag.SCROLL,
+                    "retry recycler=$retryRecycler gesture=$retryGesture",
+                    "DISPATCHED"
+                )
+                delay(ecoVerifyMs(1_000L))
+                runCatching { rootAfter?.recycle() }
+                rootAfter = acquireRootOrNull(4, 80L..220L, LogTag.SCROLL, quietLog = isRunning)
+                afterTop = rootAfter?.let { measureFeedAnchorTop(it) }
+            }
+            val anchorMoved = beforeTop != null && afterTop != null && beforeTop != afterTop
+            when {
+                anchorMoved ->
+                    logger.log(LogTag.SCROLL, "beforeTop=$beforeTop afterTop=$afterTop", "SCROLL_SUCCESS")
+                beforeTop != null && afterTop != null && beforeTop == afterTop ->
+                    logger.log(LogTag.SCROLL, "beforeTop=$beforeTop afterTop=$afterTop", "SCROLL_FAILED")
+                else ->
+                    logger.log(LogTag.SCROLL, "beforeTop=$beforeTop afterTop=$afterTop", "SCROLL_VERIFY_PARTIAL")
+            }
+            anchorMoved ||
+                (!anchorMoved && (beforeTop == null || afterTop == null) && scrollAttemptSucceeded)
+        } finally {
+            runCatching { rootRetry?.recycle() }
+            runCatching { rootAfter?.recycle() }
         }
     }
 
@@ -835,6 +1164,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
      * [dumpResult] is written to log JSON `result` (e.g. PRE_LIKE_DUMP / POST_LIKE_DUMP).
      */
     private fun logLikeButtonContextDump(btnLike: AccessibilityNodeInfo, dumpResult: String) {
+        if (!debugHighlightPrefs.isVerboseLikeContextLoggingEnabled()) return
         val seen = HashSet<Int>()
         fun logOne(n: AccessibilityNodeInfo) {
             if (!seen.add(System.identityHashCode(n))) return
@@ -845,7 +1175,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             val id = n.viewIdResourceName ?: ""
             val line =
                 "text=\"$text\" contentDescription=\"$desc\" viewIdResourceName=\"$id\" " +
-                    "isChecked=${n.isChecked} bounds=[${r.left},${r.top},${r.right},${r.bottom}]"
+                    "isChecked=${n.isChecked} isSelected=${n.isSelected} bounds=[${r.left},${r.top},${r.right},${r.bottom}]"
             logger.log(LogTag.SCAN, line, dumpResult)
         }
         fun dfsSubtree(n: AccessibilityNodeInfo) {
@@ -871,6 +1201,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             try {
                 if (isOverlayShowing) {
                     updateStatus(msg)
+                    applyKeepScreenOnToStatusOverlayIfNeeded()
                     return@post
                 }
                 val wm = windowManager ?: run {
@@ -878,11 +1209,15 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     return@post
                 }
 
+                val overlayFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    if (isRunning) WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON else 0
+
                 val params = WindowManager.LayoutParams(
                     WindowManager.LayoutParams.WRAP_CONTENT,
                     WindowManager.LayoutParams.WRAP_CONTENT,
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                    overlayFlags,
                     PixelFormat.TRANSLUCENT
                 ).apply {
                     gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
@@ -893,6 +1228,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     orientation = LinearLayout.VERTICAL
                     setPadding(24, 12, 24, 12)
                     setBackgroundColor(Color.parseColor("#CC000000"))
+                    keepScreenOn = isRunning
                 }
 
                 val tv = TextView(this).apply {
@@ -913,6 +1249,24 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** Khi bot chạy: giữ màn hình không tắt (đọc accessibility cần màn hình thường vẫn bật). */
+    private fun applyKeepScreenOnToStatusOverlayIfNeeded() {
+        if (!isRunning) return
+        try {
+            val wm = windowManager ?: return
+            val v = statusView ?: return
+            val lp = v.layoutParams as? WindowManager.LayoutParams ?: return
+            val want = lp.flags or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            if (lp.flags != want) {
+                lp.flags = want
+                wm.updateViewLayout(v, lp)
+            }
+            v.keepScreenOn = true
+        } catch (e: Exception) {
+            logger.logError("applyKeepScreenOnToStatusOverlayIfNeeded", e)
+        }
+    }
+
     private fun updateStatus(msg: String) {
         mainHandler.post {
             if (!isOverlayShowing) {
@@ -920,6 +1274,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 return@post
             }
             statusText?.text = msg
+            applyKeepScreenOnToStatusOverlayIfNeeded()
         }
     }
 
@@ -1013,17 +1368,25 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
      * Vuốt lên (nội dung feed xuống) — fallback khi API scroll không dùng được;
      * có callback để biết gesture bị reject/cancel hay hoàn tất.
      */
-    private suspend fun scrollDownByGesture(): Boolean {
+    private suspend fun scrollDownByGesture(
+        profile: GestureScrollProfile = GestureScrollProfile.NORMAL
+    ): Boolean {
         val metrics = resources.displayMetrics
         val fromX = metrics.widthPixels / 2f
-        val fromY = metrics.heightPixels * 0.75f
-        val toY = metrics.heightPixels * 0.25f
+        val h = metrics.heightPixels.toFloat()
+        val (fromYFrac, toYFrac, durationMs) = when (profile) {
+            GestureScrollProfile.SMALL -> Triple(0.62f, 0.48f, 360L)
+            GestureScrollProfile.NORMAL -> Triple(0.74f, 0.28f, 480L)
+            GestureScrollProfile.LARGE -> Triple(0.86f, 0.13f, 720L)
+        }
+        val fromY = h * fromYFrac
+        val toY = h * toYFrac
         val path = Path().apply {
             moveTo(fromX, fromY)
             lineTo(fromX, toY)
         }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 500))
+            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
             .build()
         return withTimeoutOrNull(1_800L) {
             suspendCancellableCoroutine { cont ->

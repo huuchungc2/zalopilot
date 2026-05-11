@@ -30,6 +30,15 @@ class ZaloIDStore @Inject constructor(
         const val TEXT_LIKED = "Đã thích"
         const val TEXT_TIMELINE = "Nhật ký"
         const val CLASS_RECYCLER = "androidx.recyclerview.widget.RecyclerView"
+
+        /**
+         * Neo layout feed cố định theo package Zalo — chỉ để biết feed đã render,
+         * không dùng làm ID học động cho nút like.
+         */
+        val FEED_LAYOUT_ANCHOR_IDS = listOf(
+            "com.zing.zalo:id/layoutSocialFeed",
+            "com.zing.zalo:id/lv_media_store"
+        )
     }
 
     fun getID(key: String): String? = prefs.getString(key, null)

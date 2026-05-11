@@ -35,10 +35,13 @@
 - [ ] Xử lý trường hợp Zalo đang ở sai tab → tự navigate sang tab Nhật ký
 
 ### Ổn định
+- [x] Giữ màn hình khi bot chạy — `FLAG_KEEP_SCREEN_ON` trên status overlay
+- [x] Chế độ Eco — poll/scan/delay chậm hơn, màn tắt nới ngưỡng root null
 - [x] `isAlreadyLiked` — reaction_info qua id+bounds (không `===` sibling), quét cây con parent
 - [x] Cuộn feed — `ACTION_SCROLL_FORWARD` trên RecyclerView đã học + fallback vuốt có callback
 - [x] Retry khi click fail — gesture fallback sau ACTION_CLICK (đã có trong service)
-- [ ] Detect khi bot bị stuck (scroll nhưng không có nút Thích mãi) → dừng báo lỗi
+- [x] Cuối feed / cuộn không đổi — `consecutiveScrollNoProgress` + dừng sau 5 (ALL_SKIPPED & cảnh báo LIKE)
+- [x] Dừng khi không thấy nút Thích lặp lại (`NO_BUTTONS` × 5 — có sẵn)
 - [ ] Handle trường hợp Zalo hiện popup quảng cáo / dialog → tự đóng
 
 ---

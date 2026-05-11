@@ -12,6 +12,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Collections
 import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
@@ -23,6 +24,14 @@ class Logger @Inject constructor(
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
+
+    /** Log dòng JSON của phiên automation hiện tại (từ [beginAutomationSession] tới lần bắt đầu kế tiếp hoặc [clearDebugArtifacts]). */
+    private val sessionLogLines = Collections.synchronizedList(ArrayList<String>(256))
+    private val sessionLock = Any()
+
+    @Volatile
+    var sessionLoggingActive: Boolean = false
+        private set
 
     @Volatile
     var lastForegroundPackage: String = ""
@@ -39,6 +48,48 @@ class Logger @Inject constructor(
     val uiTreeFile: File by lazy { File(dir, "uitree.json") }
 
     /**
+     * Xóa buffer phiên, xoá file log/UI tạm — dùng nút Clear Logs / trước khi export sạch.
+     */
+    fun clearDebugArtifacts() {
+        synchronized(sessionLock) {
+            sessionLogLines.clear()
+            sessionLoggingActive = false
+        }
+        scope.launch {
+            runCatching {
+                if (logFile.exists()) logFile.delete()
+                if (uiTreeFile.exists()) uiTreeFile.delete()
+            }.onFailure { e -> Log.e("ZaloPilot", "clearDebugArtifacts", e) }
+        }
+    }
+
+    /**
+     * Bắt đầu phiên automation mới: xóa log trong RAM, truncate file log trên disk,
+     * các dòng log tiếp theo thuộc phiên này (UI + Lưu log chỉ xem phiên).
+     * Gọi từ [Dispatchers.IO] để không chặn main thread.
+     */
+    fun beginAutomationSession() {
+        synchronized(sessionLock) {
+            sessionLogLines.clear()
+            sessionLoggingActive = true
+        }
+        runCatching {
+            logFile.parentFile?.mkdirs()
+            logFile.writeText("")
+        }.onFailure { e ->
+            Log.e("ZaloPilot", "beginAutomationSession truncate", e)
+        }
+    }
+
+    /** Nội dịnh phiên để export / copy (JSON lines). */
+    fun getSessionLogText(): String {
+        val lines = synchronized(sessionLock) {
+            sessionLogLines.toList()
+        }
+        return lines.joinToString("")
+    }
+
+    /**
      * Ghi log có cấu trúc: [tag], [target], [result], tự đính kèm [pkg] foreground hiện tại, tùy chọn [ms].
      */
     fun log(
@@ -49,6 +100,7 @@ class Logger @Inject constructor(
     ) {
         val pkgSnapshot = lastForegroundPackage
         val line = buildJson(tag, target, result, pkgSnapshot, durationMs)
+        appendSessionLineIfActive(line)
         scope.launch {
             writeLine(line)
         }
@@ -63,13 +115,34 @@ class Logger @Inject constructor(
         Log.e("ZaloPilot", "[$source] $msg", throwable)
         val pkgSnapshot = lastForegroundPackage
         val line = buildJson(LogTag.ERROR, source, "$msg | $stack", pkgSnapshot, null)
+        appendSessionLineIfActive(line)
         scope.launch {
             writeLine(line)
         }
     }
 
+    private fun appendSessionLineIfActive(line: String) {
+        synchronized(sessionLock) {
+            if (!sessionLoggingActive) return
+            sessionLogLines.add(line)
+            trimSessionIfNeeded()
+        }
+    }
+
+    private fun trimSessionIfNeeded() {
+        val max = 8_000
+        val keep = 4_000
+        while (sessionLogLines.size > max) {
+            val drop = sessionLogLines.size - keep
+            repeat(drop.coerceAtLeast(1)) {
+                if (sessionLogLines.isNotEmpty()) sessionLogLines.removeAt(0)
+            }
+        }
+    }
+
     /** Ghi đồng bộ khi coroutine logger không dùng được (ví dụ lỗi đọc file). */
     private fun appendLineSync(line: String) {
+        appendSessionLineIfActive(line)
         try {
             logFile.appendText(line)
         } catch (e: Exception) {
@@ -107,8 +180,11 @@ class Logger @Inject constructor(
 
     fun readLogs(limit: Int = 200): List<LogEntry> {
         return try {
-            if (!logFile.exists()) return emptyList()
-            logFile.readLines()
+            val lines = synchronized(sessionLock) {
+                sessionLogLines.toList()
+            }
+            if (lines.isEmpty()) return emptyList()
+            lines
                 .filter { it.isNotBlank() }
                 .takeLast(limit)
                 .reversed()

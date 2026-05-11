@@ -29,7 +29,9 @@ data class LikeSettings(
     val quietHourEnd: Int = 6,
     val autoStart: Boolean = false,
     val likeModeStr: String = "FEED",
-    val interactModeStr: String = "MIX"  // Mặc định MIX
+    val interactModeStr: String = "MIX",  // Mặc định MIX
+    /** Giảm tần suất poll/scan và tăng delay — ít nóng, ít hao pin hơn (hơi chậm hơn). */
+    val ecoMode: Boolean = false
 )
 
 @Singleton
@@ -106,4 +108,6 @@ class LikeSettingsManager @Inject constructor(
     fun setFeedMode(mode: FeedMode) {
         prefs.edit().putString("feed_mode", mode.name).apply()
     }
+
+    fun isEcoMode(): Boolean = load().ecoMode
 }

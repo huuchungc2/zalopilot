@@ -6,10 +6,12 @@ import com.zalopilot.app.data.model.ZaloIDStore
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
 import com.zalopilot.app.util.UiNodeEntry
+import com.zalopilot.app.util.hasValidScreenBounds
 import java.util.ArrayDeque
 import java.util.LinkedHashSet
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.abs
 
 @Singleton
 class NodeFinder @Inject constructor(
@@ -32,6 +34,7 @@ class NodeFinder @Inject constructor(
 
         fun addResolved(raw: AccessibilityNodeInfo?) {
             val node = resolveClickable(raw) ?: return
+            if (!node.hasValidScreenBounds()) return
             if (isAlreadyLiked(node)) return
             val key = dedupeKey(node)
             if (key !in seen) {
@@ -96,6 +99,7 @@ class NodeFinder @Inject constructor(
         while (stack.isNotEmpty() && visited < maxNodes) {
             val node = stack.removeLast()
             visited++
+            if (!node.hasValidScreenBounds()) continue
             if (nodeMatchesLikeHint(node)) {
                 out.add(node)
             }
@@ -204,93 +208,98 @@ class NodeFinder @Inject constructor(
         return ""
     }
 
-    /** Anh/chị/em cùng cấp với parent của nút like có id chứa [reaction_info] → đã thích. */
-    private fun hasReactionInfoSiblingOfParent(likeNode: AccessibilityNodeInfo): Boolean {
-        val parent = likeNode.parent ?: return false
-        val gp = parent.parent ?: return false
-        for (i in 0 until gp.childCount) {
-            val sib = gp.getChild(i) ?: continue
-            if (sib === parent) continue
-            val id = sib.viewIdResourceName ?: ""
-            if (id.contains("reaction_info")) return true
-        }
-        return false
-    }
-
-    /** Hai node cùng một view: [===] không đủ vì snapshot khác lần có thể khác instance. */
-    private fun isSameAccessibilityView(a: AccessibilityNodeInfo, b: AccessibilityNodeInfo): Boolean {
-        if (a === b) return true
-        val ida = a.viewIdResourceName
-        val idb = b.viewIdResourceName
-        if (ida.isNullOrBlank() || idb.isNullOrBlank() || ida != idb) return false
-        val ra = Rect()
-        val rb = Rect()
-        a.getBoundsInScreen(ra)
-        b.getBoundsInScreen(rb)
-        return ra == rb
-    }
-
-    /** Tìm [reaction_info] / [my_reaction] trong cây con nông (cùng khối footer bài). */
-    private fun shallowSubtreeShowsMyReaction(root: AccessibilityNodeInfo, maxDepth: Int): Boolean {
-        val q = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
-        q.addLast(root to 0)
-        while (q.isNotEmpty()) {
-            val (n, d) = q.removeFirst()
-            if (d > maxDepth) continue
-            val id = n.viewIdResourceName ?: ""
-            if (id.contains("reaction_info") || id.contains("my_reaction")) return true
-            for (i in 0 until n.childCount) {
-                n.getChild(i)?.let { q.addLast(it to (d + 1)) }
-            }
-        }
+    /**
+     * Chỉ coi là "Đã thích của tài khoản hiện tại" khi label/state rõ ràng — không dùng
+     * khối reaction count (người khác đã like vẫn có reaction_info).
+     */
+    private fun textIndicatesCurrentUserLiked(raw: String?): Boolean {
+        if (raw.isNullOrBlank()) return false
+        val s = raw.trim()
+        if (s.contains("Đã thích", ignoreCase = true)) return true
+        if (s.contains("đã thích", ignoreCase = true)) return true
+        // Tiếng Anh: tránh "1.2K likes", "5 liked this"
+        if (s.any { it.isDigit() }) return false
+        if (s.equals("Liked", ignoreCase = true)) return true
+        if (s.startsWith("Liked", ignoreCase = true) && s.length <= 28) return true
         return false
     }
 
     /**
-     * Kiểm tra node đã ở trạng thái "Đã thích" chưa — tập trung tất cả logic tại đây.
+     * Kiểm tra node đã ở trạng thái "Đã thích" **của tài khoản hiện tại** chưa — tập trung tại đây.
      *
-     * Zalo có thể biểu thị "đã like" theo nhiều cách:
-     *   1. text hoặc contentDescription của node chứa "Đã thích"
-     *   2. Child có id "btn_like_text" chứa "Đã thích"
-     *   3. isChecked == true (một số phiên bản Zalo)
-     *   4. contentDescription chứa "liked" (bản tiếng Anh)
-     *
-     * Trả về true = đã like → bỏ qua.
+     * Chỉ dùng: label nút like / btn_like_text, [isChecked], [isSelected] — không suy từ
+     * reaction count hay presence của reaction_info (bài có like từ người khác vẫn có).
      */
     fun isAlreadyLiked(node: AccessibilityNodeInfo): Boolean {
-        fun String?.containsLiked(): Boolean {
-            if (this == null) return false
-            return contains("Đã thích", ignoreCase = true) ||
-                contains("đã thích", ignoreCase = true) ||
-                contains("liked", ignoreCase = true)
+        // 1. Zalo dùng TextView btn_like_text: "Thích" vs "Đã thích"
+        when (evaluateBtnLikeText(node)) {
+            false -> return true
+            true -> return false
+            null -> { /* tiếp tục */ }
         }
 
-        // 1. Chính node
-        if (node.text?.toString().containsLiked()) return true
-        if (node.contentDescription?.toString().containsLiked()) return true
+        // 2. Text / contentDescription rõ ràng (không match số lượng reaction)
+        if (textIndicatesCurrentUserLiked(node.text?.toString())) return true
+        if (textIndicatesCurrentUserLiked(node.contentDescription?.toString())) return true
 
-        // 2. isChecked (một số phiên bản Zalo dùng checked state)
-        if (node.isChecked) return true
+        // 3. Không dùng isChecked/isSelected ở node gốc — Zalo/RecyclerView hay gán focus/row state
+        //    gây false positive "đã thích". Chỉ tin checked/selected trên child id like (mục 4).
 
-        // 3. Duyệt children: tìm btn_like_text hoặc bất kỳ child nào có "Đã thích"
+        // 4. Children trực tiếp: chỉ id nút like (tránh text bài / reaction count)
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            if (child.text?.toString().containsLiked()) return true
-            if (child.contentDescription?.toString().containsLiked()) return true
+            val cid = child.viewIdResourceName ?: ""
+            if (!cid.contains("btn_like", ignoreCase = true) &&
+                !cid.contains("like_btn", ignoreCase = true)
+            ) {
+                continue
+            }
+            if (textIndicatesCurrentUserLiked(child.text?.toString())) return true
+            if (textIndicatesCurrentUserLiked(child.contentDescription?.toString())) return true
+            if (child.isChecked || child.isSelected) return true
         }
-
-        // 4. Cùng parent: sibling / cây con footer có reaction_info (Zalo bản mới: btn_like_text
-        // vẫn "Thích" trong snapshot nhưng đã có reaction_info — tránh click 2 → unlike).
-        val parent = node.parent ?: return false
-        for (i in 0 until parent.childCount) {
-            val sib = parent.getChild(i) ?: continue
-            if (isSameAccessibilityView(sib, node)) continue
-            val sibId = sib.viewIdResourceName ?: ""
-            if (sibId.contains("reaction_info") || sibId.contains("my_reaction")) return true
-        }
-        if (shallowSubtreeShowsMyReaction(parent, maxDepth = 6)) return true
 
         return false
+    }
+
+    /**
+     * Tìm lại nút like trên [root] mới tương ứng [original] (cùng view id + gần bounds) — tránh click snapshot cũ.
+     * @return null nếu không khớp được.
+     */
+    fun reResolveLikeNodeForClick(
+        root: AccessibilityNodeInfo,
+        original: AccessibilityNodeInfo
+    ): AccessibilityNodeInfo? {
+        if (!original.hasValidScreenBounds()) return null
+        val origRect = Rect()
+        original.getBoundsInScreen(origRect)
+        val origId = original.viewIdResourceName
+        val tol = 36
+        val candidates = findLikeButtons(root)
+        if (origId != null && origId.isNotBlank()) {
+            for (n in candidates) {
+                if (n.viewIdResourceName != origId) continue
+                val r = Rect()
+                n.getBoundsInScreen(r)
+                if (!n.hasValidScreenBounds()) continue
+                if (abs(r.centerX() - origRect.centerX()) <= tol &&
+                    abs(r.centerY() - origRect.centerY()) <= tol
+                ) {
+                    return n
+                }
+            }
+        }
+        for (n in candidates) {
+            val r = Rect()
+            n.getBoundsInScreen(r)
+            if (!n.hasValidScreenBounds()) continue
+            if (abs(r.centerX() - origRect.centerX()) <= tol &&
+                abs(r.centerY() - origRect.centerY()) <= tol
+            ) {
+                return n
+            }
+        }
+        return null
     }
 
     fun shouldLike(node: AccessibilityNodeInfo): Boolean {
@@ -380,6 +389,14 @@ class NodeFinder @Inject constructor(
         while (stack.isNotEmpty() && visited < maxNodes) {
             val (node, depth) = stack.removeLast()
             visited++
+            if (!node.hasValidScreenBounds()) {
+                if (node.childCount > 0 && depth < 60) {
+                    for (i in node.childCount - 1 downTo 0) {
+                        node.getChild(i)?.let { stack.addLast(it to (depth + 1)) }
+                    }
+                }
+                continue
+            }
 
             val indent = buildString { repeat(depth.coerceAtMost(30)) { append("  ") } }
             val text = node.text?.toString()?.replace("\n", "\\n") ?: ""
@@ -418,6 +435,14 @@ class NodeFinder @Inject constructor(
 
         while (stack.isNotEmpty() && result.size < maxNodes) {
             val (node, depth) = stack.removeLast()
+            if (!node.hasValidScreenBounds()) {
+                if (node.childCount > 0 && depth < 60) {
+                    for (i in node.childCount - 1 downTo 0) {
+                        node.getChild(i)?.let { stack.addLast(it to (depth + 1)) }
+                    }
+                }
+                continue
+            }
             result.add(
                 UiNodeEntry(
                     depth = depth,

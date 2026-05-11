@@ -3,8 +3,10 @@ package com.zalopilot.app.accessibility
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
 import com.zalopilot.app.data.model.ZaloIDStore
+import com.zalopilot.app.util.LikeSettingsManager
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
+import com.zalopilot.app.util.hasValidScreenBounds
 import java.util.ArrayList
 import java.util.LinkedHashSet
 import kotlin.collections.ArrayDeque
@@ -14,21 +16,27 @@ import javax.inject.Singleton
 @Singleton
 class ZaloUIScanner @Inject constructor(
     private val idStore: ZaloIDStore,
+    private val settingsManager: LikeSettingsManager,
     private val logger: Logger
 ) {
     private var scanCount = 0
     private var lastScanTime = 0L
     @Volatile private var hintRescanPending = false
-    /** Gần với chu kỳ poll 1–2s; poll + loop là nguồn chính, không phụ thuộc event. */
-    private val MIN_SCAN_GAP_MS = 1_800L
+
+    private fun minScanGapMs(): Long = if (settingsManager.isEcoMode()) 3_400L else 1_800L
 
     fun hasScannedRecently(): Boolean {
-        return System.currentTimeMillis() - lastScanTime < MIN_SCAN_GAP_MS
+        return System.currentTimeMillis() - lastScanTime < minScanGapMs()
     }
 
     /** Accessibility event chỉ là gợi ý: lần scan tới bỏ throttle một nhịp. */
     fun requestHintRescan() {
         hintRescanPending = true
+    }
+
+    /** Sau Clear Logs — reset gợi ý rescan. */
+    fun resetTransientState() {
+        hintRescanPending = false
     }
 
     fun scan(root: AccessibilityNodeInfo) {
@@ -40,7 +48,7 @@ class ZaloUIScanner @Inject constructor(
                 lastScanTime = 0L
             }
             val now = System.currentTimeMillis()
-            if (now - lastScanTime < MIN_SCAN_GAP_MS) {
+            if (now - lastScanTime < minScanGapMs()) {
                 return
             }
             lastScanTime = now
@@ -108,6 +116,7 @@ class ZaloUIScanner @Inject constructor(
         while (stack.isNotEmpty() && visited < 2400) {
             val node = stack.removeLast()
             visited++
+            if (!node.hasValidScreenBounds()) continue
             val t = node.text?.toString() ?: ""
             val cd = node.contentDescription?.toString() ?: ""
             val hay = "$t $cd"
@@ -127,6 +136,7 @@ class ZaloUIScanner @Inject constructor(
         val seen = LinkedHashSet<String>()
         val out = ArrayList<AccessibilityNodeInfo>()
         for (n in nodes) {
+            if (!n.hasValidScreenBounds()) continue
             val key = nodeBoundsKey(n)
             if (key !in seen) {
                 seen.add(key)
@@ -184,6 +194,7 @@ class ZaloUIScanner @Inject constructor(
         while (stack.isNotEmpty() && visited < maxNodes) {
             val node = stack.removeLast()
             visited++
+            if (!node.hasValidScreenBounds()) continue
             val t = node.text?.toString() ?: ""
             val d = node.contentDescription?.toString() ?: ""
             if (t.contains(needle, ignoreCase = true) || d.contains(needle, ignoreCase = true)) {

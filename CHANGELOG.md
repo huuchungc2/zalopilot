@@ -2,7 +2,16 @@
 
 ## [Unreleased]
 
-- fix(NodeFinder): `isAlreadyLiked` — bỏ so khớp sibling bằng `===` (dùng id+bounds); `reaction_info`/`my_reaction` qua `contains`; quét cây con nông dưới parent footer để bắt Zalo vẫn để text "Thích" khi đã có reaction (tránh like rồi unlike).
+- fix(NodeFinder): bỏ `isChecked`/`isSelected` ở node like gốc — chỉ giữ trên child id `btn_like`/`like_btn`; thêm `reResolveLikeNodeForClick` trước khi click.
+- fix(accessibility): streak **empty scan** (`consecutiveEmptyLikeScanStreak`) tách khỏi **scroll không dịch**; `NO_BUTTONS` chỉ tăng streak empty; `awaitFeedLikeScanRoot` chờ có nút + root mới có giới hạn trước `runFeedMode`; `combinedStuckLevel` cho gesture khi empty dài.
+- fix(accessibility): ổn định feed — sau neo layout + 1–2s lấy root mới rồi mới scan; `delayFeedSettleAfterScroll()` 800–1500ms sau mỗi cuộn bot trước vòng quét kế; poll không gọi `ZaloUIScanner.scan` khi bot chạy; `acquireRootOrNull(quietLog)` + throttle log `EVENT_HINT` khi bot chạy; `runFeedMode` retry 4 lần + delay dài hơn; recycle root sau scroll verify; gộp log `SKIP_SHOULD_LIKE`.
+- fix(NodeFinder): `isAlreadyLiked` chỉ nhận diện like **của user hiện tại** (btn_like_text, nhãn Đã thích/Liked không có số, `isChecked`/`isSelected`) — bỏ heuristic `reaction_info`/`my_reaction` (dễ nhầm với bài đã có like từ người khác).
+- fix(accessibility): `NO_BUTTONS` — ngưỡng dừng riêng cao hơn (`NO_BUTTONS_END_STOP_STREAK`), thêm nudge vuốt nhẹ khi scroll chính không dịch; profile vuốt SMALL/NORMAL/LARGE theo mức kẹt; một lần `debugDump` ngắn khi scan fail (ngoài chế độ verbose).
+- feat(accessibility): `scrollFeedWithVerification` nhận `GestureScrollProfile` — cuộn ngắn mượt mặc định, vuốt dài hơn khi feed kẹt nhiều lần.
+
+- feat(accessibility): khi bot chạy, overlay trạng thái dùng `FLAG_KEEP_SCREEN_ON` + `View.keepScreenOn` — màn hình không tự tắt theo timeout (dừng bot / gỡ overlay → bình thường lại).
+- feat(settings): **Tiết kiệm pin (ngủ trưa)** — `LikeSettings.ecoMode`: poll chậm hơn (Eco / màn tắt+bot chạy), `ZaloUIScanner` gap 3.4s, delay vòng like ×~1.5 + delay giữa like theo setting ×1.5, verify/scroll settle +15%; poll khi màn tắt+bot chạy 4–7s (Eco 5.2–9s); `POLL_ROOT_ASSUME_BACKGROUND_SCREEN_OFF=22` để ít dừng nhầm khi khóa màn.
+- fix(accessibility): dừng khi cuối feed — đếm `consecutiveScrollNoProgress` khi `scrollFeedWithVerification` báo không dịch anchor (ALL_SKIPPED / sau LIKE); `scrollFeedWithVerification` trả về `Boolean`; hằng `FEED_END_STOP_STREAK` (NO_BUTTONS: ngưỡng riêng — xem Unreleased).
 - fix(accessibility): cuộn feed — ưu tiên `ACTION_SCROLL_FORWARD` trên RecyclerView đã học (`feed_recycler_id`); fallback vuốt màn hình có `GestureResultCallback` + log reject/cancel/timeout; nếu anchor không đổi sau lần 1 thì retry scroll API + vuốt trên root mới; xác nhận sau like dùng `NodeFinder.isAlreadyLiked` (tránh đọc chỉ text node). `NodeFinder`: bỏ candidate đã thích khi `findAccessibilityNodeInfosByText("Thích")` khớp nhầm "Đã thích", và lọc trong `addResolved`.
 - fix: `boundsDedupeKey` làm tròn left/top theo 16px + `viewIdResourceName`; `authorTextOrNull` bỏ qua chuỗi chứa thích/bình luận/nhập/chia sẻ/comment/like; `shouldLike` lọc text/desc node (đã thích/liked/bình luận/nhập/chia sẻ), không chặn chỉ "Thích".
 - feat(settings): `FeedMode` (SCROLL / MANUAL / MIX) lưu prefs `feed_mode`, mặc định SCROLL; UI Cài đặt (Cuộn tự động / Đẩy tay / Kết hợp); `autoLikeLoop` — MANUAL không scroll, MIX 50% `scrollDown` hoặc chờ, SCROLL giữ hành vi cũ theo `InteractMode`.
