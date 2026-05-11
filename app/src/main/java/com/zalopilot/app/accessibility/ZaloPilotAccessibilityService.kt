@@ -869,17 +869,19 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     updateDebugNodeHighlights(likeNodes, null)
 
                     if (clicked) {
-                        // Đợi Zalo animate "Thích" → "Đã thích" xong (~300–800ms thực tế).
-                        delay(ecoVerifyMs(900L))
+                        // Đợi Zalo animate "Thích" → "Đã thích" (thường chậm hơn 900ms trên một số máy).
+                        delay(ecoVerifyMs(1500L))
 
-                        val confirmedLiked = nodeFinder.isAlreadyLiked(nodeForClick)
-
+                        var confirmedLiked = nodeFinder.isAlreadyLiked(nodeForClick)
                         if (!confirmedLiked) {
                             delay(ecoVerifyMs(600L))
-                            val confirmedLiked2 = nodeFinder.isAlreadyLiked(nodeForClick)
-                            if (!confirmedLiked2) {
-                                logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_UNCONFIRMED")
-                            }
+                            confirmedLiked = nodeFinder.isAlreadyLiked(nodeForClick)
+                        }
+
+                        if (!confirmedLiked) {
+                            logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_UNCONFIRMED")
+                            updateStatus("❓ Chưa xác nhận được like — bỏ qua bài này, thử bài khác")
+                            continue
                         }
 
                         processedPosts.add(postKey)
@@ -1343,6 +1345,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 if (node == null) continue
                 if (attemptScrollRecyclerNode(node)) {
                     scrolled = true
+                    // Một lần SCROLL_FORWARD trên Zalo thường chỉ đẩy feed ~một phần bài — gọi thêm một bước
+                    // để bài kế lên rõ (tránh cảm giác cuộn 1/3–1/2 bài).
+                    attemptScrollRecyclerNode(node)
                     break
                 }
             }
@@ -1373,23 +1378,49 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     /**
      * Vuốt lên (nội dung feed xuống) — fallback khi API scroll không dùng được;
      * có callback để biết gesture bị reject/cancel hay hoàn tất.
+     *
+     * Giả lập gần tay người: mỗi lần khác tọa độ X, điểm dứt lệch X nhẹ, đường hơi cong (quad),
+     * biên độ/duration dao động nhỏ — tránh mọi lần đều một đường thẳng giữa màn hình.
      */
     private suspend fun scrollDownByGesture(
         profile: GestureScrollProfile = GestureScrollProfile.NORMAL
     ): Boolean {
         val metrics = resources.displayMetrics
-        val fromX = metrics.widthPixels / 2f
+        val w = metrics.widthPixels.toFloat()
         val h = metrics.heightPixels.toFloat()
-        val (fromYFrac, toYFrac, durationMs) = when (profile) {
-            GestureScrollProfile.SMALL -> Triple(0.62f, 0.48f, 360L)
-            GestureScrollProfile.NORMAL -> Triple(0.74f, 0.28f, 480L)
-            GestureScrollProfile.LARGE -> Triple(0.86f, 0.13f, 720L)
+        val (baseFromY, baseToY, baseDur) = when (profile) {
+            GestureScrollProfile.SMALL -> Triple(0.80f, 0.26f, 420L)
+            GestureScrollProfile.NORMAL -> Triple(0.88f, 0.14f, 540L)
+            GestureScrollProfile.LARGE -> Triple(0.91f, 0.08f, 680L)
+        }
+        val minVerticalSpan = when (profile) {
+            GestureScrollProfile.SMALL -> 0.46f
+            GestureScrollProfile.NORMAL -> 0.58f
+            GestureScrollProfile.LARGE -> 0.72f
+        }
+        var fromYFrac = (baseFromY + Random.nextFloat() * 0.06f - 0.03f).coerceIn(0.70f, 0.96f)
+        var toYFrac = (baseToY + Random.nextFloat() * 0.06f - 0.03f).coerceIn(0.05f, 0.38f)
+        if (fromYFrac - toYFrac < minVerticalSpan) {
+            toYFrac = (fromYFrac - minVerticalSpan).coerceAtLeast(0.05f)
+            if (fromYFrac - toYFrac < minVerticalSpan) {
+                fromYFrac = (toYFrac + minVerticalSpan).coerceAtMost(0.96f)
+            }
         }
         val fromY = h * fromYFrac
         val toY = h * toYFrac
+
+        val fromX = w * (0.34f + Random.nextFloat() * 0.32f)
+        val endDx = w * (Random.nextFloat() * 0.09f - 0.045f)
+        val toX = (fromX + endDx).coerceIn(w * 0.12f, w * 0.88f)
+
+        val ctrlX = (fromX + toX) / 2f + w * (Random.nextFloat() * 0.12f - 0.06f)
+        val ctrlY = (fromY + toY) / 2f + h * (Random.nextFloat() * 0.05f - 0.025f)
+
+        val durationMs = (baseDur + Random.nextLong(-70L, 131L)).coerceIn(320L, 920L)
+
         val path = Path().apply {
             moveTo(fromX, fromY)
-            lineTo(fromX, toY)
+            quadTo(ctrlX, ctrlY, toX, toY)
         }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))

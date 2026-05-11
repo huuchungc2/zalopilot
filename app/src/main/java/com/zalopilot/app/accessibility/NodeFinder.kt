@@ -179,6 +179,27 @@ class NodeFinder @Inject constructor(
         return null
     }
 
+    /** Text placeholder ô bình luận / IME — không phải nội dung bài; dùng làm snippet sẽ gây postKey trùng. */
+    private fun isCommentUiNoiseForPostKey(raw: String?): Boolean {
+        val t = raw?.trim()?.lowercase().orEmpty()
+        if (t.isEmpty()) return false
+        if (t == "bình luận" || t == "comment") return true
+        val noisePhrases = listOf(
+            "nhập bình luận",
+            "viết bình luận",
+            "thêm bình luận",
+            "bình luận của bạn",
+            "write a comment",
+            "add a comment",
+            "post a comment",
+            "enter a comment",
+            "say something",
+        )
+        if (noisePhrases.any { t == it || t.startsWith(it) }) return true
+        if (noisePhrases.any { phrase -> t.contains(phrase) && t.length <= phrase.length + 8 }) return true
+        return false
+    }
+
     /**
      * Đoạn text bài viết gần nút like (BFS nông trên vài cấp cha) — dùng ghép [postKey], không dựa isChecked.
      */
@@ -190,6 +211,7 @@ class NodeFinder @Inject constructor(
             fun consider(raw: String?) {
                 val t = raw?.trim().orEmpty()
                 if (t.length < 10) return
+                if (isCommentUiNoiseForPostKey(t)) return
                 if (t.equals(ZaloIDStore.TEXT_LIKE, ignoreCase = true)) return
                 if (t.contains(ZaloIDStore.TEXT_LIKED, ignoreCase = true)) return
                 if (t.length > best.length) best = t.take(120)
@@ -201,6 +223,7 @@ class NodeFinder @Inject constructor(
                 if (d > 3) continue
                 consider(n.text?.toString())
                 consider(n.contentDescription?.toString())
+                consider(n.hintText?.toString())
                 for (i in 0 until n.childCount) {
                     n.getChild(i)?.let { child -> q.addLast(child to (d + 1)) }
                 }

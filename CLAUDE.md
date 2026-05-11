@@ -105,7 +105,7 @@ FeedMode được đọc trong `autoLikeLoop` sau mỗi `FeedScanResult.LIKED`:
 
 ### 6. Verify trạng thái sau khi click like
 
-Sau `performLikeClickWithFallbacks()` thành công, **bắt buộc delay 900ms** rồi đọc lại node xác nhận đã chuyển sang "Đã thích". Nếu chưa chắc → delay thêm 600ms → kiểm tra lần 2. Không delay đủ → Zalo chưa animate xong → bot thấy vẫn "Thích" → click lại → unlike.
+Sau `performLikeClickWithFallbacks()` thành công, **bắt buộc delay 1500ms** rồi đọc lại node xác nhận đã chuyển sang "Đã thích". Nếu chưa chắc → delay thêm 600ms → kiểm tra lần 2. Nếu vẫn không xác nhận (`CLICK_UNCONFIRMED`) → không ghi SUCCESS, không thêm `processedPosts`, không tăng tiến độ — tránh cuộn đi rồi unlike nhầm. Không delay đủ → Zalo chưa animate xong → bot thấy vẫn "Thích" → click lại → unlike.
 
 ### 7. isAlreadyLiked() là nguồn truth duy nhất
 

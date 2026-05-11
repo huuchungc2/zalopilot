@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- feat(accessibility): `scrollDownByGesture` — tọa độ X ngẫu nhiên trong dải an toàn, điểm cuối lệch X, đường `quadTo` hơi cong, jitter dọc + thời lượng; giả lập vuốt tay gần người hơn (trước đây luôn một đường thẳng giữa màn hình).
+- fix(accessibility): cuộn feed sau like — tăng quãng vuốt màn hình (SMALL/NORMAL/LARGE) và gọi `ACTION_SCROLL_FORWARD` thêm một lần khi RecyclerView đã học cuộn được lần đầu (Zalo thường chỉ dịch một đoạn ngắn mỗi lần).
+- fix(NodeFinder): `getPostSnippetForKey` bỏ qua placeholder ô bình luận (ví dụ "Nhập bình luận") + `hintText`; tránh postKey `CONTENT||…` trùng giữa nhiều bài.
+- fix(accessibility): sau like — verify đợi 1500ms (thay 900ms); nếu vẫn `CLICK_UNCONFIRMED` thì không `processedPosts`/không tăng tiến độ/không `SUCCESS`, `continue` thử nút khác.
 - fix(NodeFinder): bỏ `isChecked`/`isSelected` ở node like gốc — chỉ giữ trên child id `btn_like`/`like_btn`; thêm `reResolveLikeNodeForClick` trước khi click.
 - fix(accessibility): streak **empty scan** (`consecutiveEmptyLikeScanStreak`) tách khỏi **scroll không dịch**; `NO_BUTTONS` chỉ tăng streak empty; `awaitFeedLikeScanRoot` chờ có nút + root mới có giới hạn trước `runFeedMode`; `combinedStuckLevel` cho gesture khi empty dài.
 - fix(accessibility): ổn định feed — sau neo layout + 1–2s lấy root mới rồi mới scan; `delayFeedSettleAfterScroll()` 800–1500ms sau mỗi cuộn bot trước vòng quét kế; poll không gọi `ZaloUIScanner.scan` khi bot chạy; `acquireRootOrNull(quietLog)` + throttle log `EVENT_HINT` khi bot chạy; `runFeedMode` retry 4 lần + delay dài hơn; recycle root sau scroll verify; gộp log `SKIP_SHOULD_LIKE`.
