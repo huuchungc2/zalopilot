@@ -25,9 +25,39 @@ class Logger @Inject constructor(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
 
-    /** Log dòng JSON của phiên automation hiện tại (từ [beginAutomationSession] tới lần bắt đầu kế tiếp hoặc [clearDebugArtifacts]). */
-    private val sessionLogLines = Collections.synchronizedList(ArrayList<String>(256))
-    private val sessionLock = Any()
+    private enum class LogChannel { SLIM, VERBOSE, ERROR }
+
+    private data class ChannelState(
+        val lines: MutableList<String>,
+        val lock: Any,
+        val maxLines: Int,
+        val clearOnNewSession: Boolean,
+        val trimFileWhenExceeded: Boolean
+    )
+
+    private val slimState = ChannelState(
+        lines = Collections.synchronizedList(ArrayList(256)),
+        lock = Any(),
+        maxLines = 500,
+        clearOnNewSession = true,
+        trimFileWhenExceeded = true
+    )
+    private val verboseState = ChannelState(
+        lines = Collections.synchronizedList(ArrayList(512)),
+        lock = Any(),
+        maxLines = 2_000,
+        clearOnNewSession = true,
+        trimFileWhenExceeded = true
+    )
+    private val errorState = ChannelState(
+        lines = Collections.synchronizedList(ArrayList(128)),
+        lock = Any(),
+        maxLines = 200,
+        // "Không tự xoá" = không clear theo session; chỉ clear khi bấm nút riêng.
+        clearOnNewSession = false,
+        // Vẫn giữ cap 200 dòng như yêu cầu.
+        trimFileWhenExceeded = true
+    )
 
     @Volatile
     var sessionLoggingActive: Boolean = false
@@ -44,20 +74,28 @@ class Logger @Inject constructor(
     private val dir: File by lazy {
         File(context.filesDir, "ZaloPilot").also { it.mkdirs() }
     }
-    val logFile: File by lazy { File(dir, "log.json") }
+    val logVerboseFile: File by lazy { File(dir, "log_verbose.json") }
+    val logSlimFile: File by lazy { File(dir, "log_slim.json") }
+    val logErrorFile: File by lazy { File(dir, "log_error.json") }
     val uiTreeFile: File by lazy { File(dir, "uitree.json") }
+
+    private val prefs by lazy { context.getSharedPreferences("logger_prefs", Context.MODE_PRIVATE) }
+    fun isVerboseLogEnabled(): Boolean = prefs.getBoolean("verbose_log", false)
+    fun setVerboseLogEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("verbose_log", enabled).apply()
+    }
 
     /**
      * Xóa buffer phiên, xoá file log/UI tạm — dùng nút Clear Logs / trước khi export sạch.
      */
     fun clearDebugArtifacts() {
-        synchronized(sessionLock) {
-            sessionLogLines.clear()
-            sessionLoggingActive = false
-        }
+        clearSlimLogs()
+        clearVerboseLogs()
+        sessionLoggingActive = false
         scope.launch {
             runCatching {
-                if (logFile.exists()) logFile.delete()
+                if (logSlimFile.exists()) logSlimFile.delete()
+                if (logVerboseFile.exists()) logVerboseFile.delete()
                 if (uiTreeFile.exists()) uiTreeFile.delete()
             }.onFailure { e -> Log.e("ZaloPilot", "clearDebugArtifacts", e) }
         }
@@ -69,25 +107,21 @@ class Logger @Inject constructor(
      * Gọi từ [Dispatchers.IO] để không chặn main thread.
      */
     fun beginAutomationSession() {
-        synchronized(sessionLock) {
-            sessionLogLines.clear()
-            sessionLoggingActive = true
-        }
+        clearChannelStateForNewSession(slimState, logSlimFile)
+        clearChannelStateForNewSession(verboseState, logVerboseFile)
+        sessionLoggingActive = true
         runCatching {
-            logFile.parentFile?.mkdirs()
-            logFile.writeText("")
+            logSlimFile.parentFile?.mkdirs()
+            logSlimFile.writeText("")
+            logVerboseFile.writeText("")
         }.onFailure { e ->
             Log.e("ZaloPilot", "beginAutomationSession truncate", e)
         }
     }
 
-    /** Nội dịnh phiên để export / copy (JSON lines). */
-    fun getSessionLogText(): String {
-        val lines = synchronized(sessionLock) {
-            sessionLogLines.toList()
-        }
-        return lines.joinToString("")
-    }
+    fun getSlimLogText(): String = getChannelText(slimState)
+    fun getVerboseLogText(): String = getChannelText(verboseState)
+    fun getErrorLogText(): String = getChannelText(errorState)
 
     /**
      * Ghi log có cấu trúc: [tag], [target], [result], tự đính kèm [pkg] foreground hiện tại, tùy chọn [ms].
@@ -100,10 +134,8 @@ class Logger @Inject constructor(
     ) {
         val pkgSnapshot = lastForegroundPackage
         val line = buildJson(tag, target, result, pkgSnapshot, durationMs)
-        appendSessionLineIfActive(line)
-        scope.launch {
-            writeLine(line)
-        }
+        appendLineIfActive(line, tag, result)
+        scope.launch { writeLine(line, tag, result) }
     }
 
     /**
@@ -115,36 +147,34 @@ class Logger @Inject constructor(
         Log.e("ZaloPilot", "[$source] $msg", throwable)
         val pkgSnapshot = lastForegroundPackage
         val line = buildJson(LogTag.ERROR, source, "$msg | $stack", pkgSnapshot, null)
-        appendSessionLineIfActive(line)
-        scope.launch {
-            writeLine(line)
-        }
+        // ERROR log: luôn đẩy vào verbose (nếu bật) + error (vì là lỗi).
+        appendLineIfActive(line, LogTag.ERROR, "ERROR")
+        scope.launch { writeLine(line, LogTag.ERROR, "ERROR") }
     }
 
-    private fun appendSessionLineIfActive(line: String) {
-        synchronized(sessionLock) {
-            if (!sessionLoggingActive) return
-            sessionLogLines.add(line)
-            trimSessionIfNeeded()
-        }
-    }
-
-    private fun trimSessionIfNeeded() {
-        val max = 8_000
-        val keep = 4_000
-        while (sessionLogLines.size > max) {
-            val drop = sessionLogLines.size - keep
-            repeat(drop.coerceAtLeast(1)) {
-                if (sessionLogLines.isNotEmpty()) sessionLogLines.removeAt(0)
+    private fun appendLineIfActive(line: String, tag: LogTag, result: String) {
+        if (!sessionLoggingActive) return
+        val channels = channelsFor(tag, result)
+        for (c in channels) {
+            val (st, _) = stateAndFile(c)
+            synchronized(st.lock) {
+                st.lines.add(line)
+                trimInMemoryIfNeeded(st)
             }
+        }
+    }
+
+    private fun trimInMemoryIfNeeded(st: ChannelState) {
+        while (st.lines.size > st.maxLines) {
+            st.lines.removeAt(0)
         }
     }
 
     /** Ghi đồng bộ khi coroutine logger không dùng được (ví dụ lỗi đọc file). */
     private fun appendLineSync(line: String) {
-        appendSessionLineIfActive(line)
+        // Fallback: sync append vào verbose file để không mất trace.
         try {
-            logFile.appendText(line)
+            logVerboseFile.appendText(line)
         } catch (e: Exception) {
             Log.e("ZaloPilot", "appendLineSync failed", e)
         }
@@ -167,10 +197,16 @@ class Logger @Inject constructor(
         }.toString() + "\n"
     }
 
-    private fun writeLine(line: String) {
+    private fun writeLine(line: String, tag: LogTag, result: String) {
         try {
-            logFile.appendText(line)
-            trimLogIfNeeded()
+            val channels = channelsFor(tag, result)
+            for (c in channels) {
+                val (st, file) = stateAndFile(c)
+                // Verbose file chỉ ghi khi user bật toggle.
+                if (c == LogChannel.VERBOSE && !isVerboseLogEnabled()) continue
+                file.appendText(line)
+                if (st.trimFileWhenExceeded) trimFileToLastNLines(file, st.maxLines)
+            }
             val j = JSONObject(line.trim())
             Log.d("ZaloPilot", "[${j.optString("tag")}][${j.optString("result")}] ${j.optString("target")} pkg=${j.optString("pkg")}")
         } catch (e: Exception) {
@@ -178,11 +214,13 @@ class Logger @Inject constructor(
         }
     }
 
-    fun readLogs(limit: Int = 200): List<LogEntry> {
+    fun readSlimLogs(limit: Int = 200): List<LogEntry> = readChannelLogs(slimState, limit)
+    fun readVerboseLogs(limit: Int = 200): List<LogEntry> = readChannelLogs(verboseState, limit)
+    fun readErrorLogs(limit: Int = 200): List<LogEntry> = readChannelLogs(errorState, limit)
+
+    private fun readChannelLogs(state: ChannelState, limit: Int): List<LogEntry> {
         return try {
-            val lines = synchronized(sessionLock) {
-                sessionLogLines.toList()
-            }
+            val lines = synchronized(state.lock) { state.lines.toList() }
             if (lines.isEmpty()) return emptyList()
             lines
                 .filter { it.isNotBlank() }
@@ -241,11 +279,87 @@ class Logger @Inject constructor(
         else -> LogTag.STATE.name
     }
 
-    private fun trimLogIfNeeded() {
-        if (logFile.length() > 5 * 1024 * 1024) {
-            val lines = logFile.readLines().filter { it.isNotBlank() }
-            logFile.writeText(lines.takeLast(1000).joinToString("\n") + "\n")
+    private fun trimFileToLastNLines(file: File, keep: Int) {
+        // Nhỏ gọn: file log luôn là JSON lines, nên trim theo số dòng.
+        runCatching {
+            if (!file.exists()) return
+            val lines = file.readLines().filter { it.isNotBlank() }
+            if (lines.size <= keep) return
+            file.writeText(lines.takeLast(keep).joinToString("\n") + "\n")
         }
+    }
+
+    fun clearSlimLogs() = clearChannel(slimState, logSlimFile)
+    fun clearVerboseLogs() = clearChannel(verboseState, logVerboseFile)
+    fun clearErrorLogs() = clearChannel(errorState, logErrorFile)
+
+    private fun clearChannel(st: ChannelState, file: File) {
+        synchronized(st.lock) { st.lines.clear() }
+        scope.launch {
+            runCatching { if (file.exists()) file.delete() }
+                .onFailure { e -> Log.e("ZaloPilot", "clearChannel ${file.name}", e) }
+        }
+    }
+
+    private fun clearChannelStateForNewSession(st: ChannelState, file: File) {
+        if (!st.clearOnNewSession) return
+        synchronized(st.lock) { st.lines.clear() }
+        runCatching { file.parentFile?.mkdirs(); file.writeText("") }
+            .onFailure { e -> Log.e("ZaloPilot", "clearChannelStateForNewSession ${file.name}", e) }
+    }
+
+    private fun getChannelText(st: ChannelState): String =
+        synchronized(st.lock) { st.lines.toList() }.joinToString("")
+
+    private fun stateAndFile(c: LogChannel): Pair<ChannelState, File> = when (c) {
+        LogChannel.SLIM -> slimState to logSlimFile
+        LogChannel.VERBOSE -> verboseState to logVerboseFile
+        LogChannel.ERROR -> errorState to logErrorFile
+    }
+
+    private fun channelsFor(tag: LogTag, result: String): Set<LogChannel> {
+        val res = result.trim()
+
+        val slimResults = setOf(
+            "CLICK_CANDIDATE",
+            "CLICK_UNCONFIRMED",
+            "SUCCESS",
+            "ID_SAVED",
+            "EMPTY_AFTER_RETRY",
+            "ALL_SKIPPED",
+            "NO_BUTTONS",
+            "STOPPED",
+            "PAUSED_ZALO_CLOSED",
+            "BEFORE_CLICK"
+        )
+        val errorResults = setOf(
+            "ACTION_CLICK_FAIL",
+            "ACTION_CLICK_PRIMARY_FAIL",
+            "GESTURE_FALLBACK_FAIL",
+            "IMAGE_VIEWER_BACK_SKIP_POST",
+            "CLICK_UNCONFIRMED",
+            "STOPPED",
+            "PAUSED_ZALO_CLOSED",
+            "EMPTY_AFTER_RETRY",
+            "NO_BUTTONS"
+        )
+
+        val isActionClick = res.startsWith("ACTION_CLICK_")
+        val isGesture = res.startsWith("GESTURE_")
+        val isImageViewer = res.startsWith("IMAGE_VIEWER_")
+
+        val slim =
+            slimResults.contains(res) || isActionClick || isGesture || isImageViewer
+
+        val err =
+            errorResults.contains(res)
+
+        val out = linkedSetOf<LogChannel>()
+        if (slim) out.add(LogChannel.SLIM)
+        if (err || tag == LogTag.ERROR) out.add(LogChannel.ERROR)
+        // Verbose: ghi tất cả như cũ, nhưng chỉ khi user bật.
+        out.add(LogChannel.VERBOSE)
+        return out
     }
 
     fun saveUiTree(nodes: List<UiNodeEntry>) {
