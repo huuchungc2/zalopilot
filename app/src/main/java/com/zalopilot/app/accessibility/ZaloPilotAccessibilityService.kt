@@ -971,7 +971,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private suspend fun waitForFeedLayoutRendered() {
         val deadline = System.currentTimeMillis() + 14_000L
         while (isRunning && System.currentTimeMillis() < deadline) {
-            val probe = acquireRootOrNull(4, 60L..200L, LogTag.STATE, quietLog = true) ?: run {
+            val probe = acquireRootOrNull(4, 60L..200L, LogTag.STATE, quietLog = true)
+            if (probe == null) {
                 delay(320)
                 continue
             }
