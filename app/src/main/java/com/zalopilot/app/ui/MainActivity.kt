@@ -33,7 +33,9 @@ import androidx.compose.ui.unit.sp
 import android.content.ClipData
 import android.content.ClipboardManager
 import com.zalopilot.app.accessibility.NodeFinder
+import com.zalopilot.app.accessibility.ZaloUIScanner
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
+import com.zalopilot.app.data.model.ZaloIDStore
 import com.zalopilot.app.floating.FloatingMenuService
 import com.zalopilot.app.util.DebugHighlightPrefs
 import com.zalopilot.app.util.LogTag
@@ -49,6 +51,8 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var logger: Logger
     @Inject lateinit var nodeFinder: NodeFinder
     @Inject lateinit var debugHighlightPrefs: DebugHighlightPrefs
+    @Inject lateinit var uiScanner: ZaloUIScanner
+    @Inject lateinit var zaloIdStore: ZaloIDStore
 
     private val zaloBlue = Color(0xFF0068FF)
 
@@ -623,6 +627,26 @@ class MainActivity : ComponentActivity() {
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                         ) { Text("🔍 Quét", color = Color.White, fontSize = 13.sp) }
+
+                        Button(
+                            onClick = {
+                                val root = ZaloPilotAccessibilityService.instance?.rootInActiveWindow
+                                if (root == null) {
+                                    Toast.makeText(this@MainActivity, "⚠️ Mở Zalo trước rồi quét", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    runCatching {
+                                        uiScanner.forceScan(root)
+                                        val f = zaloIdStore.exportToJson()
+                                        Toast.makeText(this@MainActivity, "✅ Đã quét UI & lưu ${f.name}", Toast.LENGTH_SHORT).show()
+                                    }.onFailure { e ->
+                                        Toast.makeText(this@MainActivity, "❌ ${e.message}", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(0.2f)),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        ) { Text("🧠 Quét UI", color = Color.White, fontSize = 13.sp) }
 
                         Button(
                             onClick = {

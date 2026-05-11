@@ -37,7 +37,6 @@ class NodeFinder @Inject constructor(
             val node = resolveLikeClickTarget(raw) ?: return
             if (!node.hasValidScreenBounds()) return
             if (LikeViewIdRules.shouldRejectNodeForLike(node)) return
-            if (!LikeViewIdRules.isWhitelistedLikeResourceId(node.viewIdResourceName)) return
             if (isAlreadyLiked(node)) return
             val key = dedupeKey(node)
             if (key !in seen) {
@@ -55,11 +54,8 @@ class NodeFinder @Inject constructor(
         if (savedId != null) {
             val byId = root.findAccessibilityNodeInfosByViewId(savedId)
             if (byId.isNotEmpty()) {
-                byId.filter {
-                    LikeViewIdRules.isWhitelistedLikeResourceId(it.viewIdResourceName) &&
-                        !LikeViewIdRules.shouldRejectNodeForLike(it) &&
-                        !isAlreadyLiked(it)
-                }.forEach { addResolved(it) }
+                byId.filter { !LikeViewIdRules.shouldRejectNodeForLike(it) && !isAlreadyLiked(it) }
+                    .forEach { addResolved(it) }
                 if (result.isNotEmpty()) {
                     logFoundSummary(result)
                     return result
@@ -71,20 +67,10 @@ class NodeFinder @Inject constructor(
         // findAccessibilityNodeInfosByText("Thích") có thể khớp cả "Đã thích" (substring).
         val byText = root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKE)
         for (raw in byText) {
-            if (LikeViewIdRules.shouldRejectNodeForLike(raw) &&
-                !LikeViewIdRules.isWhitelistedLikeResourceId(raw.viewIdResourceName)
-            ) {
-                continue
-            }
             addResolved(raw)
         }
 
         collectLikeHintsByTraversal(root, maxNodes = 2800).forEach { raw ->
-            if (LikeViewIdRules.shouldRejectNodeForLike(raw) &&
-                !LikeViewIdRules.isWhitelistedLikeResourceId(raw.viewIdResourceName)
-            ) {
-                return@forEach
-            }
             addResolved(raw)
         }
 
@@ -108,7 +94,6 @@ class NodeFinder @Inject constructor(
             val t = resolveLikeClickTarget(raw) ?: return false
             if (!t.hasValidScreenBounds()) return false
             if (LikeViewIdRules.shouldRejectNodeForLike(t)) return false
-            if (!LikeViewIdRules.isWhitelistedLikeResourceId(t.viewIdResourceName)) return false
             return isAlreadyLiked(t)
         }
 

@@ -1,6 +1,8 @@
 package com.zalopilot.app.data.model
 
 import android.content.Context
+import java.io.File
+import org.json.JSONObject
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -15,6 +17,7 @@ class ZaloIDStore @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
     private val prefs = context.getSharedPreferences("zalo_ui_ids", Context.MODE_PRIVATE)
+    private val uiMapFile: File by lazy { File(context.filesDir, "ui_map.json") }
 
     companion object {
         // Keys
@@ -65,4 +68,52 @@ class ZaloIDStore @Inject constructor(
     fun hasScanned(): Boolean = getLikeButtonID() != null
 
     fun clearAll() = prefs.edit().clear().apply()
+
+    /**
+     * Export mapping UI ids ra internal storage (`filesDir/ui_map.json`).
+     * @return file nếu ghi thành công.
+     */
+    fun exportToJson(): File {
+        val json = JSONObject()
+        val keys = listOf(
+            KEY_LIKE_BUTTON,
+            KEY_TAB_TIMELINE,
+            KEY_FEED_RECYCLER,
+            KEY_AUTHOR_NAME,
+            KEY_CONTACT_LIST,
+            KEY_CONTACT_ITEM
+        )
+        for (k in keys) {
+            val v = getID(k)
+            if (!v.isNullOrBlank()) json.put(k, v)
+        }
+        uiMapFile.writeText(json.toString(2))
+        return uiMapFile
+    }
+
+    /**
+     * Import mapping UI ids từ internal storage (`filesDir/ui_map.json`).
+     * @return true nếu import OK.
+     */
+    fun importFromJson(): Boolean {
+        if (!uiMapFile.exists()) return false
+        val raw = uiMapFile.readText().trim()
+        if (raw.isBlank()) return false
+        val json = JSONObject(raw)
+        val editor = prefs.edit()
+        val keys = listOf(
+            KEY_LIKE_BUTTON,
+            KEY_TAB_TIMELINE,
+            KEY_FEED_RECYCLER,
+            KEY_AUTHOR_NAME,
+            KEY_CONTACT_LIST,
+            KEY_CONTACT_ITEM
+        )
+        for (k in keys) {
+            val v = json.optString(k, "")
+            if (v.isNotBlank()) editor.putString(k, v)
+        }
+        editor.apply()
+        return true
+    }
 }

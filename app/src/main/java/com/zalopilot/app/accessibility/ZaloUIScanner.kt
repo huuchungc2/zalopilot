@@ -1,5 +1,6 @@
 package com.zalopilot.app.accessibility
 
+import android.graphics.Rect
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
 import com.zalopilot.app.data.model.ZaloIDStore
@@ -83,20 +84,57 @@ class ZaloUIScanner @Inject constructor(
         scan(root)
     }
 
+    private data class ScanEnv(
+        val screenW: Int,
+        val screenH: Int,
+        val screenArea: Int,
+        val maxNodeArea: Int,
+    )
+
+    private fun scanEnvFromRoot(root: AccessibilityNodeInfo): ScanEnv {
+        val r = Rect()
+        root.getBoundsInScreen(r)
+        val w = r.width().coerceAtLeast(1)
+        val h = r.height().coerceAtLeast(1)
+        val area = (w * h).coerceAtLeast(1)
+        return ScanEnv(
+            screenW = w,
+            screenH = h,
+            screenArea = area,
+            maxNodeArea = (area * 0.20f).toInt().coerceAtLeast(1)
+        )
+    }
+
+    private fun shouldRejectScanNode(node: AccessibilityNodeInfo, env: ScanEnv): Boolean {
+        // Reject: blacklist class/id
+        if (LikeViewIdRules.shouldRejectNodeForLike(node)) return true
+
+        // Reject: package khác com.zing.zalo
+        val id = node.viewIdResourceName
+        if (!id.isNullOrBlank()) {
+            val pkg = id.substringBefore(":id/", missingDelimiterValue = "")
+            if (pkg.isNotBlank() && pkg != "com.zing.zalo") return true
+        }
+
+        // Reject: bounds quá lớn (hay là container feed / layout)
+        val r = Rect()
+        node.getBoundsInScreen(r)
+        val area = (r.width().coerceAtLeast(0) * r.height().coerceAtLeast(0)).coerceAtLeast(0)
+        if (area > env.maxNodeArea) return true
+
+        return false
+    }
+
     private fun scanLikeButton(root: AccessibilityNodeInfo): Boolean {
+        val env = scanEnvFromRoot(root)
         val byThich = root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKE)
         val byDaThich = root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKED)
         val byTraversal = collectTraversalLikeHints(root)
         val candidates = mergeUniqueNodes(byThich + byDaThich + byTraversal)
 
         for (node in candidates) {
-            if (LikeViewIdRules.shouldRejectNodeForLike(node) &&
-                !LikeViewIdRules.isWhitelistedLikeResourceId(node.viewIdResourceName)
-            ) {
-                continue
-            }
-            val id = findWhitelistedLikeIdNear(node) ?: continue
-            if (LikeViewIdRules.isBlacklistedResourceId(id)) continue
+            if (shouldRejectScanNode(node, env)) continue
+            val id = findLikeIdNear(node, env) ?: continue
             val current = idStore.getLikeButtonID()
             if (current != id) {
                 idStore.saveLikeButtonID(id)
@@ -109,36 +147,45 @@ class ZaloUIScanner @Inject constructor(
         return false
     }
 
-    /** Chỉ id whitelist trong subtree / vài cấp cha — không lấy [vpager] / layout feed. */
-    private fun findWhitelistedLikeIdNear(node: AccessibilityNodeInfo): String? {
+    /**
+     * Tìm id nút like gần vùng text "Thích/Đã thích" (subtree + vài cấp cha).
+     * Không check whitelist; chỉ reject theo blacklist class/id, package != com.zing.zalo, bounds > 20% màn hình.
+     */
+    private fun findLikeIdNear(node: AccessibilityNodeInfo, env: ScanEnv): String? {
         node.viewIdResourceName?.let { id ->
-            if (LikeViewIdRules.isWhitelistedLikeResourceId(id)) return id
+            if (!shouldRejectScanNode(node, env) && id.startsWith("com.zing.zalo:id/")) return id
         }
         var host: AccessibilityNodeInfo? = node
         repeat(6) {
             val h = host ?: return null
-            val best = findBestWhitelistedIdInSubtree(h, maxDepth = 10)
+            val best = findBestLikeIdInSubtree(h, env, maxDepth = 10)
             if (best != null) return best
             host = h.parent
         }
         return null
     }
 
-    private fun findBestWhitelistedIdInSubtree(root: AccessibilityNodeInfo, maxDepth: Int): String? {
+    private fun findBestLikeIdInSubtree(root: AccessibilityNodeInfo, env: ScanEnv, maxDepth: Int): String? {
         var bestId: String? = null
         var bestP = Int.MAX_VALUE
+        var bestArea = Int.MAX_VALUE
         val q = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
         q.addLast(root to 0)
         while (q.isNotEmpty()) {
             val (n, d) = q.removeFirst()
             if (d > maxDepth) continue
             val id = n.viewIdResourceName
-            if (LikeViewIdRules.isWhitelistedLikeResourceId(id) &&
-                !LikeViewIdRules.shouldRejectNodeForLike(n)
+            if (!id.isNullOrBlank() &&
+                id.startsWith("com.zing.zalo:id/") &&
+                !shouldRejectScanNode(n, env)
             ) {
                 val p = LikeViewIdRules.likeClickPriority(id)
-                if (p < bestP) {
+                val r = Rect()
+                n.getBoundsInScreen(r)
+                val area = (r.width().coerceAtLeast(0) * r.height().coerceAtLeast(0)).coerceAtLeast(0)
+                if (p < bestP || (p == bestP && area < bestArea)) {
                     bestP = p
+                    bestArea = area
                     bestId = id
                 }
             }
@@ -206,13 +253,15 @@ class ZaloUIScanner @Inject constructor(
     }
 
     private fun scanTabTimeline(root: AccessibilityNodeInfo): Boolean {
+        val env = scanEnvFromRoot(root)
         val nodes = mergeUniqueNodes(
             root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_TIMELINE) +
                 collectNodesWithTextOrDesc(root, ZaloIDStore.TEXT_TIMELINE, maxNodes = 1600)
         )
         for (node in nodes) {
+            if (shouldRejectScanNode(node, env)) continue
             val id = findIdFromNodeOrParent(node) ?: continue
-            if (id.contains("zalo", ignoreCase = true)) {
+            if (id.startsWith("com.zing.zalo:id/")) {
                 val current = idStore.getTabTimelineID()
                 if (current != id) {
                     idStore.saveTabTimelineID(id)
@@ -250,17 +299,17 @@ class ZaloUIScanner @Inject constructor(
     }
 
     private fun scanAuthorName(root: AccessibilityNodeInfo): Boolean {
+        val env = scanEnvFromRoot(root)
         val likeNodes = mergeUniqueNodes(
             root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKE) + collectTraversalLikeHints(root)
         )
         for (likeNode in likeNodes) {
-            val id = findWhitelistedLikeIdNear(likeNode) ?: continue
-            if (!id.contains("zalo", ignoreCase = true)) continue
+            val id = findLikeIdNear(likeNode, env) ?: continue
 
             val feedItem = findFeedItemParent(likeNode, depth = 4) ?: continue
             val authorNode = findFirstTextNode(feedItem) ?: continue
             val authorId = authorNode.viewIdResourceName ?: continue
-            if (authorId.contains("zalo", ignoreCase = true)) {
+            if (authorId.startsWith("com.zing.zalo:id/")) {
                 val current = idStore.getAuthorNameID()
                 if (current != authorId) {
                     idStore.saveAuthorNameID(authorId)
@@ -273,9 +322,11 @@ class ZaloUIScanner @Inject constructor(
     }
 
     private fun scanFeedRecycler(root: AccessibilityNodeInfo): Boolean {
+        val env = scanEnvFromRoot(root)
         val recycler = findRecyclerView(root) ?: return false
+        if (shouldRejectScanNode(recycler, env)) return false
         val id = recycler.viewIdResourceName ?: return false
-        if (id.contains("zalo", ignoreCase = true)) {
+        if (id.startsWith("com.zing.zalo:id/")) {
             val current = idStore.getFeedRecyclerID()
             if (current != id) {
                 idStore.saveFeedRecyclerID(id)

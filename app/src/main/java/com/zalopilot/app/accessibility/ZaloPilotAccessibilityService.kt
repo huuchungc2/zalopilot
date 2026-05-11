@@ -97,6 +97,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private var lastLikeClickBoundsKey: String? = null
     private var lastLikeClickAttemptAtMs: Long = 0L
 
+    /** Tránh dừng nhầm ngay sau GLOBAL_ACTION_BACK (transition animation). */
+    private var lastGlobalBackAtElapsedMs: Long = 0L
+
     private var windowManager: WindowManager? = null
     private var statusView: LinearLayout? = null
     private var statusText: TextView? = null
@@ -329,6 +332,12 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             }
         } else {
             if (isZaloForeground) {
+                // Grace period 1s sau BACK: tránh false-positive "Zalo closed" khi transition về feed.
+                val sinceBack = SystemClock.elapsedRealtime() - lastGlobalBackAtElapsedMs
+                if (lastGlobalBackAtElapsedMs > 0L && sinceBack in 0..1_000L) {
+                    logger.log(LogTag.STATE, "pkg=$pkg sinceBackMs=$sinceBack", "BACKGROUND_POLL_GRACE")
+                    return
+                }
                 logger.log(LogTag.STATE, "pkg=$pkg", "BACKGROUND_POLL")
                 applyZaloBackground(reason = "poll_other_package")
             }
@@ -885,15 +894,67 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                                         dm.heightPixels
                                     )
                                 ) {
+                                    lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
                                     performGlobalAction(GLOBAL_ACTION_BACK)
                                     logger.log(
                                         LogTag.CLICK,
                                         author ?: "unknown",
                                         "IMAGE_VIEWER_BACK_SKIP_POST"
                                     )
-                                    updateStatus("↩ Đã đóng xem ảnh — bỏ qua bài này")
-                                    delayEco(400L..700L)
-                                    continue
+                                    updateStatus("↩ Đã đóng xem ảnh — quay lại feed...")
+
+                                    delay(800L)
+
+                                    // Nếu package không còn là com.zing.zalo, chờ tối đa 3s để quay lại foreground.
+                                    val targetPkg = "com.zing.zalo"
+                                    if (logger.lastForegroundPackage != targetPkg) {
+                                        val tStart = SystemClock.elapsedRealtime()
+                                        while (SystemClock.elapsedRealtime() - tStart < 3_000L) {
+                                            val r = acquireRootOrNull(
+                                                maxAttempts = 1,
+                                                delayRangeMs = 0L..0L,
+                                                logTag = LogTag.STATE,
+                                                quietLog = true
+                                            )
+                                            runCatching { r?.recycle() }
+                                            if (logger.lastForegroundPackage == targetPkg) break
+                                            delay(120L)
+                                        }
+                                    }
+
+                                    val newRoot = acquireRootOrNull(
+                                        maxAttempts = 3,
+                                        delayRangeMs = 80L..180L,
+                                        logTag = LogTag.CLICK,
+                                        quietLog = true
+                                    ) ?: run {
+                                        updateStatus("⚠️ Không lấy được root sau BACK — thử bài khác")
+                                        delayEco(400L..700L)
+                                        continue
+                                    }
+
+                                    val retryNode = try {
+                                        nodeFinder.reResolveLikeNodeForClick(newRoot, nodeForClick)
+                                    } finally {
+                                        runCatching { newRoot.recycle() }
+                                    } ?: run {
+                                        logger.log(LogTag.CLICK, author ?: "unknown", "IMAGE_VIEWER_RETRY_RERESOLVE_NULL")
+                                        delayEco(400L..700L)
+                                        continue
+                                    }
+
+                                    // Retry bài này 1 lần bằng ACTION_CLICK trực tiếp trên node mới.
+                                    val retryOk = performClickLikeTargetNoParent(retryNode)
+                                    logger.log(
+                                        LogTag.CLICK,
+                                        author ?: "unknown",
+                                        if (retryOk) "IMAGE_VIEWER_RETRY_ACTION_CLICK_OK" else "IMAGE_VIEWER_RETRY_ACTION_CLICK_FAIL"
+                                    )
+                                    if (!retryOk) {
+                                        updateStatus("❌ Retry click thất bại — thử bài khác")
+                                        delayEco(400L..700L)
+                                        continue
+                                    }
                                 }
                             } finally {
                                 runCatching { peekRoot.recycle() }
@@ -1161,34 +1222,25 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         logger.log(LogTag.CLICK, nodeSnapshotForLog(node), "CLICK_CANDIDATE")
 
         val interactMode = settingsManager.getInteractMode()
-        val useGestureFirst = when (interactMode) {
-            InteractMode.TAP   -> false                    // ACTION_CLICK trước, gesture fallback
-            InteractMode.SWIPE -> true                     // gesture trước, ACTION_CLICK fallback
-            InteractMode.MIX   -> (1..2).random() == 1    // random 50/50
-        }
-        logger.log(LogTag.CLICK, "interactMode=$interactMode useGestureFirst=$useGestureFirst", "INTERACT_MODE")
+        logger.log(LogTag.CLICK, "interactMode=$interactMode", "INTERACT_MODE")
 
-        val ok = if (useGestureFirst) {
-            // SWIPE mode: gesture tọa độ thật trước
-            val gestureOk = tapNodeByCoordinate(node)
-            logger.log(LogTag.CLICK, boundsSummary(node),
-                if (gestureOk) "GESTURE_PRIMARY_OK" else "GESTURE_PRIMARY_FAIL")
-            if (!gestureOk) {
-                val clickOk = performClickLikeTargetNoParent(node)
-                logger.log(LogTag.CLICK, boundsSummary(node),
-                    if (clickOk) "ACTION_CLICK_FALLBACK_OK" else "ACTION_CLICK_FALLBACK_FAIL")
-                clickOk
-            } else true
+        // ACTION_CLICK luôn là primary; gesture chỉ là fallback.
+        val clickOk = performClickLikeTargetNoParent(node)
+        logger.log(
+            LogTag.CLICK,
+            boundsSummary(node),
+            if (clickOk) "ACTION_CLICK_PRIMARY_OK" else "ACTION_CLICK_PRIMARY_FAIL"
+        )
+        val ok = if (clickOk) {
+            true
         } else {
-            // TAP mode: ACTION_CLICK chỉ trên target like — không leo RecyclerView/FrameLayout cha
-            if (performClickLikeTargetNoParent(node)) {
-                true
-            } else {
-                val gestureOk = tapNodeByCoordinate(node)
-                logger.log(LogTag.CLICK, boundsSummary(node),
-                    if (gestureOk) "GESTURE_FALLBACK_OK" else "GESTURE_FALLBACK_FAIL")
-                gestureOk
-            }
+            val gestureOk = tapNodeByCoordinate(node)
+            logger.log(
+                LogTag.CLICK,
+                boundsSummary(node),
+                if (gestureOk) "GESTURE_FALLBACK_OK" else "GESTURE_FALLBACK_FAIL"
+            )
+            gestureOk
         }
 
         if (ok) {

@@ -21,6 +21,7 @@
 - [x] FeedMode (SCROLL / MANUAL / MIX) — prefs `feed_mode` + UI Cài đặt + `autoLikeLoop`
 - [x] Click like — log chi tiết, parent ACTION_CLICK, gesture fallback, dedupe bounds, `isVisibleToUser`
 - [x] NodeFinder — `getAuthorName` không trả về text nút Thích; `shouldLike` + `btn_like` không text
+- [x] UI map — export/import `ui_map.json` + nút "Quét UI" (force scan & export)
 - [x] GitHub Actions build APK
 - [x] App icon
 
