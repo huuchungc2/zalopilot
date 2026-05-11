@@ -156,7 +156,12 @@ class NodeFinder @Inject constructor(
                 val t = c.text?.toString()?.trim().orEmpty()
                 when {
                     t == ZaloIDStore.TEXT_LIKE -> sawThich = true
-                    t.isNotEmpty() -> return false
+                    // Chỉ kết luận "đã like" khi text rõ ràng là "Đã thích".
+                    // KHÔNG return false với text tùy ý (số reaction, emoji...) —
+                    // bài có người khác like sẽ có node reaction text bên cạnh btn_like_text
+                    // gây false positive "đã like".
+                    textIndicatesCurrentUserLiked(t) -> return false
+                    // t.isNotEmpty() nhưng không phải "Đã thích" → không kết luận, tiếp tục scan
                 }
             }
             if (sawThich) return true

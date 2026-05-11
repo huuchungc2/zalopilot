@@ -256,8 +256,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
      */
     private suspend fun awaitFeedLikeScanRoot(first: AccessibilityNodeInfo): AccessibilityNodeInfo {
         if (nodeFinder.findLikeButtons(first).isNotEmpty()) return first
-        repeat(4) {
-            delayEco(350L..550L)
+        // Tăng retry từ 4 → 8, delay dài hơn để chờ RecyclerView lazy-load của Zalo.
+        // Tổng chờ tối đa ~7s thay vì ~2.2s — đủ cho màn hình yếu / feed nặng.
+        for (attempt in 0 until 8) {
+            val waitRange = if (attempt < 3) 500L..800L else 700L..900L
+            delayEco(waitRange)
             val next = acquireRootOrNull(
                 maxAttempts = 4,
                 delayRangeMs = 80L..220L,
@@ -266,10 +269,12 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             ) ?: continue
             if (nodeFinder.findLikeButtons(next).isNotEmpty()) {
                 runCatching { first.recycle() }
+                logger.log(LogTag.SCAN, "lazy_load_wait attempt=$attempt", "FEED_READY")
                 return next
             }
             runCatching { next.recycle() }
         }
+        logger.log(LogTag.SCAN, "awaitFeedLikeScanRoot", "TIMEOUT_NO_BUTTONS")
         return first
     }
 
@@ -545,7 +550,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun autoLikeLoop() {
-        while (isRunning) {
+        mainLoop@ while (isRunning) {
             if (settingsManager.isQuietHour()) {
                 updateStatus("🌙 Giờ nghỉ — dừng lại")
                 showToast("🌙 Giờ nghỉ — ZaloPilot tạm dừng")
@@ -607,7 +612,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
             consecutiveNullCount = 0
 
-            loopBody@ try {
+            try {
                 if (!initialFeedSettled) {
                     if (rootContainsFeedAnchor(root!!)) {
                         delayEco(1_000L..2_000L)
@@ -624,7 +629,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     if (refreshed == null) {
                         delayEco(400L..800L)
                         root = null
-                        return@loopBody
+                        continue@mainLoop
                     }
                     root = refreshed
                     initialFeedSettled = true
