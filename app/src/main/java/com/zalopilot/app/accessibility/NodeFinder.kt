@@ -34,14 +34,20 @@ class NodeFinder @Inject constructor(
         }
 
         fun addResolved(raw: AccessibilityNodeInfo?) {
-            val node = resolveLikeClickTarget(raw) ?: return
-            if (!node.hasValidScreenBounds()) return
-            if (LikeViewIdRules.shouldRejectNodeForLike(node)) return
-            if (isAlreadyLiked(node)) return
-            val key = dedupeKey(node)
+            val leaf = resolveLikeLeafNode(raw) ?: return
+            if (!leaf.hasValidScreenBounds()) return
+            if (LikeViewIdRules.shouldRejectNodeForLike(leaf)) return
+            // Important: trạng thái like phải kiểm tra trên leaf (btn_like_text/icon/btn_like...), không dùng container ancestor.
+            if (isAlreadyLiked(leaf)) return
+
+            val clickTarget = resolveLikeClickTargetFromLeaf(leaf)
+            if (!clickTarget.hasValidScreenBounds()) return
+            if (LikeViewIdRules.shouldRejectNodeForLike(clickTarget)) return
+
+            val key = dedupeKey(clickTarget)
             if (key !in seen) {
                 seen.add(key)
-                result.add(node)
+                result.add(clickTarget)
             }
         }
 
@@ -91,10 +97,10 @@ class NodeFinder @Inject constructor(
     fun hasVisibleSelfAlreadyLikedLikeControl(root: AccessibilityNodeInfo): Boolean {
         fun probeRaw(raw: AccessibilityNodeInfo?): Boolean {
             if (raw == null) return false
-            val t = resolveLikeClickTarget(raw) ?: return false
-            if (!t.hasValidScreenBounds()) return false
-            if (LikeViewIdRules.shouldRejectNodeForLike(t)) return false
-            return isAlreadyLiked(t)
+            val leaf = resolveLikeLeafNode(raw) ?: return false
+            if (!leaf.hasValidScreenBounds()) return false
+            if (LikeViewIdRules.shouldRejectNodeForLike(leaf)) return false
+            return isAlreadyLiked(leaf)
         }
 
         var savedId = idStore.getLikeButtonID()
@@ -182,6 +188,12 @@ class NodeFinder @Inject constructor(
      * ưu tiên id whitelist (btn_like_text → btn_like_icon → btn_like → like_component), không dùng container blacklist.
      */
     private fun resolveLikeClickTarget(raw: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        val leaf = resolveLikeLeafNode(raw) ?: return null
+        return resolveLikeClickTargetFromLeaf(leaf)
+    }
+
+    /** Leaf node đúng vùng like (whitelist) — dùng cho isAlreadyLiked/state checks. */
+    private fun resolveLikeLeafNode(raw: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
         if (raw == null) return null
         var current: AccessibilityNodeInfo? = raw
         repeat(8) {
@@ -193,6 +205,21 @@ class NodeFinder @Inject constructor(
         return null
     }
 
+    /** Click target: từ leaf leo lên tối đa 6 cấp cha, lấy ancestor clickable/longClickable đầu tiên (không blacklist class). */
+    private fun resolveLikeClickTargetFromLeaf(leaf: AccessibilityNodeInfo): AccessibilityNodeInfo {
+        var p: AccessibilityNodeInfo? = leaf
+        repeat(6) {
+            val parent = p?.parent ?: return leaf
+            if (!LikeViewIdRules.isBlacklistedClassName(parent.className?.toString()) &&
+                (parent.isClickable || parent.isLongClickable)
+            ) {
+                return parent
+            }
+            p = parent
+        }
+        return leaf
+    }
+
     private fun findBestLikeClickTargetInSubtree(
         root: AccessibilityNodeInfo,
         maxDepth: Int
@@ -200,6 +227,7 @@ class NodeFinder @Inject constructor(
         var best: AccessibilityNodeInfo? = null
         var bestP = Int.MAX_VALUE
         var bestArea = Int.MAX_VALUE
+        var bestClickable = false
         val q = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
         q.addLast(root to 0)
         while (q.isNotEmpty()) {
@@ -214,9 +242,15 @@ class NodeFinder @Inject constructor(
                 val r = Rect()
                 n.getBoundsInScreen(r)
                 val area = r.width() * r.height()
-                if (p < bestP || (p == bestP && area < bestArea)) {
+                val clickable = n.isClickable || n.isLongClickable
+                val better =
+                    // Ưu tiên node có thể click thật (tránh btn_like_text clickable=false).
+                    (clickable && !bestClickable) ||
+                        (clickable == bestClickable && (p < bestP || (p == bestP && area < bestArea)))
+                if (better) {
                     bestP = p
                     bestArea = area
+                    bestClickable = clickable
                     best = n
                 }
             }

@@ -346,6 +346,12 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     }
 
     private fun applyZaloBackground(reason: String) {
+        // Grace period 1s sau GLOBAL_ACTION_BACK: tránh stop nhầm khi transition/animation làm window-state nhảy sang launcher.
+        val sinceBack = SystemClock.elapsedRealtime() - lastGlobalBackAtElapsedMs
+        if (lastGlobalBackAtElapsedMs > 0L && sinceBack in 0L..1_000L) {
+            logger.log(LogTag.STATE, "reason=$reason sinceBackMs=$sinceBack", "BACKGROUND_IGNORED_GRACE")
+            return
+        }
         isZaloForeground = false
         sendBroadcast(Intent("com.zalopilot.ZALO_STATE").putExtra("foreground", false))
         if (isRunning) {
@@ -895,69 +901,14 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                                         dm.heightPixels
                                     )
                                 ) {
-                                    lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
-                                    performGlobalAction(GLOBAL_ACTION_BACK)
                                     logger.log(
                                         LogTag.CLICK,
                                         author ?: "unknown",
                                         "IMAGE_VIEWER_BACK_SKIP_POST"
                                     )
-                                    updateStatus("↩ Đã đóng xem ảnh — quay lại feed...")
-
-                                    delay(800L)
-
-                                    // Nếu package không còn là com.zing.zalo, chờ tối đa 3s để quay lại foreground.
-                                    val targetPkg = "com.zing.zalo"
-                                    if (logger.lastForegroundPackage != targetPkg) {
-                                        val tStart = SystemClock.elapsedRealtime()
-                                        while (SystemClock.elapsedRealtime() - tStart < 3_000L) {
-                                            val r = acquireRootOrNull(
-                                                maxAttempts = 1,
-                                                delayRangeMs = 0L..0L,
-                                                logTag = LogTag.STATE,
-                                                quietLog = true
-                                            )
-                                            runCatching { r?.recycle() }
-                                            if (logger.lastForegroundPackage == targetPkg) break
-                                            delay(120L)
-                                        }
-                                    }
-
-                                    val newRoot = acquireRootOrNull(
-                                        maxAttempts = 3,
-                                        delayRangeMs = 80L..180L,
-                                        logTag = LogTag.CLICK,
-                                        quietLog = true
-                                    )
-                                    if (newRoot == null) {
-                                        updateStatus("⚠️ Không lấy được root sau BACK — thử bài khác")
-                                        delayEco(400L..700L)
-                                        continue
-                                    }
-
-                                    val retryNode = try {
-                                        nodeFinder.reResolveLikeNodeForClick(newRoot, nodeForClick)
-                                    } finally {
-                                        runCatching { newRoot.recycle() }
-                                    }
-                                    if (retryNode == null) {
-                                        logger.log(LogTag.CLICK, author ?: "unknown", "IMAGE_VIEWER_RETRY_RERESOLVE_NULL")
-                                        delayEco(400L..700L)
-                                        continue
-                                    }
-
-                                    // Retry bài này 1 lần bằng ACTION_CLICK trực tiếp trên node mới.
-                                    val retryOk = performClickLikeTargetNoParent(retryNode)
-                                    logger.log(
-                                        LogTag.CLICK,
-                                        author ?: "unknown",
-                                        if (retryOk) "IMAGE_VIEWER_RETRY_ACTION_CLICK_OK" else "IMAGE_VIEWER_RETRY_ACTION_CLICK_FAIL"
-                                    )
-                                    if (!retryOk) {
-                                        updateStatus("❌ Retry click thất bại — thử bài khác")
-                                        delayEco(400L..700L)
-                                        continue
-                                    }
+                                    updateStatus("🖼 Mở nhầm viewer — bỏ qua bài này")
+                                    delayEco(400L..700L)
+                                    continue
                                 }
                             } finally {
                                 runCatching { peekRoot.recycle() }
@@ -1227,12 +1178,16 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         val interactMode = settingsManager.getInteractMode()
         logger.log(LogTag.CLICK, "interactMode=$interactMode", "INTERACT_MODE")
 
-        // ACTION_CLICK luôn là primary; gesture chỉ là fallback.
-        val clickOk = performClickLikeTargetNoParent(node)
+        val clickable = node.isClickable || node.isLongClickable
+
+        // ACTION_CLICK luôn là primary nếu node clickable; gesture là fallback.
+        // Nếu node không clickable (vd btn_like_text), bỏ ACTION_CLICK và dùng gesture (tap toạ độ) để tránh "click fail → kẹt".
+        val clickOk = if (clickable) performClickLikeTargetNoParent(node) else false
         logger.log(
             LogTag.CLICK,
             boundsSummary(node),
-            if (clickOk) "ACTION_CLICK_PRIMARY_OK" else "ACTION_CLICK_PRIMARY_FAIL"
+            if (!clickable) "ACTION_CLICK_PRIMARY_SKIP_NOT_CLICKABLE"
+            else if (clickOk) "ACTION_CLICK_PRIMARY_OK" else "ACTION_CLICK_PRIMARY_FAIL"
         )
         val ok = if (clickOk) {
             true
