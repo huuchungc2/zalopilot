@@ -929,10 +929,21 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         // Đợi Zalo animate / cập nhật state (checked/selected), không tin mỗi text "Thích".
                         delay(ecoVerifyMs(1500L))
 
-                        var confirmedLiked = nodeFinder.isAlreadyLiked(nodeForClick)
+                        // Verify trên root mới (UI Zalo hay stale nếu giữ node cũ sau click).
+                        fun verifyLikedOnFreshRoot(): Boolean {
+                            val fresh = acquireRootOrNull(4, 80L..220L, LogTag.CLICK, quietLog = true) ?: return false
+                            return try {
+                                val resolved = nodeFinder.reResolveLikeNodeForClick(fresh, nodeForClick) ?: nodeForClick
+                                nodeFinder.isAlreadyLiked(resolved)
+                            } finally {
+                                runCatching { fresh.recycle() }
+                            }
+                        }
+
+                        var confirmedLiked = verifyLikedOnFreshRoot() || nodeFinder.isAlreadyLiked(nodeForClick)
                         if (!confirmedLiked) {
                             delay(ecoVerifyMs(600L))
-                            confirmedLiked = nodeFinder.isAlreadyLiked(nodeForClick)
+                            confirmedLiked = verifyLikedOnFreshRoot() || nodeFinder.isAlreadyLiked(nodeForClick)
                         }
 
                         if (!confirmedLiked) {
