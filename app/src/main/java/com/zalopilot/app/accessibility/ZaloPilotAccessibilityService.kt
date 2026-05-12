@@ -941,7 +941,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         delay(ecoVerifyMs(1500L))
 
                         // Verify trên root mới (UI Zalo hay stale nếu giữ node cũ sau click).
-                        fun verifyLikedOnFreshRoot(): Boolean {
+                        suspend fun verifyLikedOnFreshRoot(): Boolean {
                             val fresh = acquireRootOrNull(4, 80L..220L, LogTag.CLICK, quietLog = true) ?: return false
                             return try {
                                 val resolved = nodeFinder.reResolveLikeNodeForClick(fresh, nodeForClick) ?: nodeForClick
