@@ -926,6 +926,15 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                             }
                         }
 
+                        // User yêu cầu: cứ click được thì coi như like (counter tăng ngay).
+                        // Verify vẫn chạy để tránh click lại/unlike, nhưng không còn quyết định việc tăng counter.
+                        val progressAfterClick = progressManager.incrementAndSave()
+                        sessionLikeCount++
+                        if (author != null) likedAuthorsThisSession.add(author)
+                        logger.log(LogTag.CLICK, author ?: "unknown", "CLICKED_COUNTED_AS_LIKE")
+                        updateStatus("✅ Like #${progressAfterClick.todayLikeCount} — ${author ?: "unknown"}")
+                        sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
+
                         // Đợi Zalo animate / cập nhật state (checked/selected), không tin mỗi text "Thích".
                         delay(ecoVerifyMs(1500L))
 
@@ -949,8 +958,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         if (!confirmedLiked) {
                             logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_UNCONFIRMED")
                             updateStatus("❓ Chưa xác nhận được like — bỏ qua bài này, thử bài khác")
-                            progressManager.incrementPostsHandledAndSave()
-                            sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                             continue
                         }
 
@@ -965,12 +972,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         )
                         Log.d("AUTO", "PROCESSED_ADD postKey=$postKey cooldownSet lastClick=$lastClickedPostAt")
 
-                        val progress = progressManager.incrementAndSave()
-                        sessionLikeCount++
-                        if (author != null) likedAuthorsThisSession.add(author)
-                        logger.log(LogTag.CLICK, author ?: "unknown", "SUCCESS")
-                        updateStatus("✅ Like #${progress.todayLikeCount} — ${author ?: "unknown"}")
-                        sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
+                        logger.log(LogTag.CLICK, author ?: "unknown", "SUCCESS_CONFIRMED")
 
                         if (progressManager.isLimitReached()) {
                             logger.log(LogTag.STATE, "autoLike", "DAILY_LIMIT_REACHED")
