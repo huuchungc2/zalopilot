@@ -876,7 +876,13 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    // Nhiều nút thao tác → cho phép scroll ngang để không bị chèn ép / khó bấm.
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                    ) {
                         Button(onClick = {
                             when (subTab) {
                                 0 -> logger.clearSlimLogs()
