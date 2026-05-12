@@ -19,6 +19,16 @@ class NodeFinder @Inject constructor(
     private val idStore: ZaloIDStore,
     private val logger: Logger
 ) {
+    private val inlineCommentPhrases = listOf(
+        "nhập bình luận",
+        "viết bình luận",
+        "thêm bình luận",
+        "write a comment",
+        "add a comment",
+        "post a comment",
+        "enter a comment"
+    )
+
     /**
      * Tìm tất cả nút like chưa được like.
      * Ưu tiên ID đã học, sau đó text hệ thống, rồi duyệt cây (text + contentDescription).
@@ -491,6 +501,13 @@ class NodeFinder @Inject constructor(
         // Tập trung logic phân biệt đã like ở isAlreadyLiked() — không duplicate ở đây.
         if (isAlreadyLiked(node)) return false
 
+        // Fallback an toàn: nếu bài đang hiện ô nhập bình luận gần cụm action, coi như "đã tương tác/khả năng đã like"
+        // → skip để tránh click nhầm/unlike khi Zalo không expose checked/selected/stateDescription.
+        if (hasInlineCommentComposerNearLikeAnchor(node)) {
+            logger.log(LogTag.STATE, boundsSummary(node), "SKIP_INLINE_COMMENT_COMPOSER_NEAR_LIKE")
+            return false
+        }
+
         // Lọc thêm: node là nút "Bình luận", "Chia sẻ", "Nhập" — không phải nút Like
         fun ownTextIsAction(node: AccessibilityNodeInfo): Boolean {
             for (raw in listOf(node.text?.toString(), node.contentDescription?.toString())) {
@@ -504,6 +521,42 @@ class NodeFinder @Inject constructor(
         if (ownTextIsAction(node)) return false
 
         return true
+    }
+
+    private fun hasInlineCommentComposerNearLikeAnchor(likeNode: AccessibilityNodeInfo): Boolean {
+        fun matchesPhrase(s: String?): Boolean {
+            val t = s?.trim()?.lowercase().orEmpty()
+            if (t.isEmpty()) return false
+            return inlineCommentPhrases.any { t.contains(it) }
+        }
+
+        // Lấy một container gần like (leo tối đa 6 cấp) rồi duyệt subtree tìm placeholder comment.
+        var container: AccessibilityNodeInfo? = likeNode
+        repeat(6) {
+            val p = container?.parent ?: return@repeat
+            container = p
+        }
+        val root = container ?: likeNode
+
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        val cap = 900
+        while (stack.isNotEmpty() && visited < cap) {
+            val n = stack.removeLast()
+            visited++
+            if (matchesPhrase(n.text?.toString()) || matchesPhrase(n.contentDescription?.toString())) return true
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return false
+    }
+
+    private fun boundsSummary(node: AccessibilityNodeInfo): String {
+        val r = Rect()
+        node.getBoundsInScreen(r)
+        return "bounds=[${r.left},${r.top},${r.right},${r.bottom}] id=${node.viewIdResourceName ?: ""}"
     }
 
     fun getAuthorName(likeNode: AccessibilityNodeInfo): String? {

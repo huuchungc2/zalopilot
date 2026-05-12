@@ -848,6 +848,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 if (!isRunning) break
                 if (!nodeFinder.shouldLike(node)) {
                     skippedShouldLike++
+                    progressManager.incrementPostsHandledAndSave()
+                    sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                     continue
                 }
 
