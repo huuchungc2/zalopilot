@@ -10,6 +10,8 @@ import javax.inject.Singleton
 
 data class LikeProgress(
     val todayLikeCount: Int = 0,
+    /** Bài đã xử lý trong ngày: like thành công + skip/lỗi (viewer, click fail, unconfirmed...). */
+    val todayPostsHandledCount: Int = 0,
     val lastRunDate: String = "",
     val visitIndex: Int = 0  // Visit mode: đã đi tới người thứ N trong danh bạ
 )
@@ -25,6 +27,7 @@ class LikeProgressManager @Inject constructor(
     fun load(): LikeProgress {
         return LikeProgress(
             todayLikeCount = prefs.getInt("today_count", 0),
+            todayPostsHandledCount = prefs.getInt("today_posts_handled", 0),
             lastRunDate = prefs.getString("last_date", "") ?: "",
             visitIndex = prefs.getInt("visit_index", 0)
         )
@@ -34,10 +37,26 @@ class LikeProgressManager @Inject constructor(
         val current = load()
         val updated = current.copy(
             todayLikeCount = current.todayLikeCount + 1,
+            todayPostsHandledCount = current.todayPostsHandledCount + 1,
             lastRunDate = today()
         )
         prefs.edit()
             .putInt("today_count", updated.todayLikeCount)
+            .putInt("today_posts_handled", updated.todayPostsHandledCount)
+            .putString("last_date", updated.lastRunDate)
+            .apply()
+        return updated
+    }
+
+    /** Một bài đã duyệt nhưng không like thành công (skip/lỗi/viewer...). */
+    fun incrementPostsHandledAndSave(): LikeProgress {
+        val current = load()
+        val updated = current.copy(
+            todayPostsHandledCount = current.todayPostsHandledCount + 1,
+            lastRunDate = today()
+        )
+        prefs.edit()
+            .putInt("today_posts_handled", updated.todayPostsHandledCount)
             .putString("last_date", updated.lastRunDate)
             .apply()
         return updated
@@ -50,6 +69,7 @@ class LikeProgressManager @Inject constructor(
     fun isLimitReached(): Boolean {
         val progress = load()
         val limit = settingsManager.load().dailyLimit
+        if (limit <= 0) return false
         return progress.todayLikeCount >= limit
     }
 
@@ -58,6 +78,7 @@ class LikeProgressManager @Inject constructor(
         if (progress.lastRunDate != today()) {
             prefs.edit()
                 .putInt("today_count", 0)
+                .putInt("today_posts_handled", 0)
                 .putString("last_date", today())
                 .apply()
         }

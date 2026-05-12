@@ -302,17 +302,24 @@ class MainActivity : ComponentActivity() {
                         Spacer(Modifier.height(10.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             StatCard("${progress.todayLikeCount}", "Đã like", zaloBlue, Modifier.weight(1f))
-                            StatCard("${settings.dailyLimit}", "Giới hạn", Color(0xFF555555), Modifier.weight(1f))
+                            StatCard("${progress.todayPostsHandledCount}", "Đã duyệt", Color(0xFF555555), Modifier.weight(1f))
+                            StatCard("${settings.dailyLimit}", "Giới hạn", Color(0xFF444444), Modifier.weight(1f))
                         }
                         Spacer(Modifier.height(10.dp))
-                        val pct = (progress.todayLikeCount.toFloat() / settings.dailyLimit).coerceIn(0f, 1f)
+                        val pct = if (settings.dailyLimit <= 0) 0f
+                        else (progress.todayLikeCount.toFloat() / settings.dailyLimit).coerceIn(0f, 1f)
                         LinearProgressIndicator(progress = { pct },
                             modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(99.dp)),
                             color = zaloBlue, trackColor = Color(0xFFE0E0E0))
                         Spacer(Modifier.height(4.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("${progress.todayLikeCount} / ${settings.dailyLimit}", fontSize = 12.sp, color = Color.Gray)
-                            Text("${(pct * 100).toInt()}%", fontSize = 12.sp, color = Color.Gray)
+                            Text(
+                                if (settings.dailyLimit <= 0) "${progress.todayLikeCount} / ∞"
+                                else "${progress.todayLikeCount} / ${settings.dailyLimit}",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                            Text(if (settings.dailyLimit <= 0) "—" else "${(pct * 100).toInt()}%", fontSize = 12.sp, color = Color.Gray)
                         }
                     }
                 }
@@ -372,6 +379,7 @@ class MainActivity : ComponentActivity() {
         var quietStart by remember { mutableIntStateOf(settings.quietHourStart) }
         var quietEnd by remember { mutableIntStateOf(settings.quietHourEnd) }
         var ecoMode by remember { mutableStateOf(settings.ecoMode) }
+        var humanLikeScroll by remember { mutableStateOf(settings.humanLikeScroll) }
         var nodeHighlightDebug by remember { mutableStateOf(debugHighlightPrefs.isNodeHighlightEnabled()) }
         var verboseLogEnabled by remember { mutableStateOf(logger.isVerboseLogEnabled()) }
 
@@ -573,6 +581,30 @@ class MainActivity : ComponentActivity() {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Column(Modifier.weight(1f)) {
+                            Text("CUỘN GIỐNG NGƯỜI", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Ưu tiên vuốt gesture để cuộn (random quãng vuốt/duration) thay vì cuộn API. Tự nhiên hơn nhưng có thể chậm hơn.",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                        }
+                        Switch(
+                            checked = humanLikeScroll,
+                            onCheckedChange = { humanLikeScroll = it },
+                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
+                        )
+                    }
+                }
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(Modifier.weight(1f)) {
                             Text("VIỀN DEBUG (NÚT THÍCH)", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
                             Spacer(Modifier.height(4.dp))
                             Text(
@@ -606,7 +638,8 @@ class MainActivity : ComponentActivity() {
                         quietHourStart = quietStart,
                         quietHourEnd = quietEnd,
                         interactModeStr = interactMode.name,
-                        ecoMode = ecoMode
+                        ecoMode = ecoMode,
+                        humanLikeScroll = humanLikeScroll
                     ))
                     Toast.makeText(this@MainActivity, "✅ Đã lưu cài đặt", Toast.LENGTH_SHORT).show()
                 }, modifier = Modifier.fillMaxWidth().height(50.dp),
@@ -937,66 +970,76 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            if (activeLogs.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("📋", fontSize = 40.sp)
-                        Spacer(Modifier.height(8.dp))
-                        Text("Chưa có log ${activeTitle()}", color = Color.Gray, fontSize = 14.sp)
-                        Text("Mở Zalo và chạy bot để ghi log", color = Color.Gray, fontSize = 12.sp)
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                if (activeLogs.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("📋", fontSize = 40.sp)
+                            Spacer(Modifier.height(8.dp))
+                            Text("Chưa có log ${activeTitle()}", color = Color.Gray, fontSize = 14.sp)
+                            Text("Mở Zalo và chạy bot để ghi log", color = Color.Gray, fontSize = 12.sp)
+                        }
                     }
-                }
-            } else {
-                LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(activeLogs) { log ->
-                        val accent = tagColor(log.tag)
-                        val failure = isClickFailure(log) || isScrollFailure(log)
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = when {
-                                    failure -> Color(0xFFFFEBEE)
-                                    log.tag == LogTag.ERROR -> Color(0xFFFFCDD2)
-                                    else -> Color.White
-                                }
-                            ),
-                            shape = RoundedCornerShape(10.dp),
-                            border = if (failure) androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE57373)) else null
-                        ) {
-                            Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Box(
-                                    Modifier.size(10.dp).clip(CircleShape).background(accent).align(Alignment.Top)
-                                )
-                                Column(Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Surface(
-                                            color = accent.copy(alpha = 0.15f),
-                                            shape = RoundedCornerShape(6.dp)
-                                        ) {
-                                            Text(
-                                                log.tag.name,
-                                                Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = accent
-                                            )
-                                        }
-                                        if (failure) {
-                                            Text("THẤT BẠI", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFC62828))
-                                        }
+                } else {
+                    LazyColumn(
+                        Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(activeLogs) { log ->
+                            val accent = tagColor(log.tag)
+                            val failure = isClickFailure(log) || isScrollFailure(log)
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = when {
+                                        failure -> Color(0xFFFFEBEE)
+                                        log.tag == LogTag.ERROR -> Color(0xFFFFCDD2)
+                                        else -> Color.White
                                     }
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(log.target, fontSize = 13.sp, color = Color(0xFF222222))
-                                    Text(log.result, fontSize = 12.sp, color = Color(0xFF555555))
-                                    Spacer(Modifier.height(4.dp))
-                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text(log.timestamp, fontSize = 11.sp, color = Color.Gray)
-                                        val meta = buildList {
-                                            if (!log.foregroundPkg.isNullOrBlank()) add("pkg ${log.foregroundPkg}")
-                                            log.durationMs?.let { add("${it}ms") }
-                                        }.joinToString(" · ")
-                                        if (meta.isNotEmpty()) {
-                                            Text(meta, fontSize = 10.sp, color = Color(0xFF888888), maxLines = 2)
+                                ),
+                                shape = RoundedCornerShape(10.dp),
+                                border = if (failure) androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE57373)) else null
+                            ) {
+                                Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Box(
+                                        Modifier.size(10.dp).clip(CircleShape).background(accent).align(Alignment.Top)
+                                    )
+                                    Column(Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Surface(
+                                                color = accent.copy(alpha = 0.15f),
+                                                shape = RoundedCornerShape(6.dp)
+                                            ) {
+                                                Text(
+                                                    log.tag.name,
+                                                    Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = accent
+                                                )
+                                            }
+                                            if (failure) {
+                                                Text("THẤT BẠI", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFC62828))
+                                            }
+                                        }
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(log.target, fontSize = 13.sp, color = Color(0xFF222222))
+                                        Text(log.result, fontSize = 12.sp, color = Color(0xFF555555))
+                                        Spacer(Modifier.height(4.dp))
+                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text(log.timestamp, fontSize = 11.sp, color = Color.Gray)
+                                            val meta = buildList {
+                                                if (!log.foregroundPkg.isNullOrBlank()) add("pkg ${log.foregroundPkg}")
+                                                log.durationMs?.let { add("${it}ms") }
+                                            }.joinToString(" · ")
+                                            if (meta.isNotEmpty()) {
+                                                Text(meta, fontSize = 10.sp, color = Color(0xFF888888), maxLines = 2)
+                                            }
                                         }
                                     }
                                 }

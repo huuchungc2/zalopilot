@@ -24,6 +24,8 @@
 - [x] UI map — export/import `ui_map.json` + nút "Quét UI" (force scan & export)
 - [x] GitHub Actions build APK
 - [x] App icon
+- [x] Counter **Đã duyệt** (like + skip/lỗi) + hiển thị Trang chủ/menu nổi
+- [x] Tab **Nhật ký** — danh sách log cuộn/chạm được (weight + LazyColumn fillMaxSize)
 
 ---
 

@@ -180,7 +180,13 @@ class FloatingMenuService : Service() {
             setPadding(8, 8, 8, 8)
             setBackgroundColor(Color.parseColor("#EE1a1a2e"))
 
-            addView(menuItem("📊 ${progress.todayLikeCount}/${settings.dailyLimit} hôm nay", "#0068FF", null))
+            val statLabel = buildString {
+                append("📊 Like ${progress.todayLikeCount}")
+                append(" · Duyệt ${progress.todayPostsHandledCount}")
+                if (settings.dailyLimit > 0) append(" /${settings.dailyLimit}")
+                append(" hôm nay")
+            }
+            addView(menuItem(statLabel, "#0068FF", null))
 
             addView(menuItem("📋 Dump UI", "#6C5CE7") {
                 runCatching {

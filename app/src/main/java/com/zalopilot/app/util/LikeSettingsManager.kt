@@ -31,7 +31,9 @@ data class LikeSettings(
     val likeModeStr: String = "FEED",
     val interactModeStr: String = "MIX",  // Mặc định MIX
     /** Giảm tần suất poll/scan và tăng delay — ít nóng, ít hao pin hơn (hơi chậm hơn). */
-    val ecoMode: Boolean = false
+    val ecoMode: Boolean = false,
+    /** Ưu tiên vuốt gesture để cuộn feed (trông giống người hơn); fallback API nếu gesture fail. */
+    val humanLikeScroll: Boolean = false
 )
 
 @Singleton
@@ -110,4 +112,6 @@ class LikeSettingsManager @Inject constructor(
     }
 
     fun isEcoMode(): Boolean = load().ecoMode
+
+    fun isHumanLikeScroll(): Boolean = load().humanLikeScroll
 }

@@ -675,7 +675,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         var didAutoScroll = false
                         when (feedMode) {
                             FeedMode.SCROLL -> {
-                                feedMoved = scrollFeedWithVerification(liveRoot, scrollProf)
+                                feedMoved = scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = settings.humanLikeScroll)
                                 didAutoScroll = true
                             }
                             FeedMode.MANUAL -> {
@@ -684,7 +684,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                             }
                             FeedMode.MIX -> {
                                 if ((1..10).random() <= 6) {
-                                    feedMoved = scrollFeedWithVerification(liveRoot, scrollProf)
+                                    feedMoved = scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = settings.humanLikeScroll)
                                     didAutoScroll = true
                                 } else {
                                     updateStatus("✋ Mix mode — chờ vuốt tay...")
@@ -728,7 +728,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         consecutiveEmptyLikeScanStreak = 0
                         logger.log(LogTag.SCROLL, "all skipped, fast scroll feedMode=$feedMode", "ALL_SKIPPED")
                         updateStatus("⏩ Bài đã like — cuộn tiếp...")
-                        val feedMoved = scrollFeedWithVerification(liveRoot, scrollProf)
+                        val feedMoved = scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = settings.humanLikeScroll)
                         processedPosts.clear()
                         if (!feedMoved) {
                             consecutiveScrollNoProgress++
@@ -750,7 +750,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     }
                     FeedScanResult.NO_BUTTONS -> {
                         updateStatus("🔍 Chưa thấy nút Thích — cuộn nhẹ, sẽ quét lại...")
-                        var feedMoved = scrollFeedWithVerification(liveRoot, scrollProf)
+                        var feedMoved = scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = settings.humanLikeScroll)
                         if (!feedMoved) {
                             delayEco(240L..420L)
                             feedMoved = scrollDownByGesture(GestureScrollProfile.SMALL)
@@ -854,6 +854,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 val author = nodeFinder.getAuthorName(node)
                 if (author != null && likedAuthorsThisSession.contains(author)) {
                     logger.log(LogTag.STATE, author, "SKIP_AUTHOR_ALREADY_LIKED")
+                    progressManager.incrementPostsHandledAndSave()
+                    sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                     continue
                 }
 
@@ -914,6 +916,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                                         "IMAGE_VIEWER_BACK_SKIP_POST"
                                     )
                                     updateStatus("🖼 Mở nhầm viewer — bỏ qua bài này")
+                                    progressManager.incrementPostsHandledAndSave()
+                                    sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                                     delayEco(400L..700L)
                                     continue
                                 }
@@ -934,6 +938,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         if (!confirmedLiked) {
                             logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_UNCONFIRMED")
                             updateStatus("❓ Chưa xác nhận được like — bỏ qua bài này, thử bài khác")
+                            progressManager.incrementPostsHandledAndSave()
+                            sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                             continue
                         }
 
@@ -965,6 +971,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
                     updateStatus("❌ Click thất bại — thử bài khác")
                     logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_FAILED:${boundsSummary(nodeForClick)}")
+                    progressManager.incrementPostsHandledAndSave()
+                    sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                 } finally {
                     if (microRoot != null && microRoot !== scanRoot) {
                         runCatching { microRoot.recycle() }
@@ -1168,18 +1176,26 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
      */
     private suspend fun scrollFeedWithVerification(
         rootBeforeScroll: AccessibilityNodeInfo,
-        gestureProfile: GestureScrollProfile = GestureScrollProfile.NORMAL
+        gestureProfile: GestureScrollProfile = GestureScrollProfile.NORMAL,
+        preferGesture: Boolean = false
     ): Boolean {
         var rootAfter: AccessibilityNodeInfo? = null
         var rootRetry: AccessibilityNodeInfo? = null
         return try {
             val beforeTop = measureFeedAnchorTop(rootBeforeScroll)
-            val recyclerOk = tryScrollFeedRecycler(rootBeforeScroll)
-            val gestureOk = if (!recyclerOk) scrollDownByGesture(gestureProfile) else false
+            val (recyclerOk, gestureOk) = if (preferGesture) {
+                val g = scrollDownByGesture(gestureProfile)
+                val r = if (!g) tryScrollFeedRecycler(rootBeforeScroll) else false
+                r to g
+            } else {
+                val r = tryScrollFeedRecycler(rootBeforeScroll)
+                val g = if (!r) scrollDownByGesture(gestureProfile) else false
+                r to g
+            }
             var scrollAttemptSucceeded = recyclerOk || gestureOk
             logger.log(
                 LogTag.SCROLL,
-                "beforeTop=$beforeTop recycler=$recyclerOk gesture=$gestureProfile gestureOk=$gestureOk",
+                "beforeTop=$beforeTop preferGesture=$preferGesture recycler=$recyclerOk gesture=$gestureProfile gestureOk=$gestureOk",
                 "DISPATCHED"
             )
             delay(ecoVerifyMs(1_200L))
@@ -1193,13 +1209,20 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             if (beforeTop != null && afterTop != null && beforeTop == afterTop) {
                 logger.log(LogTag.SCROLL, "pass1 no movement", "SCROLL_RETRY")
                 rootRetry = acquireRootOrNull(3, 80L..200L, LogTag.SCROLL, quietLog = isRunning)
-                val retryRecycler = rootRetry?.let { tryScrollFeedRecycler(it) } ?: false
                 val retryProfile = if (gestureProfile == GestureScrollProfile.SMALL) {
                     GestureScrollProfile.NORMAL
                 } else {
                     GestureScrollProfile.LARGE
                 }
-                val retryGesture = if (!retryRecycler) scrollDownByGesture(retryProfile) else false
+                val (retryRecycler, retryGesture) = if (preferGesture) {
+                    val g = scrollDownByGesture(retryProfile)
+                    val r = if (!g) (rootRetry?.let { tryScrollFeedRecycler(it) } ?: false) else false
+                    r to g
+                } else {
+                    val r = rootRetry?.let { tryScrollFeedRecycler(it) } ?: false
+                    val g = if (!r) scrollDownByGesture(retryProfile) else false
+                    r to g
+                }
                 scrollAttemptSucceeded = scrollAttemptSucceeded || retryRecycler || retryGesture
                 logger.log(
                     LogTag.SCROLL,

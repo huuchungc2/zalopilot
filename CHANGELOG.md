@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- feat(progress/ui): thêm counter **Đã duyệt** (`todayPostsHandledCount`) — tăng khi like thành công và khi skip/lỗi (viewer, click fail, unconfirmed); hiển thị ở Trang chủ + menu nổi.
+- fix(ui): tab **Nhật ký** — vùng list log dùng `weight(1f)` + `LazyColumn(fillMaxSize)` để cuộn/chạm được.
 - feat(debug): dump UI feed item đã like/chưa like ra `filesDir/ui_dump_liked.json` và `ui_dump_unliked.json` (mỗi file 1 lần) khi bot quét feed; thêm nút export tương ứng trong tab Nhật ký (copy ra Downloads + toast đường dẫn). Thêm nút "Dump UI" trong floating overlay để ghi `filesDir/ui_dump.json` và export trong tab Nhật ký.
 - docs: thêm checklist “CI-safe Kotlin” trong `CLAUDE.md` (import `SystemClock`, tránh `continue/break` trong inline lambda, range `0L..`, ...).
 - feat(ui/accessibility): thêm nút "Quét UI" (force scan) và export map id ra `ui_map.json` (internal storage); `ZaloUIScanner` bỏ whitelist khi scan (chỉ reject blacklist class/id, package != `com.zing.zalo`, bounds > 20% màn hình). `NodeFinder.findLikeButtons`/`hasVisibleSelfAlreadyLikedLikeControl` bỏ filter theo whitelist (chỉ giữ `shouldRejectNodeForLike`).
