@@ -46,6 +46,8 @@
 - [x] Retry khi click fail — gesture fallback sau ACTION_CLICK (đã có trong service)
 - [x] Cuối feed / cuộn không đổi — `consecutiveScrollNoProgress` + dừng sau 5 (ALL_SKIPPED & cảnh báo LIKE)
 - [x] Dừng khi không thấy nút Thích lặp lại (`NO_BUTTONS` × 5 — có sẵn)
+- [x] Chống unlike nhầm: sau click verify + nếu không confirm và không thấy ô bình luận thì click lại để re-like
+- [x] Không pause/stop nhầm khi có heads-up notification/SystemUI overlay nổi lên khi bot đang chạy
 - [ ] Handle trường hợp Zalo hiện popup quảng cáo / dialog → tự đóng
 
 ---

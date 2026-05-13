@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- feat(ui): Trang chủ thêm nút "Mở Zalo" (launch `com.zing.zalo`) để khỏi phải tự đi tìm app; trạng thái "Đang chạy/Chờ" lấy từ broadcast `STATUS_UPDATE` thay vì `isActive`.
+- feat(settings/like): `InteractMode=TAP` giờ ưu tiên touch (gesture tap) trước rồi mới fallback `ACTION_CLICK`; màn Cài đặt được rút gọn, ẩn bớt option debug/nâng cao để dễ dùng.
+- fix(accessibility): khi bot đang chạy, heads-up notification/SystemUI overlay không còn làm bot pause/stop nhầm — thêm grace 6s bỏ qua package `systemui/android/launcher` nếu vừa thấy Zalo foreground.
+- fix(accessibility/like): chống unlike nhầm khi bài đã like nhưng UI không lộ trạng thái — sau click sẽ verify trên root mới; nếu không confirm và không thấy ô nhập bình luận gần cụm action thì coi như vừa toggle sang unlike và click lại để re-like; chỉ tăng progress khi confirm đã like.
 - feat(progress/ui): thêm counter **Đã duyệt** (`todayPostsHandledCount`) — tăng khi like thành công và khi skip/lỗi (viewer, click fail, unconfirmed); hiển thị ở Trang chủ + menu nổi.
 - fix(ui): tab **Nhật ký** — vùng list log dùng `weight(1f)` + `LazyColumn(fillMaxSize)` để cuộn/chạm được.
 - feat(debug): dump UI feed item đã like/chưa like ra `filesDir/ui_dump_liked.json` và `ui_dump_unliked.json` (mỗi file 1 lần) khi bot quét feed; thêm nút export tương ứng trong tab Nhật ký (copy ra Downloads + toast đường dẫn). Thêm nút "Dump UI" trong floating overlay để ghi `filesDir/ui_dump.json` và export trong tab Nhật ký.

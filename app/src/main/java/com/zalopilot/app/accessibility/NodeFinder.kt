@@ -523,7 +523,7 @@ class NodeFinder @Inject constructor(
         return true
     }
 
-    private fun hasInlineCommentComposerNearLikeAnchor(likeNode: AccessibilityNodeInfo): Boolean {
+    fun hasInlineCommentComposerNearLikeAnchor(likeNode: AccessibilityNodeInfo): Boolean {
         fun matchesPhrase(s: String?): Boolean {
             val t = s?.trim()?.lowercase().orEmpty()
             if (t.isEmpty()) return false

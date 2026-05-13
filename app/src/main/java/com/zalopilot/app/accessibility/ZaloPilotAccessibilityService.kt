@@ -78,6 +78,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private var sessionLikeCount = 0
     private var wakeLock: PowerManager.WakeLock? = null
     private var isZaloForeground = false
+    /** Lần gần nhất poll thấy package thuộc Zalo (dùng để bỏ qua overlay tạm như heads-up). */
+    private var lastZaloForegroundAtElapsedMs: Long = 0L
     private var consecutiveNullCount = 0
     private var consecutivePollRootNull = 0
     private val likedAuthorsThisSession = mutableSetOf<String>()
@@ -139,6 +141,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         private const val CONTENT_EVENT_LOG_THROTTLE_MS = 3_000L
         private const val BOT_EVENT_LOG_THROTTLE_MS = 10_000L
         private const val ROOT_NULL_WALL_LOG_MS = 8_000L
+        /** Heads-up/SystemUI overlay: không coi là rời Zalo ngay. */
+        private const val TRANSIENT_OVERLAY_GRACE_MS = 6_000L
         /** Cooldown / chống double-click cùng bài (Zalo không cập nhật isChecked đáng tin). */
         private const val POST_CLICK_COOLDOWN_MS = 5_000L
         private const val DUPLICATE_LIKE_CLICK_SUPPRESS_MS = POST_CLICK_COOLDOWN_MS
@@ -158,6 +162,13 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
     private fun combinedStuckLevel(): Int =
         maxOf(consecutiveScrollNoProgress, consecutiveEmptyLikeScanStreak / 4)
+
+    private fun isTransientOverlayPackage(pkg: String): Boolean {
+        val p = pkg.lowercase()
+        return p.contains("systemui") ||
+            p == "android" ||
+            p.contains("launcher")
+    }
 
     private fun gestureProfileForStreak(): GestureScrollProfile = when {
         combinedStuckLevel() >= 3 -> GestureScrollProfile.LARGE
@@ -320,6 +331,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         val inZalo = isZaloRelatedPackage(pkg)
 
         if (inZalo) {
+            lastZaloForegroundAtElapsedMs = SystemClock.elapsedRealtime()
             if (!isZaloForeground) {
                 logger.log(LogTag.STATE, "pkg=$pkg", "FOREGROUND_POLL")
                 sendBroadcast(Intent("com.zalopilot.ZALO_STATE").putExtra("foreground", true))
@@ -340,6 +352,12 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 val sinceBack = SystemClock.elapsedRealtime() - lastGlobalBackAtElapsedMs
                 if (lastGlobalBackAtElapsedMs > 0L && sinceBack in 0L..1_000L) {
                     logger.log(LogTag.STATE, "pkg=$pkg sinceBackMs=$sinceBack", "BACKGROUND_POLL_GRACE")
+                    return
+                }
+                // Heads-up notification / SystemUI overlay: giữ running, đừng stop/pause ngay.
+                val sinceZalo = SystemClock.elapsedRealtime() - lastZaloForegroundAtElapsedMs
+                if (isRunning && isTransientOverlayPackage(pkg) && sinceZalo in 0L..TRANSIENT_OVERLAY_GRACE_MS) {
+                    logger.log(LogTag.STATE, "pkg=$pkg sinceZaloMs=$sinceZalo", "TRANSIENT_OVERLAY_IGNORE")
                     return
                 }
                 logger.log(LogTag.STATE, "pkg=$pkg", "BACKGROUND_POLL")
@@ -438,6 +456,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 logger.setForegroundPackage(pkg)
                 uiScanner.requestHintRescan()
             } else if (isZaloForeground) {
+                val sinceZalo = SystemClock.elapsedRealtime() - lastZaloForegroundAtElapsedMs
+                if (isRunning && isTransientOverlayPackage(pkg) && sinceZalo in 0L..TRANSIENT_OVERLAY_GRACE_MS) {
+                    logger.log(LogTag.STATE, "pkg=$pkg sinceZaloMs=$sinceZalo", "TRANSIENT_OVERLAY_EVENT_IGNORE")
+                    return
+                }
                 logger.log(LogTag.STATE, "pkg=$pkg", "BACKGROUND_EVENT")
                 applyZaloBackground(reason = "window_state_non_zalo")
             }
@@ -928,17 +951,17 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                             }
                         }
 
-                        // User yêu cầu: cứ click được thì coi như like (counter tăng ngay).
-                        // Verify vẫn chạy để tránh click lại/unlike, nhưng không còn quyết định việc tăng counter.
-                        val progressAfterClick = progressManager.incrementAndSave()
-                        sessionLikeCount++
-                        if (author != null) likedAuthorsThisSession.add(author)
-                        logger.log(LogTag.CLICK, author ?: "unknown", "CLICKED_COUNTED_AS_LIKE")
-                        updateStatus("✅ Like #${progressAfterClick.todayLikeCount} — ${author ?: "unknown"}")
-                        sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
-
                         // Đợi Zalo animate / cập nhật state (checked/selected), không tin mỗi text "Thích".
                         delay(ecoVerifyMs(1500L))
+
+                        suspend fun resolvedLikeNodeOnFreshRoot(): AccessibilityNodeInfo? {
+                            val fresh = acquireRootOrNull(4, 80L..220L, LogTag.CLICK, quietLog = true) ?: return null
+                            return try {
+                                nodeFinder.reResolveLikeNodeForClick(fresh, nodeForClick) ?: nodeForClick
+                            } finally {
+                                runCatching { fresh.recycle() }
+                            }
+                        }
 
                         // Verify trên root mới (UI Zalo hay stale nếu giữ node cũ sau click).
                         suspend fun verifyLikedOnFreshRoot(): Boolean {
@@ -958,10 +981,46 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         }
 
                         if (!confirmedLiked) {
+                            // Fallback theo yêu cầu: nếu không thấy ô bình luận (composer) sau click,
+                            // có thể click 1 phát vừa toggle sang UNLIKE trên bài đã like trước đó → click lại để LIKE lại.
+                            val resolved = resolvedLikeNodeOnFreshRoot()
+                            if (resolved != null) {
+                                val hasComposer = nodeFinder.hasInlineCommentComposerNearLikeAnchor(resolved)
+                                if (!hasComposer) {
+                                    logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_NO_COMMENT_COMPOSER_ASSUME_TOGGLED")
+                                    val reClicked = performLikeClickWithFallbacks(resolved)
+                                    logger.log(
+                                        LogTag.CLICK,
+                                        author ?: "unknown",
+                                        if (reClicked) "RECLICK_TO_RELIKE_DISPATCHED" else "RECLICK_TO_RELIKE_FAILED"
+                                    )
+                                    if (reClicked) {
+                                        delay(ecoVerifyMs(1500L))
+                                        confirmedLiked = verifyLikedOnFreshRoot() || nodeFinder.isAlreadyLiked(resolved)
+                                        if (!confirmedLiked) {
+                                            delay(ecoVerifyMs(600L))
+                                            confirmedLiked = verifyLikedOnFreshRoot() || nodeFinder.isAlreadyLiked(resolved)
+                                        }
+                                    }
+                                } else {
+                                    // Theo rule user: có composer → coi như like OK và đi tiếp (kể cả khi isAlreadyLiked không confirm được).
+                                    logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_HAS_COMMENT_COMPOSER_TREAT_AS_CONFIRMED")
+                                    confirmedLiked = true
+                                }
+                            }
+                        }
+
+                        if (!confirmedLiked) {
                             logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_UNCONFIRMED")
                             updateStatus("❓ Chưa xác nhận được like — bỏ qua bài này, thử bài khác")
                             continue
                         }
+
+                        val progressAfterClick = progressManager.incrementAndSave()
+                        sessionLikeCount++
+                        if (author != null) likedAuthorsThisSession.add(author)
+                        updateStatus("✅ Like #${progressAfterClick.todayLikeCount} — ${author ?: "unknown"}")
+                        sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
 
                         processedPosts.add(postKey)
                         clickedPositionsThisSession.add("${rect.left}_${rect.top}")
@@ -1329,25 +1388,42 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
         val clickable = node.isClickable || node.isLongClickable
 
-        // ACTION_CLICK luôn là primary nếu node clickable; gesture là fallback.
-        // Nếu node không clickable (vd btn_like_text), bỏ ACTION_CLICK và dùng gesture (tap toạ độ) để tránh "click fail → kẹt".
-        val clickOk = if (clickable) performClickLikeTargetNoParent(node) else false
-        logger.log(
-            LogTag.CLICK,
-            boundsSummary(node),
-            if (!clickable) "ACTION_CLICK_PRIMARY_SKIP_NOT_CLICKABLE"
-            else if (clickOk) "ACTION_CLICK_PRIMARY_OK" else "ACTION_CLICK_PRIMARY_FAIL"
-        )
-        val ok = if (clickOk) {
-            true
-        } else {
-            val gestureOk = tapNodeByCoordinate(node)
+        val useGestureFirst = when (interactMode) {
+            InteractMode.TAP -> true // đúng như setting: ưu tiên touch (gesture tap) trước
+            InteractMode.SWIPE -> false
+            InteractMode.MIX -> (1..2).random() == 1
+        }
+
+        fun actionClickIfPossible(): Boolean {
+            if (!clickable) {
+                logger.log(LogTag.CLICK, boundsSummary(node), "ACTION_CLICK_SKIP_NOT_CLICKABLE")
+                return false
+            }
+            val ok = performClickLikeTargetNoParent(node)
             logger.log(
                 LogTag.CLICK,
                 boundsSummary(node),
-                if (gestureOk) "GESTURE_FALLBACK_OK" else "GESTURE_FALLBACK_FAIL"
+                if (ok) "ACTION_CLICK_OK" else "ACTION_CLICK_FAIL"
             )
-            gestureOk
+            return ok
+        }
+
+        suspend fun gestureTap(): Boolean {
+            val ok = tapNodeByCoordinate(node)
+            logger.log(
+                LogTag.CLICK,
+                boundsSummary(node),
+                if (ok) "GESTURE_TAP_OK" else "GESTURE_TAP_FAIL"
+            )
+            return ok
+        }
+
+        val ok = if (useGestureFirst) {
+            // Touch giống người trước; fail thì fallback ACTION_CLICK nếu có thể.
+            gestureTap() || actionClickIfPossible()
+        } else {
+            // Click trước (ổn định hơn); fail thì fallback touch.
+            actionClickIfPossible() || gestureTap()
         }
 
         if (ok) {

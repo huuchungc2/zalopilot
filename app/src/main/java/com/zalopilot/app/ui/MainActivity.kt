@@ -182,7 +182,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun ZaloPilotApp() {
         var selectedTab by remember { mutableIntStateOf(0) }
-        var isRunning by remember { mutableStateOf(ZaloPilotAccessibilityService.isActive) }
+        var isRunning by remember { mutableStateOf(false) }
         var progress by remember { mutableStateOf(progressManager.load()) }
         var settings by remember { mutableStateOf(settingsManager.load()) }
         var logsSlim by remember { mutableStateOf(logger.readSlimLogs()) }
@@ -196,13 +196,13 @@ class MainActivity : ComponentActivity() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     progress = progressManager.load()
                     settings = settingsManager.load()
-                    isRunning = ZaloPilotAccessibilityService.isActive
                     logsSlim = logger.readSlimLogs()
                     logsVerbose = logger.readVerboseLogs()
                     logsError = logger.readErrorLogs()
                     when (intent?.action) {
                         "com.zalopilot.STATUS_UPDATE" -> {
                             val running = intent.getBooleanExtra("running", false)
+                            isRunning = running
                             Toast.makeText(this@MainActivity,
                                 if (running) "▶ ZaloPilot đang chạy" else "■ ZaloPilot đã dừng",
                                 Toast.LENGTH_SHORT).show()
@@ -294,6 +294,33 @@ class MainActivity : ComponentActivity() {
                                 Text(if (isRunning) "Đang chạy" else "Chờ", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.W500)
                             }
                         }
+                        Spacer(Modifier.height(10.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Button(
+                                onClick = {
+                                    val intent = packageManager.getLaunchIntentForPackage("com.zing.zalo")
+                                    if (intent == null) {
+                                        Toast.makeText(this@MainActivity, "⚠️ Chưa cài Zalo", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        startActivity(intent)
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f)),
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
+                            ) {
+                                Text("Mở Zalo", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.W500)
+                            }
+                            Button(
+                                onClick = { startService(Intent(this@MainActivity, FloatingMenuService::class.java)) },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f)),
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
+                            ) {
+                                Text("Bật nút nổi", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.W500)
+                            }
+                        }
                     }
                 }
             }
@@ -344,12 +371,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             item {
-                Button(onClick = { startService(Intent(this@MainActivity, FloatingMenuService::class.java)) },
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = zaloBlue),
-                    shape = RoundedCornerShape(12.dp)) {
-                    Text("Bật nút nổi ZP trên Zalo", fontSize = 15.sp, fontWeight = FontWeight.W500)
-                }
+                // Nút "Bật nút nổi" đã đưa lên header cho dễ thao tác.
             }
         }
     }
@@ -372,18 +394,15 @@ class MainActivity : ComponentActivity() {
         var interactMode by remember { mutableStateOf(
             try { InteractMode.valueOf(settings.interactModeStr) } catch (e: Exception) { InteractMode.MIX }
         ) }
+        // UI gọn: SWIPE không còn hiển thị, coi như TAP (touch).
+        if (interactMode == InteractMode.SWIPE) interactMode = InteractMode.TAP
         var feedMode by remember { mutableStateOf(settingsManager.getFeedMode()) }
         var delayMin by remember { mutableStateOf((settings.delayMinMs / 1000).toString()) }
         var delayMax by remember { mutableStateOf((settings.delayMaxMs / 1000).toString()) }
-        var sessionLimit by remember { mutableIntStateOf(settings.sessionLimit) }
-        var restMin by remember { mutableIntStateOf(settings.restMinMinutes) }
-        var restMax by remember { mutableIntStateOf(settings.restMaxMinutes) }
         var quietStart by remember { mutableIntStateOf(settings.quietHourStart) }
         var quietEnd by remember { mutableIntStateOf(settings.quietHourEnd) }
         var ecoMode by remember { mutableStateOf(settings.ecoMode) }
-        var humanLikeScroll by remember { mutableStateOf(settings.humanLikeScroll) }
-        var nodeHighlightDebug by remember { mutableStateOf(debugHighlightPrefs.isNodeHighlightEnabled()) }
-        var verboseLogEnabled by remember { mutableStateOf(logger.isVerboseLogEnabled()) }
+        // Ẩn bớt option nâng cao/debug để Cài đặt gọn hơn.
 
         LazyColumn(modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)),
             contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -403,9 +422,6 @@ class MainActivity : ComponentActivity() {
                         Text("Tối đa / ngày: $dailyLimit bài", fontSize = 13.sp)
                         Slider(value = dailyLimit.toFloat(), onValueChange = { dailyLimit = it.toInt() },
                             valueRange = 20f..200f, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
-                        Text("Nghỉ sau: $sessionLimit like liên tiếp", fontSize = 13.sp)
-                        Slider(value = sessionLimit.toFloat(), onValueChange = { sessionLimit = it.toInt() },
-                            valueRange = 10f..50f, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
                     }
                 }
             }
@@ -422,20 +438,6 @@ class MainActivity : ComponentActivity() {
                             Column(Modifier.weight(1f)) {
                                 Text("Delay tối đa (giây)", fontSize = 12.sp, color = Color.Gray)
                                 OutlinedTextField(value = delayMax, onValueChange = { delayMax = it }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                            }
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Text("Nghỉ giữa session: $restMin–$restMax phút", fontSize = 13.sp)
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Tối thiểu", fontSize = 12.sp, color = Color.Gray)
-                                Slider(value = restMin.toFloat(), onValueChange = { restMin = it.toInt() },
-                                    valueRange = 1f..30f, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
-                            }
-                            Column(Modifier.weight(1f)) {
-                                Text("Tối đa", fontSize = 12.sp, color = Color.Gray)
-                                Slider(value = restMax.toFloat(), onValueChange = { restMax = it.toInt() },
-                                    valueRange = 1f..60f, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
                             }
                         }
                     }
@@ -488,33 +490,6 @@ class MainActivity : ComponentActivity() {
             }
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("VERBOSE LOG", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "Bật để ghi toàn bộ log vào log_verbose.json. Tắt để chỉ ghi Slim/Lỗi (nhẹ, ít tốn disk).",
-                                fontSize = 12.sp,
-                                color = Color.Gray
-                            )
-                        }
-                        Switch(
-                            checked = verboseLogEnabled,
-                            onCheckedChange = { on ->
-                                verboseLogEnabled = on
-                                logger.setVerboseLogEnabled(on)
-                            },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
-                        )
-                    }
-                }
-            }
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
                         Text("CHẾ ĐỘ FEED", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
                         Spacer(Modifier.height(8.dp))
@@ -552,9 +527,8 @@ class MainActivity : ComponentActivity() {
                         Text("Cách bot chạm màn hình khi like", fontSize = 12.sp, color = Color.Gray)
                         Spacer(Modifier.height(10.dp))
                         listOf(
-                            InteractMode.TAP   to "👆 Tap — Click ảo vào ID node (nhanh, ít tự nhiên)",
-                            InteractMode.SWIPE to "👋 Vuốt — Kéo màn hình + chạm tọa độ thật (chậm hơn, tự nhiên)",
-                            InteractMode.MIX   to "🎲 Mix — Ngẫu nhiên giữa Tap và Vuốt (tự nhiên nhất)"
+                            InteractMode.TAP   to "👆 Touch — chạm tọa độ thật (giống người hơn)",
+                            InteractMode.MIX   to "🎲 Mix — lúc touch lúc click (tự nhiên, ổn định)"
                         ).forEach { (mode, label) ->
                             Row(
                                 modifier = Modifier
@@ -576,72 +550,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("CUỘN GIỐNG NGƯỜI", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "Ưu tiên vuốt gesture để cuộn (random quãng vuốt/duration) thay vì cuộn API. Tự nhiên hơn nhưng có thể chậm hơn.",
-                                fontSize = 12.sp,
-                                color = Color.Gray
-                            )
-                        }
-                        Switch(
-                            checked = humanLikeScroll,
-                            onCheckedChange = { humanLikeScroll = it },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
-                        )
-                    }
-                }
-            }
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("VIỀN DEBUG (NÚT THÍCH)", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "Vẽ bounds các node bot vừa tìm được; viền dày = node sắp click. Không chặn chạm.",
-                                fontSize = 12.sp,
-                                color = Color.Gray
-                            )
-                        }
-                        Switch(
-                            checked = nodeHighlightDebug,
-                            onCheckedChange = { on ->
-                                nodeHighlightDebug = on
-                                debugHighlightPrefs.setNodeHighlightEnabled(on)
-                                ZaloPilotAccessibilityService.syncDebugHighlightFromPrefs()
-                            },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
-                        )
-                    }
-                }
-            }
-            item {
                 Button(onClick = {
                     settingsManager.setFeedMode(feedMode)
                     onSave(settings.copy(
                         dailyLimit = dailyLimit,
                         delayMinMs = (delayMin.toLongOrNull() ?: 1L) * 1000L,
                         delayMaxMs = (delayMax.toLongOrNull() ?: 3L) * 1000L,
-                        sessionLimit = sessionLimit,
-                        restMinMinutes = restMin,
-                        restMaxMinutes = restMax,
                         quietHourStart = quietStart,
                         quietHourEnd = quietEnd,
                         interactModeStr = interactMode.name,
-                        ecoMode = ecoMode,
-                        humanLikeScroll = humanLikeScroll
+                        ecoMode = ecoMode
                     ))
                     Toast.makeText(this@MainActivity, "✅ Đã lưu cài đặt", Toast.LENGTH_SHORT).show()
                 }, modifier = Modifier.fillMaxWidth().height(50.dp),
