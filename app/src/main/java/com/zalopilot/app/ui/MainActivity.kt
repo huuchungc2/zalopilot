@@ -220,7 +220,14 @@ class MainActivity : ComponentActivity() {
                 addAction("com.zalopilot.DAILY_LIMIT")
                 addAction("com.zalopilot.ZALO_STATE")
             }
-            registerReceiver(receiver, filter)
+            // Android 13+ (targetSdk 34) BẮT BUỘC khai báo flag, không thì SecurityException →
+            // receiver không nhận được broadcast → counter "Đã like" không tự update.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(receiver, filter)
+            }
             onDispose { unregisterReceiver(receiver) }
         }
 
@@ -263,7 +270,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onClearLogs = {
                             logger.clearDebugArtifacts()
-                            sendBroadcast(Intent(ZaloPilotAccessibilityService.ACTION_CLEAR_DEBUG_STATE))
+                            sendBroadcast(Intent(ZaloPilotAccessibilityService.ACTION_CLEAR_DEBUG_STATE).setPackage(packageName))
                             logsSlim = logger.readSlimLogs()
                             logsVerbose = logger.readVerboseLogs()
                             logsError = logger.readErrorLogs()
@@ -399,9 +406,12 @@ class MainActivity : ComponentActivity() {
         var feedMode by remember { mutableStateOf(settingsManager.getFeedMode()) }
         var delayMin by remember { mutableStateOf((settings.delayMinMs / 1000).toString()) }
         var delayMax by remember { mutableStateOf((settings.delayMaxMs / 1000).toString()) }
-        var quietStart by remember { mutableIntStateOf(settings.quietHourStart) }
-        var quietEnd by remember { mutableIntStateOf(settings.quietHourEnd) }
         var ecoMode by remember { mutableStateOf(settings.ecoMode) }
+        var humanLikeScroll by remember { mutableStateOf(settings.humanLikeScroll) }
+        var requireCharging by remember { mutableStateOf(settings.requireCharging) }
+        var lowBatteryPauseEnabled by remember { mutableStateOf(settings.lowBatteryPauseEnabled) }
+        var lowBatteryThreshold by remember { mutableIntStateOf(settings.lowBatteryThreshold) }
+        var pauseWhenZaloAway by remember { mutableStateOf(settings.pauseWhenZaloAway) }
         // Ẩn bớt option nâng cao/debug để Cài đặt gọn hơn.
 
         LazyColumn(modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)),
@@ -420,8 +430,9 @@ class MainActivity : ComponentActivity() {
                         Text("GIỚI HẠN LIKE", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
                         Spacer(Modifier.height(8.dp))
                         Text("Tối đa / ngày: $dailyLimit bài", fontSize = 13.sp)
+                        Text("Kéo từ 20 tới 3000 — tùy thích", fontSize = 11.sp, color = Color.Gray)
                         Slider(value = dailyLimit.toFloat(), onValueChange = { dailyLimit = it.toInt() },
-                            valueRange = 20f..200f, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
+                            valueRange = 20f..3000f, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
                     }
                 }
             }
@@ -438,27 +449,6 @@ class MainActivity : ComponentActivity() {
                             Column(Modifier.weight(1f)) {
                                 Text("Delay tối đa (giây)", fontSize = 12.sp, color = Color.Gray)
                                 OutlinedTextField(value = delayMax, onValueChange = { delayMax = it }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                            }
-                        }
-                    }
-                }
-            }
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("GIỜ KHÔNG HOẠT ĐỘNG", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                        Spacer(Modifier.height(8.dp))
-                        Text("Tắt từ ${quietStart}:00 đến ${quietEnd}:00", fontSize = 13.sp)
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Từ giờ", fontSize = 12.sp, color = Color.Gray)
-                                Slider(value = quietStart.toFloat(), onValueChange = { quietStart = it.toInt() },
-                                    valueRange = 0f..23f, steps = 22, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
-                            }
-                            Column(Modifier.weight(1f)) {
-                                Text("Đến giờ", fontSize = 12.sp, color = Color.Gray)
-                                Slider(value = quietEnd.toFloat(), onValueChange = { quietEnd = it.toInt() },
-                                    valueRange = 0f..23f, steps = 22, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
                             }
                         }
                     }
@@ -485,6 +475,101 @@ class MainActivity : ComponentActivity() {
                             onCheckedChange = { ecoMode = it },
                             colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
                         )
+                    }
+                }
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("VUỐT TAY KHI CUỘN", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Bot luôn vuốt màn hình thay vì gọi cuộn API — nhìn giống người hơn, đỡ kẹt khi RecyclerView không phản hồi. Tắt thì theo Chế độ tương tác (Touch ⇒ vuốt, Mix ⇒ random).",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                        }
+                        Switch(
+                            checked = humanLikeScroll,
+                            onCheckedChange = { humanLikeScroll = it },
+                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
+                        )
+                    }
+                }
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("PIN & SẠC", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                        Spacer(Modifier.height(10.dp))
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Chỉ chạy khi cắm sạc", fontSize = 13.sp, fontWeight = FontWeight.W500)
+                                Text(
+                                    "Rút sạc → bot tạm dừng. Cắm lại → tự chạy tiếp.",
+                                    fontSize = 11.sp,
+                                    color = Color.Gray
+                                )
+                            }
+                            Switch(
+                                checked = requireCharging,
+                                onCheckedChange = { requireCharging = it },
+                                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
+                            )
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Pause khi pin thấp", fontSize = 13.sp, fontWeight = FontWeight.W500)
+                                Text(
+                                    "Pin xuống dưới ngưỡng → tạm dừng. Sạc lên/cắm sạc → chạy lại.",
+                                    fontSize = 11.sp,
+                                    color = Color.Gray
+                                )
+                            }
+                            Switch(
+                                checked = lowBatteryPauseEnabled,
+                                onCheckedChange = { lowBatteryPauseEnabled = it },
+                                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
+                            )
+                        }
+
+                        if (lowBatteryPauseEnabled) {
+                            Spacer(Modifier.height(6.dp))
+                            Text("Ngưỡng pin: $lowBatteryThreshold%", fontSize = 12.sp, color = Color.Gray)
+                            Slider(
+                                value = lowBatteryThreshold.toFloat(),
+                                onValueChange = { lowBatteryThreshold = it.toInt() },
+                                valueRange = 5f..50f,
+                                colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue)
+                            )
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Tiết kiệm khi rời Zalo", fontSize = 13.sp, fontWeight = FontWeight.W500)
+                                Text(
+                                    "Mở app khác → bot chờ. Mở Zalo lại → tự chạy tiếp (không cần Start lại).",
+                                    fontSize = 11.sp,
+                                    color = Color.Gray
+                                )
+                            }
+                            Switch(
+                                checked = pauseWhenZaloAway,
+                                onCheckedChange = { pauseWhenZaloAway = it },
+                                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
+                            )
+                        }
                     }
                 }
             }
@@ -556,10 +641,13 @@ class MainActivity : ComponentActivity() {
                         dailyLimit = dailyLimit,
                         delayMinMs = (delayMin.toLongOrNull() ?: 1L) * 1000L,
                         delayMaxMs = (delayMax.toLongOrNull() ?: 3L) * 1000L,
-                        quietHourStart = quietStart,
-                        quietHourEnd = quietEnd,
                         interactModeStr = interactMode.name,
-                        ecoMode = ecoMode
+                        ecoMode = ecoMode,
+                        humanLikeScroll = humanLikeScroll,
+                        requireCharging = requireCharging,
+                        lowBatteryPauseEnabled = lowBatteryPauseEnabled,
+                        lowBatteryThreshold = lowBatteryThreshold,
+                        pauseWhenZaloAway = pauseWhenZaloAway
                     ))
                     Toast.makeText(this@MainActivity, "✅ Đã lưu cài đặt", Toast.LENGTH_SHORT).show()
                 }, modifier = Modifier.fillMaxWidth().height(50.dp),

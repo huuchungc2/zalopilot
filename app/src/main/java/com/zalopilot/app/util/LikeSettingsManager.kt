@@ -33,7 +33,15 @@ data class LikeSettings(
     /** Giảm tần suất poll/scan và tăng delay — ít nóng, ít hao pin hơn (hơi chậm hơn). */
     val ecoMode: Boolean = false,
     /** Ưu tiên vuốt gesture để cuộn feed (trông giống người hơn); fallback API nếu gesture fail. */
-    val humanLikeScroll: Boolean = false
+    val humanLikeScroll: Boolean = false,
+    /** Chỉ chạy khi cắm sạc — rút sạc thì pause, cắm lại tự chạy tiếp (không stop hẳn). */
+    val requireCharging: Boolean = false,
+    /** Pause khi pin xuống dưới [lowBatteryThreshold]; pin sạc lại lên trên ngưỡng → tự chạy tiếp. */
+    val lowBatteryPauseEnabled: Boolean = true,
+    /** Ngưỡng % pin để pause (chỉ áp dụng khi [lowBatteryPauseEnabled]). */
+    val lowBatteryThreshold: Int = 20,
+    /** Khi user rời Zalo lâu, slow down poll mạnh để khỏi ngốn pin (vẫn check để biết khi nào về Zalo). */
+    val pauseWhenZaloAway: Boolean = true
 )
 
 @Singleton
@@ -56,15 +64,13 @@ class LikeSettingsManager @Inject constructor(
         prefs.edit().putString("settings", gson.toJson(settings)).apply()
     }
 
-    fun isQuietHour(): Boolean {
-        val settings = load()
-        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-        return if (settings.quietHourStart > settings.quietHourEnd) {
-            hour >= settings.quietHourStart || hour < settings.quietHourEnd
-        } else {
-            hour >= settings.quietHourStart && hour < settings.quietHourEnd
-        }
-    }
+    /**
+     * Tính năng "Giờ không hoạt động" đã bị **gỡ khỏi UI Cài đặt**.
+     * Giữ hàm + field `quietHourStart/End` chỉ để tương thích settings cũ đã lưu — luôn trả `false`,
+     * bot **không** còn tự dừng theo giờ.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun isQuietHour(): Boolean = false
 
     fun isAutoStart(): Boolean = load().autoStart
 
@@ -114,4 +120,9 @@ class LikeSettingsManager @Inject constructor(
     fun isEcoMode(): Boolean = load().ecoMode
 
     fun isHumanLikeScroll(): Boolean = load().humanLikeScroll
+
+    fun isRequireCharging(): Boolean = load().requireCharging
+    fun isLowBatteryPauseEnabled(): Boolean = load().lowBatteryPauseEnabled
+    fun getLowBatteryThreshold(): Int = load().lowBatteryThreshold
+    fun isPauseWhenZaloAway(): Boolean = load().pauseWhenZaloAway
 }

@@ -46,13 +46,27 @@
 - [x] Retry khi click fail — gesture fallback sau ACTION_CLICK (đã có trong service)
 - [x] Cuối feed / cuộn không đổi — `consecutiveScrollNoProgress` + dừng sau 5 (ALL_SKIPPED & cảnh báo LIKE)
 - [x] Dừng khi không thấy nút Thích lặp lại (`NO_BUTTONS` × 5 — có sẵn)
-- [x] Chống unlike nhầm: sau click verify + nếu không confirm và không thấy ô bình luận thì click lại để re-like
+- [x] Chống unlike nhầm: sau click verify + delta composer (xuất hiện/biến mất) → confirmed hoặc re-click; rule cũ "no composer → re-click" giữ làm fallback
 - [x] Không pause/stop nhầm khi có heads-up notification/SystemUI overlay nổi lên khi bot đang chạy
+- [x] Vào nhầm full-screen "Bình luận" → tự `GLOBAL_ACTION_BACK` 1–2 lượt + skip bài; dừng bot nếu kẹt 3 lần liên tục
+- [x] InteractMode (TAP/MIX) chi phối cả cuộn feed (TAP ⇒ vuốt tay, MIX ⇒ random); thêm toggle "VUỐT TAY KHI CUỘN" override
+- [x] Counter "Đã like" tự update ở UI/floating menu (Android 13+ — `RECEIVER_NOT_EXPORTED` + `setPackage` cho broadcast nội bộ)
+- [x] Tiết kiệm pin: toggle "Chỉ chạy khi cắm sạc" + "Pause khi pin thấp" (ngưỡng tùy chỉnh) + "Tiết kiệm khi rời Zalo" (pause-không-stop, slow poll 10–20s, tự resume khi mở Zalo lại)
+- [x] Fix overlay KEEP_SCREEN_ON: khi pause-rời-Zalo phải gỡ flag để màn tự tắt (đỡ hao pin); resume khi quay lại Zalo
+- [x] Fix slow-poll grace 5s: tránh resume chậm khi user vô tình rời Zalo trong vài giây
 - [ ] Handle trường hợp Zalo hiện popup quảng cáo / dialog → tự đóng
 
 ---
 
 ## 🟡 ƯU TIÊN TRUNG BÌNH
+
+### Scripting (Engine + JSON DSL) — giảm build APK
+- [ ] Phase 0: tách “engine” primitive (touch-first): `acquireRoot`, `ensureForeground`, `findText/findId/exists`, `tap/tapCenter`, `swipe`, `scroll`, `back`, `inputText`, `wait`
+- [ ] Phase 1: JSON DSL tối thiểu (`steps[]`, `assign/$var`, `ifExists`, `repeat`, `timeout`) + log step-by-step (`stepId/result/elapsedMs`)
+- [ ] Phase 2: loader tải script từ URL (GitHub raw) + cache local + màn hình “Script” (nhập URL/chọn file/Test run/Log)
+- [ ] Phase 3: Zalo primitives để script ngắn: `likeCurrentPost` (anti-unlike + verify), `commentCurrentPost`, `openChat/sendChat`, `createPost`, `createStory`
+- [ ] Phase 4: migrate auto-like feed → DSL trước, rồi chuyển dần comment/chat/post/story; thiếu capability thì thêm primitive, không sửa core loop nhiều
+- [ ] Phase 5 (tuỳ): nếu DSL thiếu linh hoạt mới cân nhắc JS runtime nhỏ, sandbox chỉ gọi `zp.*`
 
 ### UI cải thiện
 - [ ] Tab Nhật ký trong app — log tự refresh realtime (hiện phải bấm tab mới update)

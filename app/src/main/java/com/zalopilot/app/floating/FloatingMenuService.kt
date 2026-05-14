@@ -12,6 +12,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.os.Build
 import android.os.IBinder
 import android.view.Gravity
 import android.view.MotionEvent
@@ -65,7 +66,12 @@ class FloatingMenuService : Service() {
             addAction("com.zalopilot.PROGRESS_UPDATE")
             addAction("com.zalopilot.ZALO_STATE")
         }
-        registerReceiver(statusReceiver, filter)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(statusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(statusReceiver, filter)
+        }
         showFab()
     }
 

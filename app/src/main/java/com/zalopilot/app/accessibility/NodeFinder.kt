@@ -523,6 +523,80 @@ class NodeFinder @Inject constructor(
         return true
     }
 
+    /**
+     * Màn full-screen "Bình luận" của Zalo (mở từ tap vào icon comment hoặc nhầm khi click).
+     *
+     * Khác với composer **inline trên feed** (nhiều bài cũng có "Nhập bình luận" gần nút Like):
+     *  - Header (top app bar) có text == "Bình luận" nằm sát đỉnh màn hình
+     *  - + Có ô nhập "Nhập bình luận" hoặc text "Chưa có bình luận" / "Thả sticker..."
+     *
+     * Khi đúng màn này, bot phải `GLOBAL_ACTION_BACK` để về feed; không thoát sẽ kẹt
+     * và heuristic [hasInlineCommentComposerNearLikeAnchor] dễ confirm sai ngữ cảnh.
+     */
+    fun isFullScreenCommentScreen(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        val rootRect = Rect()
+        root.getBoundsInScreen(rootRect)
+        val screenH = rootRect.height().takeIf { it > 0 } ?: 1920
+        val topThreshold = (screenH * 0.18f).toInt().coerceAtLeast(220)
+
+        var hasHeader = false
+        var hasEmptyHint = false
+        var hasInput = false
+
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        val cap = 1500
+        while (stack.isNotEmpty() && visited < cap) {
+            val n = stack.removeLast()
+            visited++
+            val text = n.text?.toString()?.trim().orEmpty()
+            val desc = n.contentDescription?.toString()?.trim().orEmpty()
+            val hint = n.hintText?.toString()?.trim().orEmpty()
+
+            if (!hasHeader && text.equals("Bình luận", ignoreCase = true)) {
+                val r = Rect()
+                n.getBoundsInScreen(r)
+                if (r.top in 0..topThreshold) hasHeader = true
+            }
+
+            if (!hasEmptyHint) {
+                for (s in arrayOf(text, desc)) {
+                    val low = s.lowercase()
+                    if (low.startsWith("chưa có bình luận") ||
+                        low.contains("thả sticker") ||
+                        low.contains("hãy là người đầu tiên")
+                    ) {
+                        hasEmptyHint = true
+                        break
+                    }
+                }
+            }
+
+            if (!hasInput) {
+                for (s in arrayOf(text, desc, hint)) {
+                    val low = s.lowercase()
+                    if (low == "nhập bình luận" ||
+                        low.startsWith("nhập bình luận") ||
+                        low == "viết bình luận" ||
+                        low.startsWith("viết bình luận")
+                    ) {
+                        hasInput = true
+                        break
+                    }
+                }
+            }
+
+            if (hasHeader && (hasInput || hasEmptyHint)) return true
+
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return false
+    }
+
     fun hasInlineCommentComposerNearLikeAnchor(likeNode: AccessibilityNodeInfo): Boolean {
         fun matchesPhrase(s: String?): Boolean {
             val t = s?.trim()?.lowercase().orEmpty()

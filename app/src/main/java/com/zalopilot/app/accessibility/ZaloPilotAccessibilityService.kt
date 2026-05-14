@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.os.BatteryManager
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
@@ -92,6 +93,14 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private var consecutiveScrollNoProgress = 0
     /** Không thấy nút Thích (cây rỗng / lazy-load) — tách khỏi scroll-stuck, ngưỡng dừng riêng. */
     private var consecutiveEmptyLikeScanStreak = 0
+    /** Vào nhầm màn full-screen "Bình luận" — đếm số lần liên tục BACK 2 lượt vẫn không thoát. */
+    private var consecutiveStuckCommentScreen = 0
+
+    /** Cập nhật từ `ACTION_BATTERY_CHANGED` — dùng cho toggle "chỉ chạy khi sạc" / "pause pin thấp". */
+    @Volatile private var isCharging: Boolean = true
+    @Volatile private var batteryPercent: Int = 100
+    private var lastBatteryStatusLogMs: Long = 0L
+
     /** Lần đầu vào loop sau Start — chờ neo feed + settle. */
     private var initialFeedSettled = false
     /** Một lần dump ngắn khi scan fail (không spam mỗi vòng). */
@@ -143,6 +152,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         private const val ROOT_NULL_WALL_LOG_MS = 8_000L
         /** Heads-up/SystemUI overlay: không coi là rời Zalo ngay. */
         private const val TRANSIENT_OVERLAY_GRACE_MS = 6_000L
+        /** Pause-rời-Zalo: chờ 5s rồi mới chuyển sang slow poll 10–20s (Fix #2 — option 2). */
+        private const val ZALO_AWAY_SLOW_POLL_GRACE_MS = 5_000L
         /** Cooldown / chống double-click cùng bài (Zalo không cập nhật isChecked đáng tin). */
         private const val POST_CLICK_COOLDOWN_MS = 5_000L
         private const val DUPLICATE_LIKE_CLICK_SUPPRESS_MS = POST_CLICK_COOLDOWN_MS
@@ -150,6 +161,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         private const val FEED_END_STOP_STREAK = 5
         /** NO_BUTTONS: nhiều lần thử trước khi coi hết feed (lazy-load / RecyclerView). */
         private const val NO_BUTTONS_END_STOP_STREAK = 24
+        /** Kẹt màn "Bình luận" — sau N lần BACK liên tục không thoát thì dừng bot, nhờ user xử lý. */
+        private const val STUCK_COMMENT_SCREEN_STOP_STREAK = 3
     }
 
     private enum class GestureScrollProfile {
@@ -170,11 +183,33 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             p.contains("launcher")
     }
 
+    /**
+     * Scope broadcast về **chính package** của app — vì receiver đăng ký với
+     * `RECEIVER_NOT_EXPORTED` (Android 13+), không setPackage thì broadcast không tới được
+     * `MainActivity` / `FloatingMenuService` → counter "Đã like" không tự update.
+     */
+    private fun sendInternalBroadcast(intent: Intent) {
+        sendBroadcast(intent.setPackage(packageName))
+    }
+
     private fun gestureProfileForStreak(): GestureScrollProfile = when {
         combinedStuckLevel() >= 3 -> GestureScrollProfile.LARGE
         combinedStuckLevel() >= 1 -> GestureScrollProfile.NORMAL
         else -> GestureScrollProfile.SMALL
     }
+
+    /**
+     * Cuộn feed có nên ưu tiên **vuốt tay (gesture)** thay vì `ACTION_SCROLL_FORWARD` không.
+     *  - `humanLikeScroll = true` (toggle Cài đặt) → luôn vuốt tay.
+     *  - InteractMode TAP → vuốt tay (đồng nhất với "Touch" cho click like).
+     *  - MIX → random 50/50.
+     */
+    private fun preferGestureScroll(settings: LikeSettings, interactMode: InteractMode): Boolean =
+        settings.humanLikeScroll || when (interactMode) {
+            InteractMode.TAP -> true
+            InteractMode.SWIPE -> false
+            InteractMode.MIX -> (1..2).random() == 1
+        }
 
     private val dumpUiTreeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -189,6 +224,29 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             lastContentEventLogMs = 0L
             lastRootNullWallLogMs = 0L
             uiScanner.resetTransientState()
+        }
+    }
+
+    /** `ACTION_BATTERY_CHANGED` là sticky broadcast — Android tự gửi mỗi khi pin/sạc đổi. */
+    private val batteryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            updateBatteryStateFromIntent(intent)
+        }
+    }
+
+    private fun updateBatteryStateFromIntent(intent: Intent?) {
+        if (intent == null) return
+        val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        if (level >= 0 && scale > 0) {
+            batteryPercent = (level * 100f / scale).toInt().coerceIn(0, 100)
+        }
+        val plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
+        isCharging = plugged != 0
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastBatteryStatusLogMs > 30_000L) {
+            lastBatteryStatusLogMs = now
+            logger.log(LogTag.STATE, "battery=$batteryPercent% charging=$isCharging", "BATTERY_STATE")
         }
     }
 
@@ -215,6 +273,13 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 registerReceiver(clearDebugStateReceiver, IntentFilter(ACTION_CLEAR_DEBUG_STATE))
             }
         }.onFailure { e -> logger.logError("registerDumpUiReceiver", e) }
+
+        // Battery receiver — `ACTION_BATTERY_CHANGED` là sticky, không cần khai báo flag NOT_EXPORTED
+        // (system broadcast). Đăng ký với null cũng trả về intent sticky hiện tại để init state.
+        runCatching {
+            val sticky = registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            updateBatteryStateFromIntent(sticky)
+        }.onFailure { e -> logger.logError("registerBatteryReceiver", e) }
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         progressManager.resetDailyIfNeeded()
         logger.log(LogTag.STATE, "service poll=${POLL_MS_MIN}-${POLL_MS_MAX}ms", "CONNECTED")
@@ -235,7 +300,15 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private fun computePollDelayMs(): Long {
         val eco = settingsManager.isEcoMode()
         val screenOff = !powerManager.isInteractive
+        // Grace 5s sau khi rời Zalo: nếu user vô tình mở thông báo / app khác rồi quay lại,
+        // poll vẫn fast trong 5s đầu để bot resume ngay; quá 5s mới chuyển sang slow poll 10–20s.
+        val sinceZaloMs = SystemClock.elapsedRealtime() - lastZaloForegroundAtElapsedMs
+        val zaloAwayLong = !isZaloForeground &&
+            isRunning &&
+            settingsManager.isPauseWhenZaloAway() &&
+            sinceZaloMs > ZALO_AWAY_SLOW_POLL_GRACE_MS
         val r = when {
+            zaloAwayLong -> 10_000L..20_000L
             screenOff && isRunning ->
                 if (eco) 5200L..9000L else 4000L..7000L
             eco -> 2200L..4000L
@@ -297,6 +370,86 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Nếu [root] đang là màn **full-screen Bình luận**, BACK tối đa 2 lượt để về feed.
+     * Trả về `true` nếu đã xử lý (caller nên `continue` vòng và lấy root mới).
+     * Đạt [STUCK_COMMENT_SCREEN_STOP_STREAK] → stop bot để user thoát thủ công.
+     */
+    private suspend fun tryEscapeCommentScreen(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        if (!nodeFinder.isFullScreenCommentScreen(root)) {
+            consecutiveStuckCommentScreen = 0
+            return false
+        }
+        logger.log(LogTag.STATE, "comment_screen", "DETECTED_BACK")
+        updateStatus("↩️ Phát hiện màn Bình luận — back về feed")
+
+        suspend fun pressBackAndCheck(): Boolean {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+            delayEco(700L..1100L)
+            val r = acquireRootOrNull(4, 80L..220L, LogTag.STATE, quietLog = true)
+            return try {
+                r != null && nodeFinder.isFullScreenCommentScreen(r)
+            } finally {
+                runCatching { r?.recycle() }
+            }
+        }
+
+        var stillStuck = pressBackAndCheck()
+        if (stillStuck) stillStuck = pressBackAndCheck()
+
+        if (stillStuck) {
+            consecutiveStuckCommentScreen++
+            logger.log(
+                LogTag.STATE,
+                "stuckStreak=$consecutiveStuckCommentScreen",
+                "STUCK_COMMENT_SCREEN"
+            )
+            if (consecutiveStuckCommentScreen >= STUCK_COMMENT_SCREEN_STOP_STREAK) {
+                showToast("⚠️ Kẹt màn Bình luận — vui lòng thoát thủ công")
+                logger.log(LogTag.STATE, "autoLike", "STOP_STUCK_COMMENT_SCREEN")
+                stopAutoLike()
+            }
+        } else {
+            consecutiveStuckCommentScreen = 0
+            logger.log(LogTag.STATE, "comment_screen", "ESCAPED_BACK_OK")
+        }
+        return true
+    }
+
+    /**
+     * Battery-aware pause: rút sạc (`requireCharging`) hoặc pin tụt dưới ngưỡng
+     * (`lowBatteryPauseEnabled` + `lowBatteryThreshold`) thì **chờ tại chỗ** rồi chạy tiếp.
+     * Không stop bot — để cắm lại/pin sạc lên là loop tự đi tiếp.
+     *
+     * @return `true` nếu vừa pause (caller `continue`), `false` nếu OK chạy.
+     */
+    private suspend fun waitForBatteryConditionsIfNeeded(): Boolean {
+        val s = settingsManager.load()
+        val needCharger = s.requireCharging && !isCharging
+        val lowBattery = s.lowBatteryPauseEnabled && batteryPercent in 0 until s.lowBatteryThreshold
+        if (!needCharger && !lowBattery) return false
+
+        val reason = when {
+            needCharger && lowBattery ->
+                "🔌 Pin ${batteryPercent}% + chưa sạc — chờ cắm sạc lại"
+            needCharger ->
+                "🔌 Đã rút sạc — chờ cắm lại để chạy tiếp"
+            else ->
+                "🔋 Pin ${batteryPercent}% < ${s.lowBatteryThreshold}% — chờ pin lên / cắm sạc"
+        }
+        updateStatus(reason)
+        logger.log(
+            LogTag.STATE,
+            "battery=$batteryPercent% charging=$isCharging needCharger=$needCharger lowBattery=$lowBattery",
+            "BATTERY_PAUSE"
+        )
+        // Sleep dài (15s) giữa các lần check — đỡ tốn pin trong lúc đang pause vì pin.
+        delay(15_000L)
+        return true
+    }
+
+    /**
      * Poll định kỳ: nguồn sự thật chính cho root + package (không phụ thuộc event).
      */
     private suspend fun pollOnce() {
@@ -334,8 +487,13 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             lastZaloForegroundAtElapsedMs = SystemClock.elapsedRealtime()
             if (!isZaloForeground) {
                 logger.log(LogTag.STATE, "pkg=$pkg", "FOREGROUND_POLL")
-                sendBroadcast(Intent("com.zalopilot.ZALO_STATE").putExtra("foreground", true))
+                sendInternalBroadcast(Intent("com.zalopilot.ZALO_STATE").putExtra("foreground", true))
                 isZaloForeground = true
+                // Đang resume sau pause-rời-Zalo: bật lại KEEP_SCREEN_ON để Accessibility đọc feed ổn định.
+                if (isRunning) {
+                    updateStatus("▶ Tiếp tục — Zalo đã quay lại")
+                    applyKeepScreenOnToStatusOverlayIfNeeded()
+                }
                 if (settingsManager.isAutoStart() && !isRunning
                     && !progressManager.isLimitReached()
                     && !settingsManager.isQuietHour()) {
@@ -374,8 +532,16 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             return
         }
         isZaloForeground = false
-        sendBroadcast(Intent("com.zalopilot.ZALO_STATE").putExtra("foreground", false))
+        sendInternalBroadcast(Intent("com.zalopilot.ZALO_STATE").putExtra("foreground", false))
         if (isRunning) {
+            if (settingsManager.isPauseWhenZaloAway()) {
+                // Bot vẫn chạy nhưng autoLikeLoop sẽ tự chờ Zalo về (slow poll qua computePollDelayMs).
+                logger.log(LogTag.STATE, "reason=$reason", "PAUSED_ZALO_AWAY_KEEP_BOT")
+                updateStatus("⏸ Đã rời Zalo — chờ mở lại")
+                // Quan trọng: bỏ KEEP_SCREEN_ON để màn được tự tắt — đúng tinh thần "tiết kiệm khi rời Zalo".
+                removeKeepScreenOnFromStatusOverlay()
+                return
+            }
             stopAutoLike()
             logger.log(LogTag.STATE, "reason=$reason", "PAUSED_ZALO_CLOSED")
         }
@@ -477,6 +643,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             .onFailure { e -> logger.logError("unregisterDumpUiReceiver", e) }
         runCatching { unregisterReceiver(clearDebugStateReceiver) }
             .onFailure { e -> logger.logError("unregisterClearDebugReceiver", e) }
+        runCatching { unregisterReceiver(batteryReceiver) }
+            .onFailure { e -> logger.logError("unregisterBatteryReceiver", e) }
         super.onDestroy()
         foregroundPollJob?.cancel()
         foregroundPollJob = null
@@ -510,7 +678,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             val count = progressManager.load().todayLikeCount
             logger.log(LogTag.STATE, "todayLikeCount=$count", "BLOCKED_DAILY_LIMIT")
             showToast("✅ Đã đủ giới hạn hôm nay ($count)")
-            sendBroadcast(Intent("com.zalopilot.DAILY_LIMIT"))
+            sendInternalBroadcast(Intent("com.zalopilot.DAILY_LIMIT"))
             return
         }
 
@@ -564,7 +732,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ZaloPilot:AutoLike")
                 wakeLock?.acquire(10 * 60 * 60 * 1000L)
 
-                sendBroadcast(Intent("com.zalopilot.STATUS_UPDATE").putExtra("running", true))
+                sendInternalBroadcast(Intent("com.zalopilot.STATUS_UPDATE").putExtra("running", true))
                 logger.log(LogTag.STATE, "FEED", "STARTED")
                 showToast("▶ Bắt đầu auto like")
                 showStatusOverlay("▶ Đang khởi động...")
@@ -584,7 +752,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         likeJob = null
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
-        sendBroadcast(Intent("com.zalopilot.STATUS_UPDATE").putExtra("running", false))
+        sendInternalBroadcast(Intent("com.zalopilot.STATUS_UPDATE").putExtra("running", false))
         logger.log(LogTag.STATE, "autoLike", "STOPPED")
         showToast("■ Đã dừng")
         hideStatusOverlay()
@@ -593,12 +761,10 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
     private suspend fun autoLikeLoop() {
         mainLoop@ while (isRunning) {
-            if (settingsManager.isQuietHour()) {
-                updateStatus("🌙 Giờ nghỉ — dừng lại")
-                showToast("🌙 Giờ nghỉ — ZaloPilot tạm dừng")
-                logger.log(LogTag.STATE, "autoLike", "QUIET_HOUR_PAUSE")
-                stopAutoLike()
-                return
+            // Battery-aware pause: rút sạc / pin thấp → đứng tại chỗ chờ, không stop để
+            // khi cắm lại / pin sạc lên là chạy tiếp luôn.
+            if (waitForBatteryConditionsIfNeeded()) {
+                continue@mainLoop
             }
 
             if (progressManager.isLimitReached()) {
@@ -606,12 +772,18 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 updateStatus("✅ Đã like đủ $count bài hôm nay")
                 showToast("✅ Đã like đủ $count bài hôm nay!")
                 logger.log(LogTag.STATE, "autoLike", "DAILY_LIMIT_REACHED")
-                sendBroadcast(Intent("com.zalopilot.DAILY_LIMIT"))
-                stopAutoLike()
-                return
-            }
+            sendInternalBroadcast(Intent("com.zalopilot.DAILY_LIMIT"))
+            stopAutoLike()
+            return
+        }
 
-            if (!isZaloForeground) {
+        if (!isZaloForeground) {
+                if (settingsManager.isPauseWhenZaloAway()) {
+                    updateStatus("⏸ Đã rời Zalo — chờ mở lại")
+                    logger.log(LogTag.STATE, "autoLike", "ZALO_AWAY_PAUSED")
+                    delay(8_000L)
+                    continue@mainLoop
+                }
                 logger.log(LogTag.STATE, "autoLike", "ZALO_NOT_FOREGROUND")
                 stopAutoLike()
                 return
@@ -680,6 +852,15 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 root = awaitFeedLikeScanRoot(root!!)
                 val liveRoot = root!!
 
+                // Vào nhầm full-screen "Bình luận" (vd. tap nhầm icon comment) → BACK + reload root.
+                if (tryEscapeCommentScreen(liveRoot)) {
+                    if (!isRunning) return
+                    runCatching { root?.recycle() }
+                    root = null
+                    delayEco(400L..800L)
+                    continue@mainLoop
+                }
+
                 if (!uiScanner.hasScannedRecently()) {
                     updateStatus("🔍 Đang scan giao diện Zalo...")
                     uiScanner.scan(liveRoot)
@@ -689,6 +870,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 val scanResult = runFeedMode(liveRoot, settings)
                 val feedMode = settingsManager.getFeedMode()
                 val interactMode = settingsManager.getInteractMode()
+                val preferGesture = preferGestureScroll(settings, interactMode)
 
                 when (scanResult) {
                     FeedScanResult.LIKED -> {
@@ -698,7 +880,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         var didAutoScroll = false
                         when (feedMode) {
                             FeedMode.SCROLL -> {
-                                feedMoved = scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = settings.humanLikeScroll)
+                                feedMoved = scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = preferGesture)
                                 didAutoScroll = true
                             }
                             FeedMode.MANUAL -> {
@@ -707,7 +889,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                             }
                             FeedMode.MIX -> {
                                 if ((1..10).random() <= 6) {
-                                    feedMoved = scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = settings.humanLikeScroll)
+                                    feedMoved = scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = preferGesture)
                                     didAutoScroll = true
                                 } else {
                                     updateStatus("✋ Mix mode — chờ vuốt tay...")
@@ -751,7 +933,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         consecutiveEmptyLikeScanStreak = 0
                         logger.log(LogTag.SCROLL, "all skipped, fast scroll feedMode=$feedMode", "ALL_SKIPPED")
                         updateStatus("⏩ Bài đã like — cuộn tiếp...")
-                        val feedMoved = scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = settings.humanLikeScroll)
+                        val feedMoved = scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = preferGesture)
                         processedPosts.clear()
                         if (!feedMoved) {
                             consecutiveScrollNoProgress++
@@ -773,7 +955,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     }
                     FeedScanResult.NO_BUTTONS -> {
                         updateStatus("🔍 Chưa thấy nút Thích — cuộn nhẹ, sẽ quét lại...")
-                        var feedMoved = scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = settings.humanLikeScroll)
+                        var feedMoved = scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = preferGesture)
                         if (!feedMoved) {
                             delayEco(240L..420L)
                             feedMoved = scrollDownByGesture(GestureScrollProfile.SMALL)
@@ -872,7 +1054,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 if (!nodeFinder.shouldLike(node)) {
                     skippedShouldLike++
                     progressManager.incrementPostsHandledAndSave()
-                    sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
+                    sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                     continue
                 }
 
@@ -880,7 +1062,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 if (author != null && likedAuthorsThisSession.contains(author)) {
                     logger.log(LogTag.STATE, author, "SKIP_AUTHOR_ALREADY_LIKED")
                     progressManager.incrementPostsHandledAndSave()
-                    sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
+                    sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                     continue
                 }
 
@@ -918,6 +1100,13 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 if (nodeForClick !== node) {
                     logger.log(LogTag.STATE, boundsSummary(nodeForClick), "RE_RESOLVED_BEFORE_CLICK")
                 }
+                // Snapshot composer TRƯỚC click — dùng so delta sau click để chống unlike nhầm
+                // khi UI Zalo không lộ trạng thái "đã thích" (isAlreadyLiked sai).
+                val composerBefore = runCatching {
+                    nodeFinder.hasInlineCommentComposerNearLikeAnchor(nodeForClick)
+                }.getOrDefault(false)
+                logger.log(LogTag.CLICK, "composerBefore=$composerBefore", "COMPOSER_SNAPSHOT")
+
                 try {
                     val clicked = performLikeClickWithFallbacks(nodeForClick)
 
@@ -942,7 +1131,22 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                                     )
                                     updateStatus("🖼 Mở nhầm viewer — bỏ qua bài này")
                                     progressManager.incrementPostsHandledAndSave()
-                                    sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
+                                    sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
+                                    delayEco(400L..700L)
+                                    continue
+                                }
+
+                                // Click rơi vào full-screen "Bình luận" (tap nhầm icon comment) → BACK + skip.
+                                if (nodeFinder.isFullScreenCommentScreen(peekRoot)) {
+                                    logger.log(
+                                        LogTag.CLICK,
+                                        author ?: "unknown",
+                                        "COMMENT_SCREEN_BACK_SKIP_POST"
+                                    )
+                                    updateStatus("💬 Mở nhầm Bình luận — back & bỏ qua bài này")
+                                    tryEscapeCommentScreen(peekRoot)
+                                    progressManager.incrementPostsHandledAndSave()
+                                    sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                                     delayEco(400L..700L)
                                     continue
                                 }
@@ -985,27 +1189,66 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                             // có thể click 1 phát vừa toggle sang UNLIKE trên bài đã like trước đó → click lại để LIKE lại.
                             val resolved = resolvedLikeNodeOnFreshRoot()
                             if (resolved != null) {
-                                val hasComposer = nodeFinder.hasInlineCommentComposerNearLikeAnchor(resolved)
-                                if (!hasComposer) {
-                                    logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_NO_COMMENT_COMPOSER_ASSUME_TOGGLED")
-                                    val reClicked = performLikeClickWithFallbacks(resolved)
+                                // Nếu đang ở full-screen Bình luận thì heuristic composer KHÔNG còn nghĩa "đã like"
+                                // — escape rồi bỏ qua bài, không treat-as-confirmed sai ngữ cảnh.
+                                val verifyRoot = acquireRootOrNull(3, 60L..180L, LogTag.CLICK, quietLog = true)
+                                val onCommentScreen = verifyRoot?.let { nodeFinder.isFullScreenCommentScreen(it) } == true
+                                if (onCommentScreen) {
+                                    logger.log(LogTag.CLICK, author ?: "unknown", "COMMENT_SCREEN_AFTER_CLICK_SKIP")
+                                    updateStatus("💬 Sau click rơi vào Bình luận — back & bỏ qua")
+                                    tryEscapeCommentScreen(verifyRoot)
+                                    runCatching { verifyRoot?.recycle() }
+                                    progressManager.incrementPostsHandledAndSave()
+                                    sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
+                                    continue
+                                }
+                                runCatching { verifyRoot?.recycle() }
+
+                                val composerAfter = nodeFinder.hasInlineCommentComposerNearLikeAnchor(resolved)
+                                logger.log(
+                                    LogTag.CLICK,
+                                    "before=$composerBefore after=$composerAfter",
+                                    "COMPOSER_DELTA"
+                                )
+
+                                suspend fun reLikeAndVerify(target: AccessibilityNodeInfo, tag: String) {
+                                    val reClicked = performLikeClickWithFallbacks(target)
                                     logger.log(
                                         LogTag.CLICK,
                                         author ?: "unknown",
-                                        if (reClicked) "RECLICK_TO_RELIKE_DISPATCHED" else "RECLICK_TO_RELIKE_FAILED"
+                                        if (reClicked) "${tag}_DISPATCHED" else "${tag}_FAILED"
                                     )
                                     if (reClicked) {
                                         delay(ecoVerifyMs(1500L))
-                                        confirmedLiked = verifyLikedOnFreshRoot() || nodeFinder.isAlreadyLiked(resolved)
+                                        confirmedLiked = verifyLikedOnFreshRoot() || nodeFinder.isAlreadyLiked(target)
                                         if (!confirmedLiked) {
                                             delay(ecoVerifyMs(600L))
-                                            confirmedLiked = verifyLikedOnFreshRoot() || nodeFinder.isAlreadyLiked(resolved)
+                                            confirmedLiked = verifyLikedOnFreshRoot() || nodeFinder.isAlreadyLiked(target)
                                         }
                                     }
-                                } else {
-                                    // Theo rule user: có composer → coi như like OK và đi tiếp (kể cả khi isAlreadyLiked không confirm được).
-                                    logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_HAS_COMMENT_COMPOSER_TREAT_AS_CONFIRMED")
-                                    confirmedLiked = true
+                                }
+
+                                when {
+                                    // Composer XUẤT HIỆN (trước không có, giờ có) → like vừa được thêm thành công.
+                                    !composerBefore && composerAfter -> {
+                                        logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_COMPOSER_APPEARED_CONFIRMED")
+                                        confirmedLiked = true
+                                    }
+                                    // Composer BIẾN MẤT (trước có, giờ không) → click vừa toggle sang UNLIKE → re-click ngay.
+                                    composerBefore && !composerAfter -> {
+                                        logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_COMPOSER_DISAPPEARED_RECLICK")
+                                        reLikeAndVerify(resolved, "RECLICK_TO_RELIKE")
+                                    }
+                                    // Trước & sau đều KHÔNG có composer → không suy được, fallback rule cũ: re-click thử.
+                                    !composerAfter -> {
+                                        logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_NO_COMMENT_COMPOSER_ASSUME_TOGGLED")
+                                        reLikeAndVerify(resolved, "RECLICK_TO_RELIKE")
+                                    }
+                                    // Trước & sau đều CÓ composer → coi như đã like (nguyên rule cũ).
+                                    else -> {
+                                        logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_HAS_COMMENT_COMPOSER_TREAT_AS_CONFIRMED")
+                                        confirmedLiked = true
+                                    }
                                 }
                             }
                         }
@@ -1020,7 +1263,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         sessionLikeCount++
                         if (author != null) likedAuthorsThisSession.add(author)
                         updateStatus("✅ Like #${progressAfterClick.todayLikeCount} — ${author ?: "unknown"}")
-                        sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
+                        sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
 
                         processedPosts.add(postKey)
                         clickedPositionsThisSession.add("${rect.left}_${rect.top}")
@@ -1046,7 +1289,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     updateStatus("❌ Click thất bại — thử bài khác")
                     logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_FAILED:${boundsSummary(nodeForClick)}")
                     progressManager.incrementPostsHandledAndSave()
-                    sendBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
+                    sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                 } finally {
                     if (microRoot != null && microRoot !== scanRoot) {
                         runCatching { microRoot.recycle() }
@@ -1525,6 +1768,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     /** Khi bot chạy: giữ màn hình không tắt (đọc accessibility cần màn hình thường vẫn bật). */
     private fun applyKeepScreenOnToStatusOverlayIfNeeded() {
         if (!isRunning) return
+        // Đang pause vì user rời Zalo → KHÔNG keep màn sáng (mục đích "Tiết kiệm khi rời Zalo").
+        if (!isZaloForeground && settingsManager.isPauseWhenZaloAway()) return
         try {
             val wm = windowManager ?: return
             val v = statusView ?: return
@@ -1537,6 +1782,23 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             v.keepScreenOn = true
         } catch (e: Exception) {
             logger.logError("applyKeepScreenOnToStatusOverlayIfNeeded", e)
+        }
+    }
+
+    /** Gỡ FLAG_KEEP_SCREEN_ON để màn được tự tắt — dùng khi pause vì rời Zalo (Fix #1). */
+    private fun removeKeepScreenOnFromStatusOverlay() {
+        try {
+            val wm = windowManager ?: return
+            val v = statusView ?: return
+            val lp = v.layoutParams as? WindowManager.LayoutParams ?: return
+            val want = lp.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON.inv()
+            if (lp.flags != want) {
+                lp.flags = want
+                wm.updateViewLayout(v, lp)
+            }
+            v.keepScreenOn = false
+        } catch (e: Exception) {
+            logger.logError("removeKeepScreenOnFromStatusOverlay", e)
         }
     }
 
