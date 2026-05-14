@@ -458,6 +458,71 @@ class NodeFinder @Inject constructor(
     }
 
     /**
+     * Tìm lại node like-area (id whitelist) tại bounds [origRect] trên [root] mới — KHÔNG lọc theo
+     * `isAlreadyLiked`. Dùng cho **verify sau click**: sau khi like xong nút chuyển "Đã thích" và
+     * `findLikeButtons` sẽ bỏ qua → nếu dùng `reResolveLikeNodeForClick` (chain qua findLikeButtons)
+     * sẽ trả null → caller fallback dùng node CŨ (snapshot stale) → kết luận chưa like → re-click → unlike nhầm.
+     */
+    fun findLikeAreaNodeAt(
+        root: AccessibilityNodeInfo,
+        origRect: Rect,
+        origId: String?
+    ): AccessibilityNodeInfo? {
+        val tol = 48
+        fun match(n: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+            if (n == null) return null
+            if (LikeViewIdRules.shouldRejectNodeForLike(n)) return null
+            if (!n.hasValidScreenBounds()) return null
+            val r = Rect()
+            n.getBoundsInScreen(r)
+            if (abs(r.centerX() - origRect.centerX()) <= tol &&
+                abs(r.centerY() - origRect.centerY()) <= tol
+            ) return n
+            return null
+        }
+
+        if (!origId.isNullOrBlank()) {
+            val byId = root.findAccessibilityNodeInfosByViewId(origId)
+            if (byId != null) {
+                for (n in byId) {
+                    val ok = match(n)
+                    if (ok != null) return ok
+                }
+            }
+        }
+
+        val savedId = idStore.getLikeButtonID()
+        if (!savedId.isNullOrBlank() && savedId != origId) {
+            val byId = root.findAccessibilityNodeInfosByViewId(savedId)
+            if (byId != null) {
+                for (n in byId) {
+                    val ok = match(n)
+                    if (ok != null) return ok
+                }
+            }
+        }
+
+        // Fallback theo whitelist id thông dụng (không cần biết user đã học id nào).
+        for (tail in listOf("btn_like_text", "btn_like_icon", "btn_like", "like_component")) {
+            for (pkg in listOf("com.zing.zalo")) {
+                val full = "$pkg:id/$tail"
+                val byId = root.findAccessibilityNodeInfosByViewId(full) ?: continue
+                for (n in byId) {
+                    val ok = match(n)
+                    if (ok != null) return ok
+                }
+            }
+        }
+
+        // Cuối cùng quét traversal hint — tốn hơn nhưng đảm bảo bắt được node.
+        for (raw in collectLikeHintsByTraversal(root, maxNodes = 2800)) {
+            val ok = match(raw)
+            if (ok != null) return ok
+        }
+        return null
+    }
+
+    /**
      * Tìm lại nút like trên [root] mới tương ứng [original] (cùng view id + gần bounds) — tránh click snapshot cũ.
      * @return null nếu không khớp được.
      */

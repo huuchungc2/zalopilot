@@ -292,14 +292,48 @@ class MainActivity : ComponentActivity() {
             item {
                 Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(zaloBlue).padding(20.dp)) {
                     Column {
-                        Text("ZaloPilot", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
-                        Text("Auto Like Zalo", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
-                        Spacer(Modifier.height(8.dp))
-                        Surface(shape = RoundedCornerShape(99.dp), color = if (isRunning) Color(0xFF27AE60) else Color.White.copy(alpha = 0.2f)) {
-                            Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Box(Modifier.size(7.dp).clip(CircleShape).background(Color.White))
-                                Text(if (isRunning) "Đang chạy" else "Chờ", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.W500)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("ZaloPilot", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
+                                Text("Auto Like Zalo", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
                             }
+                            Surface(shape = RoundedCornerShape(99.dp), color = if (isRunning) Color(0xFF27AE60) else Color.White.copy(alpha = 0.2f)) {
+                                Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Box(Modifier.size(7.dp).clip(CircleShape).background(Color.White))
+                                    Text(if (isRunning) "Đang chạy" else "Đã dừng", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.W500)
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(14.dp))
+                        // Nút chính: BẮT ĐẦU / DỪNG — to, dễ thấy, ngay trang chủ.
+                        Button(
+                            onClick = {
+                                val svc = ZaloPilotAccessibilityService.instance
+                                if (svc == null) {
+                                    Toast.makeText(this@MainActivity,
+                                        "⚠️ Chưa bật Accessibility cho ZaloPilot — vào Cài đặt > Trợ năng",
+                                        Toast.LENGTH_LONG).show()
+                                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                                    return@Button
+                                }
+                                if (isRunning) {
+                                    svc.stopAutoLike()
+                                } else {
+                                    svc.startAutoLike()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().height(52.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isRunning) Color(0xFFE24B4A) else Color(0xFF27AE60)
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                if (isRunning) "■  DỪNG" else "▶  BẮT ĐẦU",
+                                color = Color.White,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.W600
+                            )
                         }
                         Spacer(Modifier.height(10.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -313,6 +347,7 @@ class MainActivity : ComponentActivity() {
                                         startActivity(intent)
                                     }
                                 },
+                                modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f)),
                                 shape = RoundedCornerShape(10.dp),
                                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
@@ -321,6 +356,7 @@ class MainActivity : ComponentActivity() {
                             }
                             Button(
                                 onClick = { startService(Intent(this@MainActivity, FloatingMenuService::class.java)) },
+                                modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f)),
                                 shape = RoundedCornerShape(10.dp),
                                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)

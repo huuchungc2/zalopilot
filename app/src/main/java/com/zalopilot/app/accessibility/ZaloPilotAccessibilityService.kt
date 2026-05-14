@@ -1158,36 +1158,53 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         // Đợi Zalo animate / cập nhật state (checked/selected), không tin mỗi text "Thích".
                         delay(ecoVerifyMs(1500L))
 
-                        suspend fun resolvedLikeNodeOnFreshRoot(): AccessibilityNodeInfo? {
+                        // Snapshot bounds + id của node trước click để verify ở fresh root mà KHÔNG bị
+                        // findLikeButtons lọc mất (sau like nút thành "Đã thích" → findLikeButtons bỏ qua).
+                        val origRectForVerify = Rect().apply { nodeForClick.getBoundsInScreen(this) }
+                        val origIdForVerify = nodeForClick.viewIdResourceName
+
+                        // Verify trên root mới — finder mới KHÔNG lọc theo isAlreadyLiked, dùng id whitelist + bounds.
+                        suspend fun resolvedLikeAreaOnFreshRoot(): AccessibilityNodeInfo? {
                             val fresh = acquireRootOrNull(4, 80L..220L, LogTag.CLICK, quietLog = true) ?: return null
                             return try {
-                                nodeFinder.reResolveLikeNodeForClick(fresh, nodeForClick) ?: nodeForClick
+                                nodeFinder.findLikeAreaNodeAt(fresh, origRectForVerify, origIdForVerify)
                             } finally {
                                 runCatching { fresh.recycle() }
                             }
                         }
 
-                        // Verify trên root mới (UI Zalo hay stale nếu giữ node cũ sau click).
                         suspend fun verifyLikedOnFreshRoot(): Boolean {
                             val fresh = acquireRootOrNull(4, 80L..220L, LogTag.CLICK, quietLog = true) ?: return false
                             return try {
-                                val resolved = nodeFinder.reResolveLikeNodeForClick(fresh, nodeForClick) ?: nodeForClick
-                                nodeFinder.isAlreadyLiked(resolved)
+                                val resolved = nodeFinder.findLikeAreaNodeAt(fresh, origRectForVerify, origIdForVerify)
+                                if (resolved != null) nodeFinder.isAlreadyLiked(resolved) else false
                             } finally {
                                 runCatching { fresh.recycle() }
                             }
                         }
 
-                        var confirmedLiked = verifyLikedOnFreshRoot() || nodeFinder.isAlreadyLiked(nodeForClick)
+                        // Pass 1 — verify ngay sau 1500ms.
+                        var confirmedLiked = verifyLikedOnFreshRoot()
+                        // Pass 2 — wait thêm 800ms (Zalo lag UI) rồi verify lần 2.
                         if (!confirmedLiked) {
-                            delay(ecoVerifyMs(600L))
-                            confirmedLiked = verifyLikedOnFreshRoot() || nodeFinder.isAlreadyLiked(nodeForClick)
+                            delay(ecoVerifyMs(800L))
+                            confirmedLiked = verifyLikedOnFreshRoot()
                         }
+                        // Pass 3 — wait thêm 800ms cho thiết bị chậm.
+                        if (!confirmedLiked) {
+                            delay(ecoVerifyMs(800L))
+                            confirmedLiked = verifyLikedOnFreshRoot()
+                        }
+                        logger.log(
+                            LogTag.CLICK,
+                            "confirmed=$confirmedLiked",
+                            "VERIFY_AFTER_CLICK"
+                        )
 
                         if (!confirmedLiked) {
                             // Fallback theo yêu cầu: nếu không thấy ô bình luận (composer) sau click,
                             // có thể click 1 phát vừa toggle sang UNLIKE trên bài đã like trước đó → click lại để LIKE lại.
-                            val resolved = resolvedLikeNodeOnFreshRoot()
+                            val resolved = resolvedLikeAreaOnFreshRoot()
                             if (resolved != null) {
                                 // Nếu đang ở full-screen Bình luận thì heuristic composer KHÔNG còn nghĩa "đã like"
                                 // — escape rồi bỏ qua bài, không treat-as-confirmed sai ngữ cảnh.
@@ -1220,11 +1237,20 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                                     )
                                     if (reClicked) {
                                         delay(ecoVerifyMs(1500L))
-                                        confirmedLiked = verifyLikedOnFreshRoot() || nodeFinder.isAlreadyLiked(target)
+                                        confirmedLiked = verifyLikedOnFreshRoot()
                                         if (!confirmedLiked) {
-                                            delay(ecoVerifyMs(600L))
-                                            confirmedLiked = verifyLikedOnFreshRoot() || nodeFinder.isAlreadyLiked(target)
+                                            delay(ecoVerifyMs(800L))
+                                            confirmedLiked = verifyLikedOnFreshRoot()
                                         }
+                                        if (!confirmedLiked) {
+                                            delay(ecoVerifyMs(800L))
+                                            confirmedLiked = verifyLikedOnFreshRoot()
+                                        }
+                                        logger.log(
+                                            LogTag.CLICK,
+                                            "confirmed=$confirmedLiked tag=$tag",
+                                            "VERIFY_AFTER_RECLICK"
+                                        )
                                     }
                                 }
 
@@ -1239,15 +1265,15 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                                         logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_COMPOSER_DISAPPEARED_RECLICK")
                                         reLikeAndVerify(resolved, "RECLICK_TO_RELIKE")
                                     }
-                                    // Trước & sau đều KHÔNG có composer → không suy được, fallback rule cũ: re-click thử.
-                                    !composerAfter -> {
-                                        logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_NO_COMMENT_COMPOSER_ASSUME_TOGGLED")
-                                        reLikeAndVerify(resolved, "RECLICK_TO_RELIKE")
-                                    }
                                     // Trước & sau đều CÓ composer → coi như đã like (nguyên rule cũ).
-                                    else -> {
+                                    composerBefore && composerAfter -> {
                                         logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_HAS_COMMENT_COMPOSER_TREAT_AS_CONFIRMED")
                                         confirmedLiked = true
+                                    }
+                                    // Trước & sau đều KHÔNG có composer (heuristic không kết luận được) →
+                                    // KHÔNG re-click bừa (tránh unlike nhầm). Coi là CLICK_UNCONFIRMED → skip bài.
+                                    else -> {
+                                        logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_NO_COMPOSER_EVIDENCE_SKIP")
                                     }
                                 }
                             }
@@ -1501,12 +1527,20 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         return try {
             val beforeTop = measureFeedAnchorTop(rootBeforeScroll)
             val (recyclerOk, gestureOk) = if (preferGesture) {
+                updateStatus("👆 Vuốt tay (touch) — profile=$gestureProfile")
                 val g = scrollDownByGesture(gestureProfile)
-                val r = if (!g) tryScrollFeedRecycler(rootBeforeScroll) else false
+                val r = if (!g) {
+                    updateStatus("🌀 Vuốt fail → fallback API SCROLL_FORWARD")
+                    tryScrollFeedRecycler(rootBeforeScroll)
+                } else false
                 r to g
             } else {
+                updateStatus("🌀 Cuộn API (SCROLL_FORWARD)")
                 val r = tryScrollFeedRecycler(rootBeforeScroll)
-                val g = if (!r) scrollDownByGesture(gestureProfile) else false
+                val g = if (!r) {
+                    updateStatus("👆 API fail → fallback vuốt tay (touch)")
+                    scrollDownByGesture(gestureProfile)
+                } else false
                 r to g
             }
             var scrollAttemptSucceeded = recyclerOk || gestureOk
@@ -1662,11 +1696,21 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         }
 
         val ok = if (useGestureFirst) {
+            updateStatus("👆 Touch tap nút Thích...")
             // Touch giống người trước; fail thì fallback ACTION_CLICK nếu có thể.
-            gestureTap() || actionClickIfPossible()
+            val g = gestureTap()
+            if (g) true else {
+                updateStatus("🖱 Touch fail → fallback ACTION_CLICK")
+                actionClickIfPossible()
+            }
         } else {
+            updateStatus("🖱 ACTION_CLICK nút Thích...")
             // Click trước (ổn định hơn); fail thì fallback touch.
-            actionClickIfPossible() || gestureTap()
+            val c = actionClickIfPossible()
+            if (c) true else {
+                updateStatus("👆 Click fail → fallback touch tap")
+                gestureTap()
+            }
         }
 
         if (ok) {
