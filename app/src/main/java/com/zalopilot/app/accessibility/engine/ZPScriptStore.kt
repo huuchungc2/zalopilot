@@ -75,16 +75,27 @@ class ZPScriptStore @Inject constructor(
     }
 
     fun load(id: String): JSONObject? {
-        loadFromAssets(id)?.let { return it }
-        val local = File(scriptsDir, localFileName(id))
-        if (local.exists()) {
-            return runCatching { JSONObject(local.readText()) }.getOrNull()
-        }
-        scriptsDir.listFiles()?.firstOrNull { it.name.startsWith("${id}_v") || it.name == "$id.json" }
-            ?.let { f ->
-                return runCatching { JSONObject(f.readText()) }.getOrNull()
-            }
-        return null
+        val bundled = loadFromAssets(id)
+        val local = loadNewestLocal(id)
+        if (local == null) return bundled
+        if (bundled == null) return local
+        val localVer = local.optInt("version", 0)
+        val bundledVer = bundled.optInt("version", 0)
+        return if (localVer >= bundledVer) local else bundled
+    }
+
+    private fun loadNewestLocal(id: String): JSONObject? {
+        val candidates = scriptsDir.listFiles()?.filter { f ->
+            f.extension == "json" && (
+                f.name == localFileName(id) ||
+                    f.name.startsWith("${id}_v")
+                )
+        }.orEmpty()
+        if (candidates.isEmpty()) return null
+        val best = candidates.maxByOrNull { f ->
+            runCatching { JSONObject(f.readText()).optInt("version", 0) }.getOrDefault(0)
+        } ?: return null
+        return runCatching { JSONObject(best.readText()) }.getOrNull()
     }
 
     fun loadActiveScript(): JSONObject? = load(getActiveScriptId())

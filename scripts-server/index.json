@@ -1,0 +1,10 @@
+{
+  "scripts": [
+    {
+      "id": "visit_contacts_v1",
+      "version": 5,
+      "file": "visit_contacts_v1.json",
+      "desc": "Visit v5 — bỏ ensureScreen Danh bạ (tương thích 1.0.9+)"
+    }
+  ]
+}
