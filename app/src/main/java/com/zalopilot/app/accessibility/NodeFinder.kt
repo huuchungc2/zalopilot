@@ -872,18 +872,24 @@ class NodeFinder @Inject constructor(
         return onDanhBa && hasFriendsSubTab && !hasViewId(root, "main_chat_view")
     }
 
-    fun isChatScreen(root: AccessibilityNodeInfo): Boolean {
-        if (isProfileScreen(root)) return false
-        return hasViewId(root, "main_chat_view") &&
+    private fun hasChatScreenMarkers(root: AccessibilityNodeInfo): Boolean =
+        hasViewId(root, "main_chat_view") &&
             (hasViewId(root, "chatinput_text") || hasViewId(root, "chat_drawer_layout"))
-    }
 
-    fun isProfileScreen(root: AccessibilityNodeInfo): Boolean {
-        if (isChatScreen(root)) return false
-        return hasViewId(root, "rl_profile_bio_container") ||
+    private fun hasProfileScreenMarkers(root: AccessibilityNodeInfo): Boolean =
+        hasViewId(root, "rl_profile_bio_container") ||
             hasViewId(root, "profile_avatar") ||
             hasViewId(root, "profile_bottom_functions_layout") ||
             (hasViewId(root, "feedItemFooterBarModule") && hasViewId(root, "layoutSendMessage"))
+
+    fun isChatScreen(root: AccessibilityNodeInfo): Boolean {
+        if (hasProfileScreenMarkers(root)) return false
+        return hasChatScreenMarkers(root)
+    }
+
+    fun isProfileScreen(root: AccessibilityNodeInfo): Boolean {
+        if (hasChatScreenMarkers(root)) return false
+        return hasProfileScreenMarkers(root)
     }
 
     fun findNodeWithTextOrDesc(
