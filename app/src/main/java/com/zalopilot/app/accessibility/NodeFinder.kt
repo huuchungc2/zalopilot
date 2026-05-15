@@ -857,19 +857,21 @@ class NodeFinder @Inject constructor(
      * và heuristic [hasInlineCommentComposerNearLikeAnchor] dễ confirm sai ngữ cảnh.
      */
     fun isContactListScreen(root: AccessibilityNodeInfo): Boolean {
-        if (isChatScreen(root) || isProfileScreen(root)) return false
-        val friendsTab = findByViewId(root, "tv_friends").any { node ->
+        if (hasChatScreenMarkers(root) || hasProfileScreenMarkers(root)) return false
+        if (hasViewId(root, "main_chat_view")) return false
+        val friendsTabSelected = findByViewId(root, "tv_friends").any { node ->
             val label = node.text?.toString().orEmpty()
             (label.contains("Bạn bè", ignoreCase = true) || label.contains("Friends", ignoreCase = true)) &&
                 (node.isSelected || node.isChecked)
         }
-        if (friendsTab) return true
+        if (friendsTabSelected) return true
         val onDanhBa = findByViewId(root, "maintab_contact").isNotEmpty() ||
             screenContainsTextOrDesc(root, "Danh bạ", 1200) ||
             screenContainsTextOrDesc(root, "Contacts", 1200)
         val hasFriendsSubTab = screenContainsTextOrDesc(root, "Bạn bè", 1200) ||
             screenContainsTextOrDesc(root, "Friends", 1200)
-        return onDanhBa && hasFriendsSubTab && !hasViewId(root, "main_chat_view")
+        if (onDanhBa && hasFriendsSubTab) return true
+        return hasViewId(root, "tv_friends") && hasFriendsSubTab
     }
 
     private fun hasChatScreenMarkers(root: AccessibilityNodeInfo): Boolean =

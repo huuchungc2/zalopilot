@@ -33,6 +33,7 @@ class ZPScriptRunner @Inject constructor(
         val profilesLimit = maxProfiles ?: settingsManager.getVisitMaxProfiles()
         var profilesDone = 0
         var index = 0
+        var ensureScreenStreak = 0
         val steps = script.steps
 
         fun stepIdAt(i: Int): String? = steps.getOrNull(i)?.id
@@ -78,9 +79,25 @@ class ZPScriptRunner @Inject constructor(
             }
 
             if (!ok && step.action.lowercase() !in SKIP_ON_FAIL_ACTIONS) {
+                if (step.action.lowercase() == "ensurescreen" && ensureScreenStreak < 10) {
+                    ensureScreenStreak++
+                    val screen = step.screen.orEmpty()
+                    val fgRoot = service.rootInActiveWindow
+                    val pkg = fgRoot?.packageName?.toString().orEmpty()
+                    runCatching { fgRoot?.recycle() }
+                    logger.log(LogTag.ERROR, "screen=$screen pkg=$pkg streak=$ensureScreenStreak", "ENSURE_SCREEN_RETRY")
+                    if (!service.isZaloMainForeground()) {
+                        service.showToast("⚠️ Mở Zalo → Danh bạ → Bạn bè rồi để bot chạy")
+                        service.waitForZaloMainForeground(12_000L)
+                    } else {
+                        delay(600)
+                    }
+                    continue
+                }
                 logger.log(LogTag.ERROR, step.action, "SCRIPT_STEP_FAIL_STOP")
                 return false
             }
+            if (ok) ensureScreenStreak = 0
 
             index++
         }
@@ -250,7 +267,15 @@ class ZPScriptRunner @Inject constructor(
 
     private suspend fun runEnsureScreen(engine: ZPEngine, step: ZPStep): Boolean {
         val screen = step.screen ?: return false
-        val timeout = step.timeoutMs ?: 3000L
+        val timeout = when {
+            step.timeoutMs != null -> step.timeoutMs
+            screen.equals("contacts", ignoreCase = true) -> 6_000L
+            else -> 4_000L
+        }
+        if (screen.equals("contacts", ignoreCase = true)) {
+            engine.scrollContacts()
+            delay(350)
+        }
         return engine.ensureScreen(
             detect = {
                 val root = engine.acquireRoot() ?: return@ensureScreen false
@@ -260,7 +285,15 @@ class ZPScriptRunner @Inject constructor(
                     runCatching { root.recycle() }
                 }
             },
-            navigate = { engine.back() },
+            navigate = {
+                when (screen.lowercase()) {
+                    "contacts" -> {
+                        engine.scrollContacts()
+                        delay(400)
+                    }
+                    else -> engine.back()
+                }
+            },
             timeoutMs = timeout
         )
     }

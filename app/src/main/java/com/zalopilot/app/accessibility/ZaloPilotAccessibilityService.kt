@@ -38,6 +38,7 @@ import com.zalopilot.app.util.AppVersion
 import com.zalopilot.app.util.LikeSettingsManager
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
+import com.zalopilot.app.util.isZaloMainAppPackage
 import com.zalopilot.app.util.isZaloRelatedPackage
 import com.zalopilot.app.util.hasValidScreenBounds
 import com.zalopilot.app.util.random
@@ -787,10 +788,12 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     return@launch
                 }
 
-                if (!isZaloRelatedPackage(pkg)) {
-                    logger.log(LogTag.STATE, "pkg=$pkg", "BLOCKED_NOT_IN_ZALO")
-                    val hint = if (settingsManager.getLikeMode() == LikeMode.VISIT) {
-                        "⚠️ Mở Zalo → Danh bạ → Bạn bè rồi bấm BẮT ĐẦU"
+                val visitMode = settingsManager.getLikeMode() == LikeMode.VISIT
+                val inTargetApp = if (visitMode) isZaloMainAppPackage(pkg) else isZaloRelatedPackage(pkg)
+                if (!inTargetApp) {
+                    logger.log(LogTag.STATE, "pkg=$pkg visit=$visitMode", "BLOCKED_NOT_IN_ZALO")
+                    val hint = if (visitMode) {
+                        "⚠️ Mở Zalo → Danh bạ → Bạn bè rồi bấm BẮT ĐẦU (đừng bấm trong app ZaloPilot)"
                     } else {
                         "⚠️ Hãy mở Zalo (tab Nhật ký) rồi bấm BẮT ĐẦU"
                     }
@@ -898,6 +901,23 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             updateStatus("✅ Visit script xong — dừng")
             stopAutoLike()
         }
+    }
+
+    fun isZaloMainForeground(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val pkg = root.packageName?.toString().orEmpty()
+        runCatching { root.recycle() }
+        return isZaloMainAppPackage(pkg)
+    }
+
+    suspend fun waitForZaloMainForeground(timeoutMs: Long = 12_000L): Boolean {
+        if (isZaloMainForeground()) return true
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (isRunning && System.currentTimeMillis() < deadline) {
+            delay(400)
+            if (isZaloMainForeground()) return true
+        }
+        return isZaloMainForeground()
     }
 
     suspend fun scriptAcquireRoot(retries: Int = 5): AccessibilityNodeInfo? =

@@ -6,5 +6,15 @@ package com.zalopilot.app.util
  */
 fun isZaloRelatedPackage(packageName: String?): Boolean {
     if (packageName.isNullOrBlank()) return false
-    return packageName.contains("zalo", ignoreCase = true)
+    val p = packageName.lowercase()
+    if (p.contains("zalopilot")) return false
+    return p.contains("zalo")
+}
+
+/** Visit / đọc feed — chỉ khi đang ở app Zalo chính, không phải ZaloPilot hay launcher. */
+fun isZaloMainAppPackage(packageName: String?): Boolean {
+    if (packageName.isNullOrBlank()) return false
+    val p = packageName.lowercase()
+    if (p.contains("zalopilot")) return false
+    return p == "com.zing.zalo" || p.startsWith("com.zing.zalo.")
 }

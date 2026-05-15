@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- fix(visit): `ensureScreen` fail khi pkg launcher/ZaloPilot — `isZaloRelatedPackage` loại trừ `zalopilot`; thêm `isZaloMainAppPackage`; Visit chờ/retry màn Zalo thay vì dừng ngay; nới `isContactListScreen`.
 - fix(visit): `StackOverflowError` — `isChatScreen` ↔ `isProfileScreen` gọi đệ quy lẫn nhau; tách `hasChatScreenMarkers` / `hasProfileScreenMarkers` không cross-call.
 - fix(script): `ZPScriptParser` — `JSONObject.optString(key, null)` gây NPE trên Android khi parse Visit script (bước thiếu `count`/`screen`/…); dùng `optString(key, "")` + helper an toàn.
 - feat(store/visit): `ZaloIDStore` học `contact_list_id` + `contact_item_id` (`ZaloUIScanner.scanContactList` trên màn Danh bạ→Bạn bè); `NodeFinder.findContactListItems` ưu tiên ID đã học, clear khi stale; script `$contactListId`/`$contactItemId` + action `logStoreIds`.
