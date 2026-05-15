@@ -87,7 +87,12 @@ class ZPScriptRunner @Inject constructor(
                     runCatching { fgRoot?.recycle() }
                     logger.log(LogTag.ERROR, "screen=$screen pkg=$pkg streak=$ensureScreenStreak", "ENSURE_SCREEN_RETRY")
                     if (!service.isZaloMainForeground()) {
-                        service.showToast("⚠️ Mở Zalo → Danh bạ → Bạn bè rồi để bot chạy")
+                        val hint = when (screen.lowercase()) {
+                            "profile" -> "⚠️ Về lại Zalo (đang ở màn hình ngoài) — đừng bấm Home"
+                            "chat" -> "⚠️ Mở lại Zalo — đang chat/profile"
+                            else -> "⚠️ Mở Zalo → Danh bạ → Bạn bè rồi để bot chạy"
+                        }
+                        service.showToast(hint)
                         service.waitForZaloMainForeground(12_000L)
                     } else {
                         delay(600)

@@ -1,14 +1,14 @@
 {
   "id": "visit_contacts_v1",
-  "version": 5,
-  "desc": "Visit v5 — chỉ JSON: bỏ ensureScreen Danh bạ, scroll + findContactItems",
+  "version": 6,
+  "desc": "Visit v6 — bỏ ensureScreen profile; wait sau tapProfileEntry (tránh kẹt khi pkg launcher)",
   "steps": [
     { "id": "s1", "action": "scrollContacts" },
     { "id": "s2", "action": "findContactItems" },
     { "id": "s3", "action": "tapContactAt" },
-    { "id": "s4", "action": "ensureScreen", "screen": "chat", "timeoutMs": 3000 },
+    { "id": "s4", "action": "wait", "ms": 1200 },
     { "id": "s5", "action": "tapProfileEntry" },
-    { "id": "s6", "action": "ensureScreen", "screen": "profile", "timeoutMs": 3000 },
+    { "id": "s6", "action": "wait", "ms": 2200 },
     { "id": "s7", "action": "likeProfilePosts", "count": "$visitLikeCount" },
     { "id": "s8", "action": "ifSetting", "key": "visitCommentCount", "gt": 0, "do": [
       { "action": "repeat", "count": "$visitCommentCount", "do": [
@@ -22,8 +22,9 @@
     ]},
     { "id": "s9", "action": "back" },
     { "id": "s10", "action": "back" },
-    { "id": "s11", "action": "incrementVar", "var": "$visitIndex" },
-    { "id": "s12", "action": "saveVar", "var": "$visitIndex" },
-    { "id": "s13", "action": "goto", "step": "s1" }
+    { "id": "s11", "action": "back" },
+    { "id": "s12", "action": "incrementVar", "var": "$visitIndex" },
+    { "id": "s13", "action": "saveVar", "var": "$visitIndex" },
+    { "id": "s14", "action": "goto", "step": "s1" }
   ]
 }
