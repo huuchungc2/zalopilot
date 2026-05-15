@@ -2,9 +2,9 @@
   "scripts": [
     {
       "id": "visit_contacts_v1",
-      "version": 6,
+      "version": 7,
       "file": "visit_contacts_v1.json",
-      "desc": "Visit v6 — bỏ ensureScreen profile/chat cứng; wait + likeProfilePosts"
+      "desc": "Visit v7 — profile cuộn timeline + like (cần app có prepareProfile)"
     }
   ]
 }

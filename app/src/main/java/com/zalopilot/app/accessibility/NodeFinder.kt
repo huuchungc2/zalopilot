@@ -891,7 +891,28 @@ class NodeFinder @Inject constructor(
 
     fun isProfileScreen(root: AccessibilityNodeInfo): Boolean {
         if (hasChatScreenMarkers(root)) return false
-        return hasProfileScreenMarkers(root)
+        if (hasProfileScreenMarkers(root)) return true
+        // Samsung/Zalo đổi id — vẫn là profile nếu có avatar, không còn ô chat
+        return hasViewId(root, "profile_avatar") && !hasViewId(root, "chatinput_text")
+    }
+
+    /** Profile đang (hoặc sắp) có timeline bài — có footer feed hoặc nút Thích. */
+    fun hasProfileTimelineContent(root: AccessibilityNodeInfo): Boolean =
+        hasViewId(root, "feedItemFooterBarModule") || findProfileLikeButtons(root).isNotEmpty()
+
+    /** Tab timeline trên profile (Bài viết / Nhật ký…) — cần tap nếu đang tab Ảnh/Giới thiệu. */
+    fun findProfilePostsTabTapTarget(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val phrases = listOf(
+            "bài viết", "posts", "nhật ký", "dòng thời gian", "timeline", "hoạt động"
+        )
+        for (phrase in phrases) {
+            findNodeWithTextOrDesc(root, phrase, maxNodes = 2500)?.let { node ->
+                if (node.isSelected || node.isChecked) return null
+                findClickableAncestor(node)?.let { return it }
+                if (node.isClickable) return node
+            }
+        }
+        return null
     }
 
     fun findNodeWithTextOrDesc(

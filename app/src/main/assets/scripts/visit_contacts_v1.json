@@ -1,14 +1,14 @@
 {
   "id": "visit_contacts_v1",
-  "version": 6,
-  "desc": "Visit v6 — bỏ ensureScreen profile; wait sau tapProfileEntry (tránh kẹt khi pkg launcher)",
+  "version": 7,
+  "desc": "Visit v7 — chờ profile lâu hơn; like/comment do engine cuộn timeline",
   "steps": [
     { "id": "s1", "action": "scrollContacts" },
     { "id": "s2", "action": "findContactItems" },
     { "id": "s3", "action": "tapContactAt" },
     { "id": "s4", "action": "wait", "ms": 1200 },
     { "id": "s5", "action": "tapProfileEntry" },
-    { "id": "s6", "action": "wait", "ms": 2200 },
+    { "id": "s6", "action": "wait", "ms": 3500 },
     { "id": "s7", "action": "likeProfilePosts", "count": "$visitLikeCount" },
     { "id": "s8", "action": "ifSetting", "key": "visitCommentCount", "gt": 0, "do": [
       { "action": "repeat", "count": "$visitCommentCount", "do": [

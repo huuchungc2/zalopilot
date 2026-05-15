@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix(visit/profile): vào profile nhưng không like — `prepareProfileTimelineForLikes` (tap Bài viết, cuộn tìm footer); không thoát ngay khi chưa thấy Thích; nới `isProfileScreen`.
+- fix(visit/script): v7 wait 3.5s sau mở profile.
 - fix(visit/script): v6 bỏ `ensureScreen(profile|chat)` — log launcher khi chờ profile; `wait` sau tap + `likeProfilePosts` tự detect profile.
 - fix(script): `ZPScriptStore.load` — JSON tải từ tab Script **ưu tiên** hơn assets; Visit flow đổi trong `visit_contacts_v1.json` v5 (bỏ `ensureScreen(contacts)`), không thêm Kotlin Visit.
 - feat(visit/profile): like profile giống feed — `likeProfilePosts` cuộn timeline, bỏ bài đã like (`isAlreadyLiked`), không có bài / ít bài thì skip sang người kế (không `SCRIPT_STEP_FAIL_STOP`); tăng **Đã like** / **Đã duyệt**; không dùng heuristic ô comment inline Nhật ký.

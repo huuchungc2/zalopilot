@@ -143,14 +143,21 @@ class ZPEngine(
             logger.log(LogTag.STATE, "maxLikes=0", "PROFILE_LIKE_SKIP")
             return ProfileLikeResult(0, noPostsOnProfile = false)
         }
+        prepareProfileTimelineForLikes()
         var liked = 0
         var allLikedScrollStreak = 0
+        var emptyScanStreak = 0
         val maxRounds = maxOf(maxLikes * 4, 12).coerceAtMost(28)
         for (round in 0 until maxRounds) {
             if (liked >= maxLikes) break
             val root = acquireRoot() ?: break
             try {
-                if (!detectScreen(root, "profile")) {
+                if (!nodeFinder.isProfileScreen(root)) {
+                    if (round < 4) {
+                        logger.log(LogTag.SCAN, "round=$round", "PROFILE_WAIT_SCREEN")
+                        randomDelay(700L, 1100L)
+                        continue
+                    }
                     logger.log(LogTag.STATE, "round=$round", "PROFILE_LEFT_SCREEN")
                     break
                 }
@@ -159,10 +166,19 @@ class ZPEngine(
                 if (candidates.isEmpty()) {
                     if (nodeFinder.hasVisibleSelfAlreadyLikedLikeControl(root)) {
                         allLikedScrollStreak++
+                        emptyScanStreak = 0
                         logger.log(LogTag.SCAN, "streak=$allLikedScrollStreak", "PROFILE_ALL_LIKED_SCROLL")
                         if (allLikedScrollStreak >= 5) break
                         scrollProfileTimeline()
                         randomDelay(500L, 900L)
+                        continue
+                    }
+                    emptyScanStreak++
+                    if (emptyScanStreak <= 6) {
+                        logger.log(LogTag.SCAN, "streak=$emptyScanStreak", "PROFILE_SCROLL_FIND_POSTS")
+                        tapProfilePostsTabIfNeeded(root)
+                        scrollProfileTimeline()
+                        randomDelay(600L, 1000L)
                         continue
                     }
                     logger.log(LogTag.SCAN, "round=$round", "PROFILE_NO_POSTS")
@@ -170,6 +186,7 @@ class ZPEngine(
                     service.notifyProgressUpdate()
                     return ProfileLikeResult(liked, noPostsOnProfile = true)
                 }
+                emptyScanStreak = 0
                 allLikedScrollStreak = 0
                 val targetNode = candidates.firstOrNull { node ->
                     profileTappedPostKeys.add(profilePostKey(node))
@@ -214,6 +231,34 @@ class ZPEngine(
             logger.log(LogTag.SCAN, "profile", "PROFILE_ALL_ALREADY_LIKED")
         }
         return ProfileLikeResult(liked, noPostsOnProfile = false)
+    }
+
+    /** Mở tab bài + cuộn timeline trước khi like (profile mặc định hay kẹt phần đầu). */
+    private suspend fun prepareProfileTimelineForLikes() {
+        for (attempt in 0 until 7) {
+            val root = acquireRoot() ?: break
+            try {
+                if (!nodeFinder.isProfileScreen(root)) {
+                    randomDelay(500L, 900L)
+                    continue
+                }
+                tapProfilePostsTabIfNeeded(root)
+                if (nodeFinder.hasProfileTimelineContent(root)) return
+                scrollProfileTimeline()
+                randomDelay(550L, 950L)
+            } finally {
+                runCatching { root.recycle() }
+            }
+        }
+    }
+
+    private suspend fun tapProfilePostsTabIfNeeded(root: AccessibilityNodeInfo) {
+        val tab = nodeFinder.findProfilePostsTabTapTarget(root) ?: return
+        val target = ScriptTapTarget.fromNode(tab) ?: return
+        if (tap(target)) {
+            logger.log(LogTag.CLICK, "profile_tab", "POSTS_TAB")
+            randomDelay(650L, 1000L)
+        }
     }
 
     private fun profilePostKey(node: AccessibilityNodeInfo): String {
