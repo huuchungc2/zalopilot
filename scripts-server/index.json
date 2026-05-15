@@ -2,9 +2,9 @@
   "scripts": [
     {
       "id": "visit_contacts_v1",
-      "version": 7,
+      "version": 8,
       "file": "visit_contacts_v1.json",
-      "desc": "Visit v7 — profile cuộn timeline + like (cần app có prepareProfile)"
+      "desc": "Visit v8 — sang bạn tiếp theo (backToContacts + visitIndex)"
     }
   ]
 }

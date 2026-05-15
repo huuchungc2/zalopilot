@@ -71,11 +71,7 @@ class ZPScriptRunner @Inject constructor(
                     logger.log(LogTag.ERROR, "missing step=$target", "SCRIPT_GOTO_FAIL")
                     return false
                 }
-                "incrementvar" -> {
-                    if (normalizeVar(step.varName) == "visitindex") {
-                        profilesDone++
-                    }
-                }
+                "incrementvar" -> { /* visitIndex — đếm profile ở goto, tránh +2/lượt */ }
             }
 
             if (!ok && step.action.lowercase() !in SKIP_ON_FAIL_ACTIONS) {
@@ -241,6 +237,7 @@ class ZPScriptRunner @Inject constructor(
                 }
             }
             "back" -> engine.back()
+            "backtocontacts" -> runBackToContactList(engine)
             "wait" -> {
                 delay(step.ms ?: 500L)
                 true
@@ -356,15 +353,47 @@ class ZPScriptRunner @Inject constructor(
         return targets.isNotEmpty()
     }
 
-    /** Luôn tap hàng bạn đầu tiên trên màn hình — $visitIndex chỉ đếm đã visit, không phải index list. */
+    /** Tap bạn theo $visitIndex — mỗi vòng 1 người khác trên list đang thấy. */
     private suspend fun runTapContactAt(engine: ZPEngine, step: ZPStep): Boolean {
         if (engine.lastContactTargets.isEmpty()) return false
-        val visibleIndex = 0
-        if (engine.tapNodeAt(engine.lastContactTargets, visibleIndex)) return true
+        val targets = engine.lastContactTargets
+        val visitIdx = progressManager.getVisitIndex()
+        val index = (visitIdx % targets.size).coerceIn(0, targets.lastIndex)
+        logger.log(LogTag.CLICK, "visitIdx=$visitIdx index=$index/${targets.size}", "TAP_CONTACT")
+        if (engine.tapNodeAt(targets, index)) return true
         engine.scrollContacts()
         delay(700)
         if (!runFindContactItems(engine)) return false
-        return engine.tapNodeAt(engine.lastContactTargets, visibleIndex)
+        val retryTargets = engine.lastContactTargets
+        if (retryTargets.isEmpty()) return false
+        val retryIndex = (visitIdx % retryTargets.size).coerceIn(0, retryTargets.lastIndex)
+        return engine.tapNodeAt(retryTargets, retryIndex)
+    }
+
+    /** Back từ profile/chat tới Danh bạ — tránh back thừa ra launcher. */
+    private suspend fun runBackToContactList(engine: ZPEngine): Boolean {
+        repeat(5) {
+            val root = engine.acquireRoot() ?: break
+            val onList = try {
+                nodeFinder.isContactListScreen(root)
+            } finally {
+                runCatching { root.recycle() }
+            }
+            if (onList) {
+                logger.log(LogTag.STATE, "attempt=$it", "BACK_ON_CONTACTS")
+                return true
+            }
+            engine.back()
+            delay(550)
+        }
+        val root = engine.acquireRoot() ?: return false
+        return try {
+            val ok = nodeFinder.isContactListScreen(root)
+            if (!ok) logger.log(LogTag.SCAN, "contacts", "BACK_CONTACTS_FAIL")
+            ok
+        } finally {
+            runCatching { root.recycle() }
+        }
     }
 
     private fun normalizeVar(raw: String?): String =

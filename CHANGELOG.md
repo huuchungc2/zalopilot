@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- fix(visit): sau 1 profile không sang bạn tiếp — `backToContacts` (không back thừa); `tapContactAt` theo `$visitIndex`; cuộn danh bạ trước vòng mới; bỏ đếm profile 2 lần/vòng.
 - fix(visit/profile): vào profile nhưng không like — `prepareProfileTimelineForLikes` (tap Bài viết, cuộn tìm footer); không thoát ngay khi chưa thấy Thích; nới `isProfileScreen`.
 - fix(visit/script): v7 wait 3.5s sau mở profile.
 - fix(visit/script): v6 bỏ `ensureScreen(profile|chat)` — log launcher khi chờ profile; `wait` sau tap + `likeProfilePosts` tự detect profile.

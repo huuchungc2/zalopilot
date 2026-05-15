@@ -1,16 +1,15 @@
 {
   "id": "visit_contacts_v1",
-  "version": 7,
-  "desc": "Visit v7 — chờ profile lâu hơn; like/comment do engine cuộn timeline",
+  "version": 8,
+  "desc": "Visit v8 — backToContacts + tap bạn theo visitIndex",
   "steps": [
-    { "id": "s1", "action": "scrollContacts" },
-    { "id": "s2", "action": "findContactItems" },
-    { "id": "s3", "action": "tapContactAt" },
-    { "id": "s4", "action": "wait", "ms": 1200 },
-    { "id": "s5", "action": "tapProfileEntry" },
-    { "id": "s6", "action": "wait", "ms": 3500 },
-    { "id": "s7", "action": "likeProfilePosts", "count": "$visitLikeCount" },
-    { "id": "s8", "action": "ifSetting", "key": "visitCommentCount", "gt": 0, "do": [
+    { "id": "s1", "action": "findContactItems" },
+    { "id": "s2", "action": "tapContactAt" },
+    { "id": "s3", "action": "wait", "ms": 1200 },
+    { "id": "s4", "action": "tapProfileEntry" },
+    { "id": "s5", "action": "wait", "ms": 3500 },
+    { "id": "s6", "action": "likeProfilePosts", "count": "$visitLikeCount" },
+    { "id": "s7", "action": "ifSetting", "key": "visitCommentCount", "gt": 0, "do": [
       { "action": "repeat", "count": "$visitCommentCount", "do": [
         { "action": "findCommentButton" },
         { "action": "tap" },
@@ -20,10 +19,10 @@
         { "action": "back" }
       ]}
     ]},
-    { "id": "s9", "action": "back" },
-    { "id": "s10", "action": "back" },
-    { "id": "s11", "action": "incrementVar", "var": "$visitIndex" },
-    { "id": "s12", "action": "saveVar", "var": "$visitIndex" },
-    { "id": "s13", "action": "goto", "step": "s1" }
+    { "id": "s8", "action": "backToContacts" },
+    { "id": "s9", "action": "scrollContacts" },
+    { "id": "s10", "action": "incrementVar", "var": "$visitIndex" },
+    { "id": "s11", "action": "saveVar", "var": "$visitIndex" },
+    { "id": "s12", "action": "goto", "step": "s1" }
   ]
 }
