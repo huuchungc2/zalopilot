@@ -26,6 +26,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
+import com.zalopilot.app.util.AppVersion
 import com.zalopilot.app.util.LikeMode
 import com.zalopilot.app.util.LikeProgressManager
 import com.zalopilot.app.util.LikeSettingsManager
@@ -202,6 +203,8 @@ class FloatingMenuService : Service() {
             setPadding(8, 8, 8, 8)
             setBackgroundColor(Color.parseColor("#EE1a1a2e"))
 
+            addView(menuItem("ZaloPilot ${AppVersion.fromContext(this@FloatingMenuService)}", "#0068FF", null))
+
             val statLabel = buildString {
                 append("📊 Like ${progress.todayLikeCount}")
                 append(" · Duyệt ${progress.todayPostsHandledCount}")
@@ -348,8 +351,8 @@ class FloatingMenuService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, channelId)
-            .setContentTitle("Nút ZP nổi đang bật")
-            .setContentText("Bấm để mở menu · Tắt trong app hoặc thông báo")
+            .setContentTitle("ZaloPilot ${AppVersion.shortLabel()}")
+            .setContentText("Nút ZP nổi · ${AppVersion.fullLabel()}")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(android.R.drawable.ic_menu_save, "📋 Dump UI", dumpPi)

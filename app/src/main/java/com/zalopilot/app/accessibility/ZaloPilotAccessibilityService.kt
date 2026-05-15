@@ -34,6 +34,7 @@ import com.zalopilot.app.accessibility.engine.ZPScriptStore
 import com.zalopilot.app.util.FeedMode
 import com.zalopilot.app.util.InteractMode
 import com.zalopilot.app.util.LikeMode
+import com.zalopilot.app.util.AppVersion
 import com.zalopilot.app.util.LikeSettingsManager
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
@@ -119,10 +120,13 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
     /** Tránh dừng nhầm ngay sau GLOBAL_ACTION_BACK (transition animation). */
     private var lastGlobalBackAtElapsedMs: Long = 0L
+    /** Vừa quét thấy feed Nhật ký — không BACK viewer trong cửa sổ này. */
+    private var lastFeedUiConfirmedAtElapsedMs: Long = 0L
 
     private var windowManager: WindowManager? = null
     private var statusView: LinearLayout? = null
     private var statusText: TextView? = null
+    private var statusVersionText: TextView? = null
     private var isOverlayShowing = false
 
     /** Viền debug nút like — tách khỏi status overlay. */
@@ -374,22 +378,26 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         return first
     }
 
-    /**
-     * Thoát màn lạc (Bình luận / Zing MP3 / viewer ảnh). Trả về `true` nếu đã BACK — caller `continue`.
-     * Package không phải Zalo → chỉ log, không BACK.
-     */
-    private suspend fun detectAndEscapeWrongScreen(root: AccessibilityNodeInfo?): Boolean {
-        if (root == null) return false
+    private fun markFeedUiConfirmed() {
+        lastFeedUiConfirmedAtElapsedMs = SystemClock.elapsedRealtime()
+    }
 
-        val pkg = root.packageName?.toString().orEmpty()
-        if (pkg.isNotBlank() && !isZaloRelatedPackage(pkg)) {
+    private fun canEscapeWithGlobalBack(root: AccessibilityNodeInfo?): Boolean {
+        val pkg = root?.packageName?.toString().orEmpty()
+        if (pkg.isBlank() || !isZaloRelatedPackage(pkg)) {
             logger.log(LogTag.STATE, "pkg=$pkg", "WRONG_PACKAGE_NO_BACK")
             return false
         }
+        return true
+    }
 
-        val dm = resources.displayMetrics
-        val screenW = dm.widthPixels
-        val screenH = dm.heightPixels
+    /**
+     * Thoát màn lạc (Bình luận / Zing MP3). Không BACK viewer ở đây — feed có vpager lớn gây thoát Zalo.
+     * Viewer chỉ xử lý sau tap like: [escapeFullscreenImageViewerAfterLike].
+     */
+    private suspend fun detectAndEscapeWrongScreen(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        if (!canEscapeWithGlobalBack(root)) return false
 
         when {
             nodeFinder.isFullScreenCommentScreen(root) -> {
@@ -439,20 +447,39 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 return true
             }
 
-            nodeFinder.isLikelyZaloImageViewer(root, screenW, screenH) -> {
-                logger.log(LogTag.STATE, "image_viewer", "DETECTED_BACK")
-                updateStatus("↩️ Viewer ảnh — back về feed")
-                performGlobalAction(GLOBAL_ACTION_BACK)
-                lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
-                delayEco(400L..700L)
-                return true
-            }
-
             else -> {
                 consecutiveStuckCommentScreen = 0
                 return false
             }
         }
+    }
+
+    /** Chỉ sau tap like: nếu chắc mở viewer full-screen thì BACK một lần. */
+    private suspend fun escapeFullscreenImageViewerAfterLike(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null || !canEscapeWithGlobalBack(root)) return false
+        if (lastFeedUiConfirmedAtElapsedMs > 0L) {
+            val sinceFeed = SystemClock.elapsedRealtime() - lastFeedUiConfirmedAtElapsedMs
+            if (sinceFeed in 0L..45_000L) {
+                logger.log(LogTag.STATE, "sinceFeedMs=$sinceFeed", "IMAGE_VIEWER_SKIP_RECENT_FEED")
+                return false
+            }
+        }
+        val dm = resources.displayMetrics
+        if (!nodeFinder.isStrictFullscreenImageViewer(root, dm.widthPixels, dm.heightPixels)) {
+            return false
+        }
+        logger.log(LogTag.STATE, "after_like", "IMAGE_VIEWER_STRICT_BACK")
+        updateStatus("↩️ Đóng ảnh full-screen — về feed")
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+        delayEco(500L..900L)
+        return true
+    }
+
+    /** Sau click like: comment / Zing / viewer (strict). */
+    private suspend fun escapeWrongScreenAfterLikeClick(root: AccessibilityNodeInfo?): Boolean {
+        if (escapeFullscreenImageViewerAfterLike(root)) return true
+        return detectAndEscapeWrongScreen(root)
     }
 
     /**
@@ -1158,6 +1185,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         root: AccessibilityNodeInfo,
         @Suppress("UNUSED_PARAMETER") settings: LikeSettings
     ): FeedScanResult {
+        markFeedUiConfirmed()
         var scanRoot = root
         var acquiredExtra: AccessibilityNodeInfo? = null
         try {
@@ -1185,9 +1213,14 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             runCatching { maybeDumpFeedItemTrees(scanRoot) }
                 .onFailure { e -> logger.logError("maybeDumpFeedItemTrees", e) }
 
+            if (likeNodes.isNotEmpty()) {
+                markFeedUiConfirmed()
+            }
+
             if (likeNodes.isEmpty()) {
                 updateDebugNodeHighlights(emptyList(), null)
                 if (nodeFinder.hasVisibleSelfAlreadyLikedLikeControl(scanRoot)) {
+                    markFeedUiConfirmed()
                     updateStatus("⏩ Bạn đã thích các bài trên màn hình — cuộn tiếp...")
                     logger.log(LogTag.SCAN, "feed", "EMPTY_BUT_SELF_ALREADY_LIKED_TREAT_AS_ALL_SKIPPED")
                     return FeedScanResult.ALL_SKIPPED
@@ -1272,13 +1305,13 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         val peekRoot = acquireRootOrNull(3, 60L..180L, LogTag.CLICK, quietLog = true)
                         if (peekRoot != null) {
                             try {
-                                if (detectAndEscapeWrongScreen(peekRoot)) {
+                                if (escapeWrongScreenAfterLikeClick(peekRoot)) {
                                     logger.log(
                                         LogTag.CLICK,
                                         author ?: "unknown",
                                         "WRONG_SCREEN_AFTER_CLICK_SKIP"
                                     )
-                                    updateStatus("↩️ Sau click mở màn khác — back & bỏ qua bài")
+                                    updateStatus("↩️ Sau click mở màn khác — đã back & bỏ qua bài")
                                     progressManager.incrementPostsHandledAndSave()
                                     sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                                     delayEco(400L..800L)
@@ -1867,6 +1900,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     keepScreenOn = isRunning
                 }
 
+                val versionTv = TextView(this).apply {
+                    text = AppVersion.shortLabel()
+                    textSize = 10f
+                    setTextColor(Color.parseColor("#99FFFFFF"))
+                }
                 val tv = TextView(this).apply {
                     text = msg
                     textSize = 12f
@@ -1874,8 +1912,10 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     maxLines = 2
                 }
 
+                layout.addView(versionTv)
                 layout.addView(tv)
                 statusView = layout
+                statusVersionText = versionTv
                 statusText = tv
                 wm.addView(layout, params)
                 isOverlayShowing = true
@@ -1942,6 +1982,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             }
             statusView = null
             statusText = null
+            statusVersionText = null
             isOverlayShowing = false
         }
     }

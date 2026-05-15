@@ -304,9 +304,6 @@ class NodeFinder @Inject constructor(
         return t.contains("my_reaction") || t.contains("myreact") || t.contains("user_reaction")
     }
 
-    /**
-     * Viewer ảnh toàn màn (vd. share / album) — [vpager] hoặc ViewPager lớn.
-     */
     /** Bottom sheet Zing MP3 (tap nhầm media trên feed). */
     fun isZingMusicBottomSheet(root: AccessibilityNodeInfo?): Boolean {
         if (root == null) return false
@@ -412,36 +409,93 @@ class NodeFinder @Inject constructor(
         return false
     }
 
-    fun isLikelyZaloImageViewer(root: AccessibilityNodeInfo?, screenW: Int, screenH: Int): Boolean {
+    /**
+     * Đang ở tab Nhật ký / feed (có swipe refresh, layout feed, nút Thích…).
+     * Dùng chặn nhận nhầm viewer ảnh khi cuộn feed (feed có vpager / tab dưới).
+     */
+    fun isLikelyTimelineFeedScreen(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        if (hasZaloMainBottomTabs(root)) return true
+        if (hasViewId(root, "swipe_refresh_layout")) return true
+        if (hasViewId(root, "layoutSocialFeed")) return true
+        if (hasViewId(root, "feedItemFooterBarModule")) return true
+        if (findLikeButtons(root).isNotEmpty()) return true
+        if (findTimelineTab(root) != null) return true
+        if (screenContainsTextOrDesc(root, ZaloIDStore.TEXT_TIMELINE, 900)) return true
+        if (screenContainsTextOrDesc(root, ZaloIDStore.TEXT_LIKE, 700)) return true
+        return screenContainsTextOrDesc(root, ZaloIDStore.TEXT_LIKED, 700)
+    }
+
+    /** Thanh tab dưới Zalo (Tin nhắn / Danh bạ) — có trên feed, thường ẩn khi xem ảnh full-screen. */
+    fun hasZaloMainBottomTabs(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        return hasViewId(root, "maintab_message") || hasViewId(root, "maintab_contact")
+    }
+
+    /**
+     * Viewer ảnh full-screen sau khi tap nhầm ảnh trên feed.
+     * Không dùng trong vòng lặp cuộn — feed có vpager lớn dễ false positive.
+     */
+    fun isStrictFullscreenImageViewer(
+        root: AccessibilityNodeInfo?,
+        screenW: Int,
+        screenH: Int
+    ): Boolean {
         if (root == null || screenW <= 0 || screenH <= 0) return false
-        val thresh = (screenW * screenH * 0.42f).toInt().coerceAtLeast(1)
+        if (isLikelyTimelineFeedScreen(root)) return false
+        if (hasZaloMainBottomTabs(root)) return false
+        if (hasInlineFeedCommentComposerVisible(root)) return false
+
+        val screenArea = screenW * screenH
+        val minArea = (screenArea * 0.88f).toInt().coerceAtLeast(1)
         val stack = ArrayDeque<AccessibilityNodeInfo>()
         stack.addLast(root)
         var visited = 0
         while (stack.isNotEmpty() && visited < 2200) {
             val n = stack.removeLast()
             visited++
-            val id = n.viewIdResourceName
-            if (LikeViewIdRules.isBlacklistedResourceId(id) &&
-                LikeViewIdRules.resourceIdTail(id).contains("vpager")
-            ) {
+            val tail = LikeViewIdRules.resourceIdTail(n.viewIdResourceName)
+            if (tail.contains("vpager")) {
                 val r = Rect()
                 n.getBoundsInScreen(r)
-                if (r.width() * r.height() >= thresh) return true
-            }
-            val simple = n.className?.toString()?.substringAfterLast('.') ?: ""
-            if (simple.equals("ViewPager", ignoreCase = true) ||
-                simple.equals("ViewPager2", ignoreCase = true)
-            ) {
-                val r = Rect()
-                n.getBoundsInScreen(r)
-                if (r.width() * r.height() >= thresh) return true
+                if (r.width() * r.height() >= minArea) return true
             }
             for (i in 0 until n.childCount) {
                 n.getChild(i)?.let { stack.addLast(it) }
             }
         }
         return false
+    }
+
+    /** Nhiều placeholder "Nhập bình luận" inline → đang ở feed, không phải viewer ảnh. */
+    private fun hasInlineFeedCommentComposerVisible(root: AccessibilityNodeInfo): Boolean {
+        if (hasViewId(root, "cmtinput_text")) return false
+        var count = 0
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 1200 && count < 2) {
+            val n = stack.removeLast()
+            visited++
+            val fields = listOf(
+                n.text?.toString(),
+                n.contentDescription?.toString(),
+                n.hintText?.toString()
+            )
+            for (raw in fields) {
+                val low = raw?.trim()?.lowercase().orEmpty()
+                if (low == "nhập bình luận" || low.startsWith("nhập bình luận") ||
+                    low == "viết bình luận" || low.startsWith("viết bình luận")
+                ) {
+                    count++
+                    break
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return count >= 2
     }
 
     /** Text placeholder ô bình luận / IME — không phải nội dung bài; dùng làm snippet sẽ gây postKey trùng. */
@@ -706,24 +760,33 @@ class NodeFinder @Inject constructor(
      * và heuristic [hasInlineCommentComposerNearLikeAnchor] dễ confirm sai ngữ cảnh.
      */
     fun isContactListScreen(root: AccessibilityNodeInfo): Boolean {
-        val hasContacts = screenContainsTextOrDesc(root, "Contacts", 2000) ||
-            screenContainsTextOrDesc(root, "Danh bạ", 2000)
-        val hasAll = screenContainsTextOrDesc(root, "All", 2000) ||
-            screenContainsTextOrDesc(root, "Tất cả", 2000)
-        return hasContacts && hasAll
+        if (isChatScreen(root) || isProfileScreen(root)) return false
+        val friendsTab = findByViewId(root, "tv_friends").any { node ->
+            val label = node.text?.toString().orEmpty()
+            (label.contains("Bạn bè", ignoreCase = true) || label.contains("Friends", ignoreCase = true)) &&
+                (node.isSelected || node.isChecked)
+        }
+        if (friendsTab) return true
+        val onDanhBa = findByViewId(root, "maintab_contact").isNotEmpty() ||
+            screenContainsTextOrDesc(root, "Danh bạ", 1200) ||
+            screenContainsTextOrDesc(root, "Contacts", 1200)
+        val hasFriendsSubTab = screenContainsTextOrDesc(root, "Bạn bè", 1200) ||
+            screenContainsTextOrDesc(root, "Friends", 1200)
+        return onDanhBa && hasFriendsSubTab && !hasViewId(root, "main_chat_view")
     }
 
     fun isChatScreen(root: AccessibilityNodeInfo): Boolean {
-        return screenContainsHintOrText(root, "Message", 2000) ||
-            screenContainsHintOrText(root, "Tin nhắn", 2000)
+        if (isProfileScreen(root)) return false
+        return hasViewId(root, "main_chat_view") &&
+            (hasViewId(root, "chatinput_text") || hasViewId(root, "chat_drawer_layout"))
     }
 
     fun isProfileScreen(root: AccessibilityNodeInfo): Boolean {
-        val hasPhotos = screenContainsTextOrDesc(root, "Photos", 2000) ||
-            screenContainsTextOrDesc(root, "Ảnh", 2000)
-        val hasVideos = screenContainsTextOrDesc(root, "Videos", 2000) ||
-            screenContainsTextOrDesc(root, "Video", 2000)
-        return hasPhotos && hasVideos
+        if (isChatScreen(root)) return false
+        return hasViewId(root, "rl_profile_bio_container") ||
+            hasViewId(root, "profile_avatar") ||
+            hasViewId(root, "profile_bottom_functions_layout") ||
+            (hasViewId(root, "feedItemFooterBarModule") && hasViewId(root, "layoutSendMessage"))
     }
 
     fun findNodeWithTextOrDesc(
@@ -760,11 +823,24 @@ class NodeFinder @Inject constructor(
         return null
     }
 
-    /** Stub — tinh chỉnh sau khi có dump contacts. */
+    /** Hàng danh bạ / bạn bè — ưu tiên con RecyclerView, lọc preview hội thoại. */
     fun findContactListItems(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+        val rootRect = Rect().also { root.getBoundsInScreen(it) }
+        val tabBottom = findByViewId(root, "layoutTab").firstOrNull()?.let { tab ->
+            Rect().also { tab.getBoundsInScreen(it) }.bottom
+        } ?: (rootRect.top + rootRect.height() / 7)
+        val navTop = rootRect.top + (rootRect.height() * 0.86f).toInt()
+
+        val fromRecycler = mutableListOf<AccessibilityNodeInfo>()
+        collectRecyclerRowItems(root, tabBottom, navTop, fromRecycler)
+        if (fromRecycler.isNotEmpty()) {
+            return fromRecycler.distinctBy { contactRowKey(it) }
+        }
+
         val skipPhrases = listOf(
             "friend request", "lời mời kết bạn",
-            "birthday", "sinh nhật", "contacts", "danh bạ", "tất cả", "all"
+            "birthday", "sinh nhật", "contacts", "danh bạ", "tất cả", "all",
+            "bạn bè", "friends", "nhóm", "groups", "oa", "tìm kiếm", "search"
         )
         val out = mutableListOf<AccessibilityNodeInfo>()
         val stack = ArrayDeque<AccessibilityNodeInfo>()
@@ -773,57 +849,63 @@ class NodeFinder @Inject constructor(
         while (stack.isNotEmpty() && visited < 2500 && out.size < 80) {
             val n = stack.removeLast()
             visited++
-            if (n.isClickable && n.hasValidScreenBounds()) {
-                val label = collectNodeLabel(n)
-                val low = label.lowercase()
-                if (label.length in 2..48 &&
-                    skipPhrases.none { low.contains(it) } &&
-                    !low.all { it.isDigit() }
-                ) {
-                    out.add(n)
-                }
+            if (isContactRowCandidate(n, tabBottom, navTop, skipPhrases)) {
+                out.add(n)
             }
             for (i in 0 until n.childCount) {
                 n.getChild(i)?.let { stack.addLast(it) }
             }
         }
-        return out.distinctBy { collectNodeLabel(it) }
+        return out
+            .distinctBy { contactRowKey(it) }
+            .sortedBy { Rect().also { r -> it.getBoundsInScreen(r) }.top }
     }
 
-    /** Stub — tinh chỉnh sau dump chat/profile. */
+    /** Chat → profile: tap action bar giữa (actionbar_txtTitle / zds_action_bar). */
     fun findProfileEntryNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        val rootRect = Rect()
-        root.getBoundsInScreen(rootRect)
-        val h = rootRect.height().takeIf { it > 0 } ?: return null
-        val top = (h * 0.25f).toInt()
-        val bottom = (h * 0.75f).toInt()
-        var best: AccessibilityNodeInfo? = null
-        var bestArea = Int.MAX_VALUE
-        val stack = ArrayDeque<AccessibilityNodeInfo>()
-        stack.addLast(root)
-        var visited = 0
-        while (stack.isNotEmpty() && visited < 2000) {
-            val n = stack.removeLast()
-            visited++
-            if (n.isClickable && n.hasValidScreenBounds()) {
-                val r = Rect()
-                n.getBoundsInScreen(r)
-                if (r.centerY() in top..bottom && hasAvatarHint(n)) {
-                    val area = r.width() * r.height()
-                    if (area in 8_000..(rootRect.width() * h / 2) && area < bestArea) {
-                        bestArea = area
-                        best = n
-                    }
-                }
+        findByViewId(root, "zds_action_bar").firstOrNull { it.isClickable }?.let { return it }
+        findByViewId(root, "actionbar_middle_container").firstOrNull()?.let { middle ->
+            var p: AccessibilityNodeInfo? = middle
+            repeat(6) {
+                if (p == null) return@repeat
+                if (p.isClickable && p.hasValidScreenBounds()) return p
+                p = p.parent
             }
-            for (i in 0 until n.childCount) {
-                n.getChild(i)?.let { stack.addLast(it) }
-            }
+            return middle
         }
-        return best
+        findByViewId(root, "actionbar_txtTitle").firstOrNull()?.let { title ->
+            return findClickableAncestor(title) ?: title
+        }
+        return null
+    }
+
+    /** Like trên timeline profile — quét trong feedItemFooterBarModule trước. */
+    fun findProfileLikeButtons(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+        for (footer in findByViewId(root, "feedItemFooterBarModule")) {
+            val inFooter = findLikeButtons(footer)
+            if (inFooter.isNotEmpty()) return inFooter
+        }
+        return findLikeButtons(root)
     }
 
     fun findCommentButton(likeNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var footer: AccessibilityNodeInfo? = null
+        var walk: AccessibilityNodeInfo? = likeNode
+        var steps = 0
+        while (walk != null && steps < 10) {
+            val id = walk.viewIdResourceName.orEmpty()
+            if (id.contains("feedItemFooterBarModule")) {
+                footer = walk
+                break
+            }
+            walk = walk.parent
+            steps++
+        }
+        footer?.let { bar ->
+            findClickableWithPhrase(bar, "bình luận")?.let { return it }
+            findClickableWithPhrase(bar, "comment")?.let { return it }
+        }
+
         val likeRect = Rect().also { likeNode.getBoundsInScreen(it) }
         val parent = likeNode.parent ?: return null
         for (i in 0 until parent.childCount) {
@@ -841,10 +923,128 @@ class NodeFinder @Inject constructor(
         return null
     }
 
+    fun findCommentInput(root: AccessibilityNodeInfo): AccessibilityNodeInfo? =
+        findByViewId(root, "cmtinput_text").firstOrNull()
+            ?: findNodeWithHint(root, "Nhập bình luận", 2000)
+            ?: findNodeWithHint(root, "Write a comment", 2000)
+
+    fun findCommentSendButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? =
+        findByViewId(root, "cmtinput_send").firstOrNull { it.isClickable }
+            ?: findByViewId(root, "cmtinput_send").firstOrNull()
+
     fun getRandomComment(): String {
         val list = settingsManager.getVisitCommentList()
         if (list.isEmpty()) return ""
         return list.random()
+    }
+
+    fun findByViewId(root: AccessibilityNodeInfo, idSuffix: String): List<AccessibilityNodeInfo> {
+        val fullId = if (idSuffix.contains(":id/")) idSuffix else "com.zing.zalo:id/$idSuffix"
+        return root.findAccessibilityNodeInfosByViewId(fullId) ?: emptyList()
+    }
+
+    fun hasViewId(root: AccessibilityNodeInfo, idSuffix: String): Boolean =
+        findByViewId(root, idSuffix).isNotEmpty()
+
+    private fun collectRecyclerRowItems(
+        root: AccessibilityNodeInfo,
+        tabBottom: Int,
+        navTop: Int,
+        out: MutableList<AccessibilityNodeInfo>
+    ) {
+        val skipPhrases = listOf(
+            "friend request", "lời mời kết bạn",
+            "birthday", "sinh nhật", "contacts", "danh bạ", "tất cả", "all",
+            "bạn bè", "friends", "nhóm", "groups", "oa", "tìm kiếm", "search"
+        )
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 2200 && out.size < 80) {
+            val n = stack.removeLast()
+            visited++
+            val cls = n.className?.toString().orEmpty()
+            if (cls.contains("RecyclerView", ignoreCase = true)) {
+                for (i in 0 until n.childCount) {
+                    val child = n.getChild(i) ?: continue
+                    if (isContactRowCandidate(child, tabBottom, navTop, skipPhrases)) {
+                        out.add(child)
+                    }
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+    }
+
+    private fun isContactRowCandidate(
+        n: AccessibilityNodeInfo,
+        tabBottom: Int,
+        navTop: Int,
+        skipPhrases: List<String>
+    ): Boolean {
+        if (!n.isClickable || !n.hasValidScreenBounds()) return false
+        val r = Rect().also { n.getBoundsInScreen(it) }
+        if (r.height() !in 100..320 || r.width() < 200) return false
+        if (r.centerY() < tabBottom || r.centerY() > navTop) return false
+        val label = collectNodeLabel(n)
+        if (label.length !in 2..120) return false
+        val low = label.lowercase()
+        if (skipPhrases.any { low.contains(it) }) return false
+        if (low.all { it.isDigit() }) return false
+        if (looksLikeConversationPreview(label)) return false
+        return true
+    }
+
+    private fun contactRowKey(n: AccessibilityNodeInfo): String {
+        val r = Rect().also { n.getBoundsInScreen(it) }
+        val name = collectNodeLabel(n).lineSequence().firstOrNull().orEmpty().trim()
+        return "${r.top}_${r.left}_$name"
+    }
+
+    private fun looksLikeConversationPreview(label: String): Boolean {
+        val low = label.lowercase()
+        if (low.contains("bạn:")) return true
+        if (low.contains("[file]") || low.contains("[ảnh]") || low.contains("[photo]")) return true
+        if (Regex("""\d+\s*(phút|giây|giờ|min|mins|hour|hours)\b""").containsMatchIn(low)) return true
+        if (low.contains("hôm qua") || low.contains("yesterday")) return true
+        return false
+    }
+
+    private fun findClickableAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var p: AccessibilityNodeInfo? = node.parent
+        repeat(6) {
+            if (p == null) return null
+            if (p.isClickable && p.hasValidScreenBounds()) return p
+            p = p.parent
+        }
+        return null
+    }
+
+    private fun findClickableWithPhrase(root: AccessibilityNodeInfo, phrase: String): AccessibilityNodeInfo? {
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 120) {
+            val n = stack.removeLast()
+            visited++
+            val fields = listOf(
+                n.text?.toString(),
+                n.contentDescription?.toString()
+            )
+            for (raw in fields) {
+                val t = raw?.trim().orEmpty()
+                if (t.isNotEmpty() && t.contains(phrase, ignoreCase = true)) {
+                    if (n.isClickable) return n
+                    findClickableAncestor(n)?.let { return it }
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return null
     }
 
     private fun collectNodeLabel(n: AccessibilityNodeInfo): String {
@@ -875,6 +1075,15 @@ class NodeFinder @Inject constructor(
 
     fun isFullScreenCommentScreen(root: AccessibilityNodeInfo?): Boolean {
         if (root == null) return false
+
+        val titleBar = findByViewId(root, "action_bar_title").any {
+            it.text?.toString()?.trim().equals("Bình luận", ignoreCase = true)
+        }
+        val hasDedicatedInput = hasViewId(root, "cmtinput_text")
+        if (titleBar && hasDedicatedInput) return true
+
+        if (isLikelyTimelineFeedScreen(root)) return false
+
         val rootRect = Rect()
         root.getBoundsInScreen(rootRect)
         val screenH = rootRect.height().takeIf { it > 0 } ?: 1920
@@ -882,7 +1091,6 @@ class NodeFinder @Inject constructor(
 
         var hasHeader = false
         var hasEmptyHint = false
-        var hasInput = false
 
         val stack = ArrayDeque<AccessibilityNodeInfo>()
         stack.addLast(root)
@@ -893,7 +1101,6 @@ class NodeFinder @Inject constructor(
             visited++
             val text = n.text?.toString()?.trim().orEmpty()
             val desc = n.contentDescription?.toString()?.trim().orEmpty()
-            val hint = n.hintText?.toString()?.trim().orEmpty()
 
             if (!hasHeader && text.equals("Bình luận", ignoreCase = true)) {
                 val r = Rect()
@@ -914,21 +1121,8 @@ class NodeFinder @Inject constructor(
                 }
             }
 
-            if (!hasInput) {
-                for (s in arrayOf(text, desc, hint)) {
-                    val low = s.lowercase()
-                    if (low == "nhập bình luận" ||
-                        low.startsWith("nhập bình luận") ||
-                        low == "viết bình luận" ||
-                        low.startsWith("viết bình luận")
-                    ) {
-                        hasInput = true
-                        break
-                    }
-                }
-            }
-
-            if (hasHeader && (hasInput || hasEmptyHint)) return true
+            if (hasHeader && hasDedicatedInput) return true
+            if (hasHeader && hasEmptyHint) return true
 
             for (i in 0 until n.childCount) {
                 n.getChild(i)?.let { stack.addLast(it) }

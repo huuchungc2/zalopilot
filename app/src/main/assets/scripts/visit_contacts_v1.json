@@ -1,7 +1,7 @@
 {
   "id": "visit_contacts_v1",
-  "version": 1,
-  "desc": "Visit danh bạ — placeholder (tinh chỉnh sau dump UI)",
+  "version": 2,
+  "desc": "Visit danh bạ — IDs từ dump (tv_friends, chatinput, profile footer, cmtinput)",
   "steps": [
     { "id": "s1", "action": "ensureScreen", "screen": "contacts", "timeoutMs": 4000 },
     { "id": "s2", "action": "findContactItems" },

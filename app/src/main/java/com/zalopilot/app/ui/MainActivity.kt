@@ -103,6 +103,7 @@ class MainActivity : ComponentActivity() {
             verticalArrangement = Arrangement.Center
         ) {
             Text("ZaloPilot", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = zaloBlue)
+            Text(AppVersion.fullLabel(), fontSize = 12.sp, color = Color.Gray)
             Text("Thiết lập lần đầu", fontSize = 14.sp, color = Color.Gray)
             Spacer(Modifier.height(32.dp))
 
@@ -315,6 +316,12 @@ class MainActivity : ComponentActivity() {
                             Column(Modifier.weight(1f)) {
                                 Text("ZaloPilot", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
                                 Text("Auto Like Zalo", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
+                                Text(
+                                    AppVersion.fullLabel(),
+                                    color = Color.White.copy(alpha = 0.65f),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
                             }
                             Surface(shape = RoundedCornerShape(99.dp), color = if (isRunning) Color(0xFF27AE60) else Color.White.copy(alpha = 0.2f)) {
                                 Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -506,6 +513,11 @@ class MainActivity : ComponentActivity() {
                     Column {
                         Text("Cài đặt", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
                         Text("Tùy chỉnh tốc độ like", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
+                        Text(
+                            AppVersion.fullLabel(),
+                            color = Color.White.copy(alpha = 0.65f),
+                            fontSize = 11.sp
+                        )
                     }
                 }
             }
@@ -801,6 +813,15 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+            }
+            item {
+                Text(
+                    "Phiên bản ${AppVersion.fullLabel()}",
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                    fontSize = 12.sp,
+                    color = Color.Gray
+                )
             }
             item {
                 Button(onClick = {

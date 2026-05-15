@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
 import com.zalopilot.app.accessibility.engine.ZPScriptMeta
 import com.zalopilot.app.accessibility.engine.ZPScriptStore
+import com.zalopilot.app.util.AppVersion
 import kotlinx.coroutines.launch
 
 @Composable
@@ -87,6 +88,11 @@ fun ScriptScreen(
                     "Tải JSON từ server — chỉnh flow không cần build APK",
                     color = Color.White.copy(alpha = 0.85f),
                     fontSize = 13.sp
+                )
+                Text(
+                    AppVersion.fullLabel(),
+                    color = Color.White.copy(alpha = 0.65f),
+                    fontSize = 11.sp
                 )
             }
         }

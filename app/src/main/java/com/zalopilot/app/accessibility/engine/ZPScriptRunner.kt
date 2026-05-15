@@ -142,7 +142,11 @@ class ZPScriptRunner @Inject constructor(
             "findlikebutton" -> {
                 val root = engine.acquireRoot() ?: return false
                 try {
-                    val btn = nodeFinder.findLikeButtons(root).firstOrNull() ?: return false
+                    val btn = if (engine.detectScreen(root, "profile")) {
+                        nodeFinder.findProfileLikeButtons(root).firstOrNull()
+                    } else {
+                        nodeFinder.findLikeButtons(root).firstOrNull()
+                    } ?: return false
                     engine.lastLikeNode = btn
                     true
                 } finally {

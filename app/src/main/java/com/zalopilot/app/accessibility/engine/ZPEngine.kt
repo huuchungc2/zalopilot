@@ -105,6 +105,7 @@ class ZPEngine(
     }
 
     suspend fun tapSend(root: AccessibilityNodeInfo): Boolean {
+        nodeFinder.findCommentSendButton(root)?.let { if (tap(it)) return true }
         findText(root, "Gửi")?.let { if (tap(it)) return true }
         findText(root, "Send")?.let { if (tap(it)) return true }
         val dm = service.resources.displayMetrics
@@ -192,9 +193,7 @@ class ZPEngine(
     suspend fun inputRandomComment(root: AccessibilityNodeInfo): Boolean {
         val text = nodeFinder.getRandomComment()
         if (text.isBlank()) return false
-        val input = findHint(root, "Nhập bình luận")
-            ?: findHint(root, "Write a comment")
-            ?: return false
+        val input = nodeFinder.findCommentInput(root) ?: return false
         return inputText(input, text)
     }
 
