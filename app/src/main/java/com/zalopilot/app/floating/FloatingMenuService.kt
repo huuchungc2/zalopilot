@@ -26,6 +26,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
+import com.zalopilot.app.util.AccessibilityHelper
 import com.zalopilot.app.util.AppVersion
 import com.zalopilot.app.util.LikeMode
 import com.zalopilot.app.util.LikeProgressManager
@@ -267,19 +268,12 @@ class FloatingMenuService : Service() {
 
             if (botRunning) {
                 addView(menuItem("■  Dừng", "#E24B4A") {
-                    ZaloPilotAccessibilityService.instance?.stopAutoLike()
+                    AccessibilityHelper.requestStopAutoLike()
                     closeMenu()
                 })
             } else {
                 addView(menuItem("▶  Bắt đầu like", "#27AE60") {
-                    val svc = ZaloPilotAccessibilityService.instance
-                    if (svc == null) {
-                        Toast.makeText(this@FloatingMenuService, "⚠️ Chưa bật Accessibility cho ZaloPilot", Toast.LENGTH_LONG).show()
-                        logger.log(LogTag.STATE, "floating menu", "NO_ACCESSIBILITY_SERVICE")
-                        closeMenu()
-                        return@menuItem
-                    }
-                    svc.startAutoLike()
+                    AccessibilityHelper.requestStartAutoLike(this@FloatingMenuService)
                     closeMenu()
                 })
             }

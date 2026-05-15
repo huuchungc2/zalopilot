@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- fix(visit/script): **crash Visit danh bạ** — script giữ `AccessibilityNodeInfo` sau `root.recycle()` → tap/verify đọc node chết → 「ZaloPilot tiếp tục dừng」→ Android tắt Trợ năng. Sửa: `ScriptTapTarget` (lưu `Rect` + viewId), `ZPEngine`/`ZPScriptRunner` không cache node; `findCommentButton` resolve like mới từ root; `visit_contacts_v1.json` v3 — `tapContactAt` tap **hàng đầu** trên màn (không dùng `$visitIndex` làm index list); cuộn danh bạ khi list rỗng / tap fail; `try/catch` quanh job Visit.
+- fix(ui/accessibility): **mất Trợ năng sau crash** — `PermissionGate` kiểm tra lại mỗi `ON_RESUME` (không chỉ lần cài đầu); mất Trợ năng/overlay → quay `SetupWizard` bước tương ứng + toast giải thích; Setup bước 1 dùng `AccessibilityHelper.openAccessibilitySettings` (Android 13+ mở thẳng trang ZaloPilot); nút **Thông tin ứng dụng** (cài đặt hạn chế Samsung); thẻ cam Trang chủ **Mở cài đặt Trợ năng**; `AccessibilityHelper` + broadcast `ACTION_START_AUTO_LIKE` khi `instance == null` nhưng Trợ năng vẫn bật.
+- feat(settings): chọn **Feed / Visit** radio → `setLikeMode()` lưu ngay (không cần Lưu mới đổi mode).
 - feat(ui/home): Trang chủ thêm **nút lớn BẮT ĐẦU / DỪNG** ngay header — không phải mò sang nút nổi mới start/stop được. Trạng thái sync realtime qua broadcast `STATUS_UPDATE`. Nếu chưa bật Accessibility → toast cảnh báo + auto mở Cài đặt Trợ năng. "Mở Zalo" + "Bật nút nổi" chuyển xuống dưới làm utility nhỏ hơn.
 - feat(diagnostic): status overlay giờ **show rõ method đang dùng** — trả lời câu hỏi "đang touch hay đang scroll API?":
   - Cuộn: `👆 Vuốt tay (touch) — profile=NORMAL` hoặc `🌀 Cuộn API (SCROLL_FORWARD)`; nếu fallback: `🌀 Vuốt fail → fallback API SCROLL_FORWARD` / `👆 API fail → fallback vuốt tay (touch)`.

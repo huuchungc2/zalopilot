@@ -193,7 +193,7 @@ enum class ScrollDirection { UP, DOWN }
   "steps": [
     { "id": "s1", "action": "ensureScreen", "screen": "contacts" },
     { "id": "s2", "action": "findContactItems" },
-    { "id": "s3", "action": "tapContactAt", "indexVar": "$visitIndex" },
+    { "id": "s3", "action": "tapContactAt" },
     { "id": "s4", "action": "ensureScreen", "screen": "chat", "timeoutMs": 3000 },
     { "id": "s5", "action": "tapProfileEntry" },
     { "id": "s6", "action": "ensureScreen", "screen": "profile", "timeoutMs": 3000 },
@@ -280,6 +280,8 @@ enum class ScrollDirection { UP, DOWN }
 **File mới:** `assets/scripts/visit_contacts_v1.json`
 
 Script hoàn chỉnh cho Visit Mode theo cấu trúc TASK 7. Đây là script mặc định — khi có bug chỉ cần sửa file JSON này, không build lại APK.
+
+> **Trạng thái (2026-05):** `version: 3` — `tapContactAt` tap **hàng bạn đầu tiên** trên màn (không dùng `$visitIndex` làm index list). `$visitIndex` chỉ đếm profile đã visit (`incrementVar`/`saveVar`). Engine dùng `ScriptTapTarget` (Rect) — **không** cache `AccessibilityNodeInfo` sau recycle (tránh crash → Android tắt Trợ năng). Action `scrollContacts` khi list rỗng / tap fail.
 
 **Thêm vào `NodeFinder.kt` — các action node cần thiết cho script:**
 

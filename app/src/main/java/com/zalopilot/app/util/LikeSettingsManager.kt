@@ -112,6 +112,10 @@ class LikeSettingsManager @Inject constructor(
         save(load().copy(likeModeStr = newMode.name))
     }
 
+    fun setLikeMode(mode: LikeMode) {
+        save(load().copy(likeModeStr = mode.name))
+    }
+
     fun setAutoStart(value: Boolean) {
         save(load().copy(autoStart = value))
     }

@@ -577,6 +577,8 @@ class NodeFinder @Inject constructor(
      * chỉ tin text "Đã thích" rõ ràng, không dùng "Thích" làm bằng chứng chưa like.
      */
     fun isAlreadyLiked(node: AccessibilityNodeInfo): Boolean {
+        if (footerBarImpliesSelfLiked(node)) return true
+
         for (n in collectNearbyNodesForLikeState(node, cap = 140)) {
             if (LikeViewIdRules.shouldRejectNodeForLike(n)) continue
             val id = n.viewIdResourceName
@@ -629,7 +631,26 @@ class NodeFinder @Inject constructor(
         origRect: Rect,
         origId: String?
     ): AccessibilityNodeInfo? {
-        val tol = 48
+        for (tol in intArrayOf(48, 120, 200)) {
+            findLikeAreaNodeAtTolerance(root, origRect, origId, tol)?.let { return it }
+        }
+        return findNearestLikeAreaNode(root, origRect, maxDistancePx = 260)
+    }
+
+    /** Verify sau click khi bounds/id lệch nhẹ do animation feed. */
+    fun verifyLikedNearClickArea(root: AccessibilityNodeInfo, origRect: Rect, origId: String?): Boolean {
+        val anchor = findLikeAreaNodeAt(root, origRect, origId)
+            ?: findNearestLikeAreaNode(root, origRect, maxDistancePx = 320)
+        if (anchor != null && isAlreadyLiked(anchor)) return true
+        return isLikedStateInRectBand(root, origRect)
+    }
+
+    private fun findLikeAreaNodeAtTolerance(
+        root: AccessibilityNodeInfo,
+        origRect: Rect,
+        origId: String?,
+        tol: Int
+    ): AccessibilityNodeInfo? {
         fun match(n: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
             if (n == null) return null
             if (LikeViewIdRules.shouldRejectNodeForLike(n)) return null
@@ -638,7 +659,9 @@ class NodeFinder @Inject constructor(
             n.getBoundsInScreen(r)
             if (abs(r.centerX() - origRect.centerX()) <= tol &&
                 abs(r.centerY() - origRect.centerY()) <= tol
-            ) return n
+            ) {
+                return n
+            }
             return null
         }
 
@@ -681,6 +704,85 @@ class NodeFinder @Inject constructor(
             if (ok != null) return ok
         }
         return null
+    }
+
+    private fun findNearestLikeAreaNode(
+        root: AccessibilityNodeInfo,
+        origRect: Rect,
+        maxDistancePx: Int
+    ): AccessibilityNodeInfo? {
+        var best: AccessibilityNodeInfo? = null
+        var bestDist = Int.MAX_VALUE
+        val ox = origRect.centerX()
+        val oy = origRect.centerY()
+        for (raw in collectLikeHintsByTraversal(root, maxNodes = 2800)) {
+            val leaf = resolveLikeLeafNode(raw) ?: continue
+            if (LikeViewIdRules.shouldRejectNodeForLike(leaf)) continue
+            if (!leaf.hasValidScreenBounds()) continue
+            val r = Rect().also { leaf.getBoundsInScreen(it) }
+            val d = abs(r.centerX() - ox) + abs(r.centerY() - oy)
+            if (d <= maxDistancePx && d < bestDist) {
+                bestDist = d
+                best = leaf
+            }
+        }
+        return best
+    }
+
+    private fun footerBarImpliesSelfLiked(likeNode: AccessibilityNodeInfo): Boolean {
+        var p: AccessibilityNodeInfo? = likeNode
+        repeat(10) {
+            if (p == null) return false
+            val id = p.viewIdResourceName.orEmpty()
+            if (id.contains("feedItemFooterBarModule")) {
+                val t = p.text?.toString().orEmpty()
+                if (t.isBlank()) return false
+                for (line in t.lines()) {
+                    val s = line.trim()
+                    if (s.equals(ZaloIDStore.TEXT_LIKED, ignoreCase = true)) return true
+                    if (s.startsWith(ZaloIDStore.TEXT_LIKED, ignoreCase = true) &&
+                        s.length <= 24 &&
+                        !s.contains("bạn", ignoreCase = true)
+                    ) {
+                        return true
+                    }
+                }
+                return false
+            }
+            p = p.parent
+        }
+        return false
+    }
+
+    /** Quét vùng ngang quanh [origRect] (feed có thể dịch sau tap). */
+    private fun isLikedStateInRectBand(root: AccessibilityNodeInfo, origRect: Rect): Boolean {
+        val band = Rect(
+            (origRect.left - 80).coerceAtLeast(0),
+            (origRect.top - 100).coerceAtLeast(0),
+            origRect.right + 400,
+            origRect.bottom + 80
+        )
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 1600) {
+            val n = stack.removeLast()
+            visited++
+            if (n.hasValidScreenBounds()) {
+                val r = Rect().also { n.getBoundsInScreen(it) }
+                if (Rect.intersects(band, r)) {
+                    if (LikeViewIdRules.isWhitelistedLikeResourceId(n.viewIdResourceName) &&
+                        isAlreadyLiked(n)
+                    ) {
+                        return true
+                    }
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return false
     }
 
     /**
@@ -727,12 +829,7 @@ class NodeFinder @Inject constructor(
         // Tập trung logic phân biệt đã like ở isAlreadyLiked() — không duplicate ở đây.
         if (isAlreadyLiked(node)) return false
 
-        // Fallback an toàn: nếu bài đang hiện ô nhập bình luận gần cụm action, coi như "đã tương tác/khả năng đã like"
-        // → skip để tránh click nhầm/unlike khi Zalo không expose checked/selected/stateDescription.
-        if (hasInlineCommentComposerNearLikeAnchor(node)) {
-            logger.log(LogTag.STATE, boundsSummary(node), "SKIP_INLINE_COMMENT_COMPOSER_NEAR_LIKE")
-            return false
-        }
+        // Không skip vì "Nhập bình luận" gần like — mọi bài trên feed đều có ô comment inline.
 
         // Lọc thêm: node là nút "Bình luận", "Chia sẻ", "Nhập" — không phải nút Like
         fun ownTextIsAction(node: AccessibilityNodeInfo): Boolean {

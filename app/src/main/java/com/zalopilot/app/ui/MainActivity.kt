@@ -16,6 +16,9 @@ import java.io.File
 import java.util.Locale
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -43,6 +46,7 @@ import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
 import com.zalopilot.app.data.model.ZaloIDStore
 import com.zalopilot.app.accessibility.engine.ZPScriptStore
 import com.zalopilot.app.floating.FloatingMenuService
+import com.zalopilot.app.util.AccessibilityHelper
 import com.zalopilot.app.util.DebugHighlightPrefs
 import com.zalopilot.app.util.LikeMode
 import com.zalopilot.app.util.VisitActionMode
@@ -70,16 +74,48 @@ class MainActivity : ComponentActivity() {
         progressManager.resetDailyIfNeeded()
         setContent {
             MaterialTheme {
-                if (!isSetupComplete()) SetupWizard() else ZaloPilotApp()
+                PermissionGate()
             }
+        }
+    }
+
+    /** Sau crash Android hay tắt Trợ năng — mỗi lần mở app kiểm tra lại, không chỉ lần cài đầu. */
+    @Composable
+    private fun PermissionGate() {
+        var permTick by remember { mutableIntStateOf(0) }
+        val lifecycleOwner = LocalLifecycleOwner.current
+        DisposableEffect(lifecycleOwner) {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) {
+                    permTick++
+                    if (!AccessibilityHelper.isAccessibilityEnabled(this@MainActivity)) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Trợ năng ZaloPilot đã bị tắt (thường do app vừa crash). Bật lại ở màn hình bên dưới.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        }
+        val accOn = remember(permTick) { AccessibilityHelper.isAccessibilityEnabled(this@MainActivity) }
+        val overlayOn = remember(permTick) { Settings.canDrawOverlays(this@MainActivity) }
+        when {
+            !accOn || !overlayOn -> SetupWizard(initialStep = when {
+                !accOn -> 1
+                else -> 2
+            })
+            else -> ZaloPilotApp()
         }
     }
 
     // ─── Setup Wizard ────────────────────────────────────────────
 
     @Composable
-    fun SetupWizard() {
-        var step by remember { mutableIntStateOf(1) }
+    fun SetupWizard(initialStep: Int = 1) {
+        var step by remember { mutableIntStateOf(initialStep.coerceIn(1, 3)) }
         var tick by remember { mutableIntStateOf(0) }
 
         LaunchedEffect(Unit) {
@@ -122,10 +158,46 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.height(32.dp))
 
             when (step) {
-                1 -> StepCard("♿", "Bật Accessibility Service",
-                    "Cho phép ZaloPilot điều khiển Zalo.\n\nSamsung: Cài đặt → tìm kiếm 'Hỗ trợ tiếp cận' → Ứng dụng đã cài → ZaloPilot → BẬT\n\nHoặc bấm nút bên dưới:",
-                    "Mở Cài đặt Accessibility", acc) {
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                1 -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (!acc) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                "Nếu vừa thấy \"ZaloPilot tiếp tục dừng\" — Android tự TẮT Trợ năng. " +
+                                    "Màn \"Thông tin ứng dụng → Quyền\" KHÔNG phải chỗ bật Trợ năng.",
+                                modifier = Modifier.padding(14.dp),
+                                fontSize = 12.sp,
+                                color = Color(0xFFC62828),
+                                lineHeight = 18.sp
+                            )
+                        }
+                    }
+                    StepCard(
+                        "♿",
+                        "Bật Trợ năng (Accessibility)",
+                        "Samsung:\n" +
+                            "1. Cài đặt → tìm \"Hỗ trợ tiếp cận\"\n" +
+                            "2. Ứng dụng đã cài → ZaloPilot → BẬT\n\n" +
+                            "Nếu không bật được: Thông tin ứng dụng ZaloPilot → ⋮ → " +
+                            "\"Cho phép cài đặt hạn chế\" → quay lại bật Trợ năng.",
+                        "Mở cài đặt Trợ năng ZaloPilot",
+                        acc
+                    ) {
+                        AccessibilityHelper.openAccessibilitySettings(this@MainActivity)
+                    }
+                    if (!acc && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = { AccessibilityHelper.openAppDetailsSettings(this@MainActivity) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Thông tin ứng dụng (cài đặt hạn chế)", fontSize = 13.sp)
+                        }
+                    }
                 }
                 2 -> StepCard("🪟", "Hiển thị trên app khác",
                     "Để nút ZP nổi lên trên màn hình Zalo.\n\nBấm nút bên dưới → tìm ZaloPilot → bật lên:",
@@ -204,6 +276,8 @@ class MainActivity : ComponentActivity() {
             }
         }
         val floatingOverlayOn = remember(overlayTick) { FloatingMenuService.isOverlayRunning }
+        val accessibilityOn = remember(overlayTick) { AccessibilityHelper.isAccessibilityEnabled(this@MainActivity) }
+        val accessibilityConnected = remember(overlayTick) { ZaloPilotAccessibilityService.instance != null }
 
         DisposableEffect(Unit) {
             val receiver = object : BroadcastReceiver() {
@@ -266,7 +340,14 @@ class MainActivity : ComponentActivity() {
         }) { padding ->
             Box(Modifier.padding(padding)) {
                 when (selectedTab) {
-                    0 -> HomeScreen(isRunning, progress, settings, floatingOverlayOn)
+                    0 -> HomeScreen(
+                        isRunning,
+                        progress,
+                        settings,
+                        floatingOverlayOn,
+                        accessibilityOn,
+                        accessibilityConnected
+                    )
                     1 -> SettingsScreen(settings) { settings = it; settingsManager.save(it) }
                     2 -> LogScreen(
                         logsSlim = logsSlim,
@@ -305,10 +386,56 @@ class MainActivity : ComponentActivity() {
         isRunning: Boolean,
         progress: LikeProgress,
         settings: LikeSettings,
-        floatingOverlayOn: Boolean
+        floatingOverlayOn: Boolean,
+        accessibilityOn: Boolean,
+        accessibilityConnected: Boolean
     ) {
         LazyColumn(modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)),
             contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (!accessibilityOn || !accessibilityConnected) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text(
+                                if (!accessibilityOn) "⚠️ Chưa bật Trợ năng ZaloPilot"
+                                else "⚠️ Trợ năng đã bật nhưng chưa kết nối",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.W600,
+                                color = Color(0xFFE65100)
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                if (!accessibilityOn) {
+                                    "Bot không chạy được. Bấm nút bên dưới — app mở đúng màn cài đặt → bật ZaloPilot."
+                                } else {
+                                    "Mở Zalo (Nhật ký hoặc Danh bạ) vài giây, quay lại app. Hoặc tắt/bật lại ZaloPilot trong Trợ năng."
+                                },
+                                fontSize = 12.sp,
+                                color = Color(0xFF5D4037),
+                                lineHeight = 18.sp
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Button(
+                                onClick = { AccessibilityHelper.openAccessibilitySettings(this@MainActivity) },
+                                modifier = Modifier.fillMaxWidth().height(46.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100)),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text(
+                                    if (!accessibilityOn) "♿  Mở cài đặt Trợ năng (ZaloPilot)"
+                                    else "♿  Mở lại cài đặt Trợ năng",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.W600
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             item {
                 Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(zaloBlue).padding(20.dp)) {
                     Column {
@@ -334,18 +461,10 @@ class MainActivity : ComponentActivity() {
                         // Nút chính: BẮT ĐẦU / DỪNG — to, dễ thấy, ngay trang chủ.
                         Button(
                             onClick = {
-                                val svc = ZaloPilotAccessibilityService.instance
-                                if (svc == null) {
-                                    Toast.makeText(this@MainActivity,
-                                        "⚠️ Chưa bật Accessibility cho ZaloPilot — vào Cài đặt > Trợ năng",
-                                        Toast.LENGTH_LONG).show()
-                                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                                    return@Button
-                                }
                                 if (isRunning) {
-                                    svc.stopAutoLike()
+                                    AccessibilityHelper.requestStopAutoLike()
                                 } else {
-                                    svc.startAutoLike()
+                                    AccessibilityHelper.requestStartAutoLike(this@MainActivity)
                                 }
                             },
                             modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -682,7 +801,10 @@ class MainActivity : ComponentActivity() {
                             ) {
                                 RadioButton(
                                     selected = likeMode == mode,
-                                    onClick = { likeMode = mode },
+                                    onClick = {
+                                        likeMode = mode
+                                        settingsManager.setLikeMode(mode)
+                                    },
                                     colors = RadioButtonDefaults.colors(selectedColor = zaloBlue)
                                 )
                                 Text(label, fontSize = 13.sp)
@@ -1381,7 +1503,7 @@ class MainActivity : ComponentActivity() {
     private fun dumpZaloUI() {
         val svc = ZaloPilotAccessibilityService.instance
         if (svc == null) {
-            Toast.makeText(this, "⚠️ Accessibility chưa bật", Toast.LENGTH_SHORT).show()
+            AccessibilityHelper.openAccessibilitySettings(this)
             return
         }
         val root = svc.rootInActiveWindow

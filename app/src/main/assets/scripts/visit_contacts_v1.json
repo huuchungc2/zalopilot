@@ -1,11 +1,11 @@
 {
   "id": "visit_contacts_v1",
-  "version": 2,
+  "version": 3,
   "desc": "Visit danh bạ — IDs từ dump (tv_friends, chatinput, profile footer, cmtinput)",
   "steps": [
     { "id": "s1", "action": "ensureScreen", "screen": "contacts", "timeoutMs": 4000 },
     { "id": "s2", "action": "findContactItems" },
-    { "id": "s3", "action": "tapContactAt", "indexVar": "$visitIndex" },
+    { "id": "s3", "action": "tapContactAt" },
     { "id": "s4", "action": "ensureScreen", "screen": "chat", "timeoutMs": 3000 },
     { "id": "s5", "action": "tapProfileEntry" },
     { "id": "s6", "action": "ensureScreen", "screen": "profile", "timeoutMs": 3000 },

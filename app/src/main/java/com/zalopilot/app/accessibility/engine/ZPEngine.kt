@@ -20,15 +20,20 @@ class ZPEngine(
     private val progressManager: LikeProgressManager,
     private val logger: Logger
 ) {
-    var lastContactItems: List<AccessibilityNodeInfo> = emptyList()
-    var lastLikeNode: AccessibilityNodeInfo? = null
-    var lastTapTarget: AccessibilityNodeInfo? = null
+    var lastContactTargets: List<ScriptTapTarget> = emptyList()
+    var lastLikeTarget: ScriptTapTarget? = null
+    var lastTapTarget: ScriptTapTarget? = null
 
     suspend fun acquireRoot(retries: Int = 5): AccessibilityNodeInfo? =
         service.scriptAcquireRoot(retries)
 
-    suspend fun tap(node: AccessibilityNodeInfo): Boolean =
-        service.scriptTapNode(node)
+    suspend fun tap(target: ScriptTapTarget): Boolean =
+        service.scriptTapCenter(target.bounds)
+
+    suspend fun tap(node: AccessibilityNodeInfo): Boolean {
+        val target = ScriptTapTarget.fromNode(node) ?: return false
+        return tap(target)
+    }
 
     suspend fun tapCenter(rect: Rect): Boolean =
         service.scriptTapCenter(rect)
@@ -99,9 +104,20 @@ class ZPEngine(
         return node.performAction(action)
     }
 
-    suspend fun tapNodeAt(nodes: List<AccessibilityNodeInfo>, index: Int): Boolean {
-        if (index !in nodes.indices) return false
-        return tap(nodes[index])
+    suspend fun tapNodeAt(targets: List<ScriptTapTarget>, index: Int): Boolean {
+        if (index !in targets.indices) return false
+        return tap(targets[index])
+    }
+
+    suspend fun scrollContacts(): Boolean {
+        val h = service.resources.displayMetrics.heightPixels
+        return service.scriptSwipeUp(h)
+    }
+
+    fun clearTapCache() {
+        lastContactTargets = emptyList()
+        lastLikeTarget = null
+        lastTapTarget = null
     }
 
     suspend fun tapSend(root: AccessibilityNodeInfo): Boolean {
@@ -165,22 +181,21 @@ class ZPEngine(
 
     suspend fun findAndTapLike(root: AccessibilityNodeInfo): Boolean {
         val buttons = nodeFinder.findLikeButtons(root)
-        val target = buttons.firstOrNull() ?: return false
-        lastLikeNode = target
+        val target = buttons.firstOrNull()?.let { ScriptTapTarget.fromNode(it) } ?: return false
+        lastLikeTarget = target
         if (!tap(target)) return false
         delay(1200)
         return verifyLiked(root)
     }
 
-    suspend fun verifyLiked(root: AccessibilityNodeInfo): Boolean {
-        val like = lastLikeNode ?: return false
-        val rect = Rect().also { like.getBoundsInScreen(it) }
-        val id = like.viewIdResourceName
+    suspend fun verifyLiked(@Suppress("UNUSED_PARAMETER") root: AccessibilityNodeInfo): Boolean {
+        val target = lastLikeTarget ?: return false
+        val rect = Rect(target.bounds)
+        val id = target.viewId
         suspend fun check(): Boolean {
             val fresh = acquireRoot() ?: return false
             return try {
-                val resolved = nodeFinder.findLikeAreaNodeAt(fresh, rect, id)
-                resolved != null && nodeFinder.isAlreadyLiked(resolved)
+                nodeFinder.verifyLikedNearClickArea(fresh, rect, id)
             } finally {
                 runCatching { fresh.recycle() }
             }

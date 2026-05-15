@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
 import com.zalopilot.app.accessibility.engine.ZPScriptMeta
 import com.zalopilot.app.accessibility.engine.ZPScriptStore
+import com.zalopilot.app.util.AccessibilityHelper
 import com.zalopilot.app.util.AppVersion
 import kotlinx.coroutines.launch
 
@@ -214,24 +215,22 @@ fun ScriptScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = {
-                                ZaloPilotAccessibilityService.instance?.startAutoLike()
-                                    ?: Toast.makeText(
-                                        context,
-                                        "⚠️ Bật Accessibility trước",
-                                        Toast.LENGTH_LONG
-                                    ).show()
+                                AccessibilityHelper.requestStartAutoLike(context)
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF27AE60))
                         ) { Text("▶ Chạy") }
                         Button(
                             onClick = {
-                                ZaloPilotAccessibilityService.instance?.startVisitScriptTestRound()
-                                    ?: Toast.makeText(
+                                if (ZaloPilotAccessibilityService.instance != null) {
+                                    ZaloPilotAccessibilityService.instance?.startVisitScriptTestRound()
+                                } else if (AccessibilityHelper.requestStartAutoLike(context)) {
+                                    Toast.makeText(
                                         context,
-                                        "⚠️ Bật Accessibility trước",
+                                        "Chờ kết nối Trợ năng — dùng 🧪 1 vòng sau khi thấy toast ZaloPilot đã kết nối",
                                         Toast.LENGTH_LONG
                                     ).show()
+                                }
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = zaloBlue)

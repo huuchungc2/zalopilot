@@ -26,6 +26,9 @@
 - [x] App icon
 - [x] Counter **Đã duyệt** (like + skip/lỗi) + hiển thị Trang chủ/menu nổi
 - [x] Tab **Nhật ký** — danh sách log cuộn/chạm được (weight + LazyColumn fillMaxSize)
+- [x] Visit Mode — engine JSON (`ZPScriptRunner`, `ZPEngine`, `visit_contacts_v1.json`) + UI Cài đặt Feed/Visit
+- [x] Fix crash Visit — `ScriptTapTarget`, không giữ node sau recycle; tap contact hàng đầu + scroll fallback
+- [x] Trợ năng sau crash — `PermissionGate` + `AccessibilityHelper` + hướng dẫn Samsung (App info ≠ Trợ năng)
 
 ---
 
@@ -83,13 +86,12 @@
 
 ## 🟢 GIAI ĐOẠN 2 — Visit Mode
 
-- [ ] Implement Visit Mode:
-  - [ ] Vào tab Danh bạ
-  - [ ] Đi vào từng trang cá nhân theo visitIndex
-  - [ ] Like bài mới nhất
-  - [ ] Lưu visitIndex sau mỗi người
-  - [ ] Hôm sau tiếp tục từ chỗ dừng
-- [ ] UI toggle Feed/Visit trong Settings
+- [x] Engine + script bundled `visit_contacts_v1` (contacts → chat → profile → like → back)
+- [x] UI toggle Feed/Visit + VISIT sliders; `setLikeMode` lưu ngay khi đổi radio
+- [x] Fix crash Visit (recycle node) + cuộn danh bạ khi list rỗng
+- [ ] Test ổn định Visit trên máy thật (Samsung) — không crash, không mất Trợ năng
+- [ ] Visit: cuộn danh bạ có chủ đích sau mỗi profile (hiện chủ yếu tap hàng đầu + scroll khi fail)
+- [ ] `$visitIndex` = số profile đã xử lý (prefs), không phải index RecyclerView — cần verify flow 2700+ bạn
 
 ---
 

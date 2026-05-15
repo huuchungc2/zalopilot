@@ -117,24 +117,19 @@ class ZPScriptRunner @Inject constructor(
     ): Boolean {
         return when (step.action.lowercase()) {
             "ensurescreen" -> runEnsureScreen(engine, step)
-            "findcontactitems" -> {
-                val root = engine.acquireRoot() ?: return false
-                try {
-                    engine.lastContactItems = nodeFinder.findContactListItems(root)
-                    engine.lastContactItems.isNotEmpty()
-                } finally {
-                    runCatching { root.recycle() }
-                }
+            "findcontactitems" -> runFindContactItems(engine)
+            "scrollcontacts" -> {
+                engine.scrollContacts()
+                delay(650)
+                true
             }
-            "tapcontactat" -> {
-                val idx = engine.resolveVarInt(step.indexVar ?: "\$visitIndex")
-                engine.tapNodeAt(engine.lastContactItems, idx)
-            }
+            "tapcontactat" -> runTapContactAt(engine, step)
             "tapprofileentry" -> {
                 val root = engine.acquireRoot() ?: return false
                 try {
                     val node = nodeFinder.findProfileEntryNode(root) ?: return false
-                    engine.tap(node)
+                    val target = ScriptTapTarget.fromNode(node) ?: return false
+                    engine.tap(target)
                 } finally {
                     runCatching { root.recycle() }
                 }
@@ -147,15 +142,15 @@ class ZPScriptRunner @Inject constructor(
                     } else {
                         nodeFinder.findLikeButtons(root).firstOrNull()
                     } ?: return false
-                    engine.lastLikeNode = btn
+                    engine.lastLikeTarget = ScriptTapTarget.fromNode(btn) ?: return false
                     true
                 } finally {
                     runCatching { root.recycle() }
                 }
             }
             "taplike" -> {
-                val node = engine.lastLikeNode ?: return false
-                engine.tap(node)
+                val target = engine.lastLikeTarget ?: return false
+                engine.tap(target)
             }
             "verifyliked" -> {
                 val root = engine.acquireRoot() ?: return false
@@ -166,13 +161,23 @@ class ZPScriptRunner @Inject constructor(
                 }
             }
             "findcommentbutton" -> {
-                val like = engine.lastLikeNode ?: return false
-                val btn = nodeFinder.findCommentButton(like) ?: return false
-                engine.lastTapTarget = btn
-                true
+                val likeTarget = engine.lastLikeTarget ?: return false
+                val root = engine.acquireRoot() ?: return false
+                try {
+                    val likeNode = nodeFinder.findLikeAreaNodeAt(
+                        root,
+                        likeTarget.bounds,
+                        likeTarget.viewId
+                    ) ?: return false
+                    val btn = nodeFinder.findCommentButton(likeNode) ?: return false
+                    engine.lastTapTarget = ScriptTapTarget.fromNode(btn) ?: return false
+                    true
+                } finally {
+                    runCatching { root.recycle() }
+                }
             }
             "tap" -> {
-                val target = engine.lastTapTarget ?: engine.lastLikeNode ?: return false
+                val target = engine.lastTapTarget ?: engine.lastLikeTarget ?: return false
                 engine.tap(target)
             }
             "inputrandomcomment" -> {
@@ -263,6 +268,43 @@ class ZPScriptRunner @Inject constructor(
         step.lte?.let { if (value <= it) return true }
         step.eq?.let { if (value == it) return true }
         return false
+    }
+
+    private suspend fun runFindContactItems(engine: ZPEngine): Boolean {
+        engine.clearTapCache()
+        suspend fun scanOnce(): List<ScriptTapTarget> {
+            val root = engine.acquireRoot() ?: return emptyList()
+            return try {
+                nodeFinder.findContactListItems(root)
+                    .mapNotNull { ScriptTapTarget.fromNode(it) }
+            } finally {
+                runCatching { root.recycle() }
+            }
+        }
+        var targets = scanOnce()
+        if (targets.isEmpty()) {
+            engine.scrollContacts()
+            delay(700)
+            targets = scanOnce()
+        }
+        engine.lastContactTargets = targets
+        if (targets.isNotEmpty()) {
+            logger.log(LogTag.SCAN, "contacts=${targets.size}", "VISIT_CONTACTS_FOUND")
+        } else {
+            logger.log(LogTag.SCAN, "contacts", "VISIT_CONTACTS_EMPTY")
+        }
+        return targets.isNotEmpty()
+    }
+
+    /** Luôn tap hàng bạn đầu tiên trên màn hình — $visitIndex chỉ đếm đã visit, không phải index list. */
+    private suspend fun runTapContactAt(engine: ZPEngine, step: ZPStep): Boolean {
+        if (engine.lastContactTargets.isEmpty()) return false
+        val visibleIndex = 0
+        if (engine.tapNodeAt(engine.lastContactTargets, visibleIndex)) return true
+        engine.scrollContacts()
+        delay(700)
+        if (!runFindContactItems(engine)) return false
+        return engine.tapNodeAt(engine.lastContactTargets, visibleIndex)
     }
 
     private fun normalizeVar(raw: String?): String =
