@@ -2040,7 +2040,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun showToast(msg: String) {
+    internal fun showToast(msg: String) {
         mainHandler.post {
             Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
         }
