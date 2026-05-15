@@ -16,9 +16,6 @@ import java.io.File
 import java.util.Locale
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -68,6 +65,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var scriptStore: ZPScriptStore
 
     private val zaloBlue = Color(0xFF0068FF)
+    private val permissionGateTick = mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,27 +77,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        permissionGateTick.intValue++
+        if (!AccessibilityHelper.isAccessibilityEnabled(this)) {
+            Toast.makeText(
+                this,
+                "Trợ năng ZaloPilot đã bị tắt (thường do app vừi crash). Bật lại ở màn hình bên dưới.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     /** Sau crash Android hay tắt Trợ năng — mỗi lần mở app kiểm tra lại, không chỉ lần cài đầu. */
     @Composable
     private fun PermissionGate() {
-        var permTick by remember { mutableIntStateOf(0) }
-        val lifecycleOwner = LocalLifecycleOwner.current
-        DisposableEffect(lifecycleOwner) {
-            val observer = LifecycleEventObserver { _, event ->
-                if (event == Lifecycle.Event.ON_RESUME) {
-                    permTick++
-                    if (!AccessibilityHelper.isAccessibilityEnabled(this@MainActivity)) {
-                        Toast.makeText(
-                            this@MainActivity,
-                            "Trợ năng ZaloPilot đã bị tắt (thường do app vừa crash). Bật lại ở màn hình bên dưới.",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
-                }
-            }
-            lifecycleOwner.lifecycle.addObserver(observer)
-            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-        }
+        val permTick = permissionGateTick.intValue
         val accOn = remember(permTick) { AccessibilityHelper.isAccessibilityEnabled(this@MainActivity) }
         val overlayOn = remember(permTick) { Settings.canDrawOverlays(this@MainActivity) }
         when {

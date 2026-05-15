@@ -35,25 +35,38 @@ object AccessibilityHelper {
     /** Mở thẳng trang Trợ năng của ZaloPilot (Android 13+) hoặc danh sách Trợ năng. */
     fun openAccessibilitySettings(context: Context) {
         val component = ComponentName(context, ZaloPilotAccessibilityService::class.java)
-        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).apply {
-                putExtra(Settings.EXTRA_ACCESSIBILITY_SERVICE_COMPONENT_NAME, component.flattenToString())
+        val fallback = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val details = Intent(ACTION_ACCESSIBILITY_DETAILS_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(EXTRA_ACCESSIBILITY_SERVICE_COMPONENT_NAME, component.flattenToString())
             }
-        } else {
-            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-        }.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { context.startActivity(intent) }
-            .onFailure {
-                context.startActivity(
-                    Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
+            val opened = runCatching { context.startActivity(details) }.isSuccess
+            if (opened) {
+                toastOpenAccessibility(context)
+                return
             }
+        }
+        runCatching { context.startActivity(fallback) }
+            .onFailure { runCatching { context.startActivity(fallback) } }
+        toastOpenAccessibility(context)
+    }
+
+    private fun toastOpenAccessibility(context: Context) {
         Toast.makeText(
             context,
             "Bật công tắc ZaloPilot → Cho phép (nếu máy hỏi)",
             Toast.LENGTH_LONG
         ).show()
     }
+
+    /** API 33+ — dùng string để tránh lỗi compile trên một số SDK CI. */
+    private const val ACTION_ACCESSIBILITY_DETAILS_SETTINGS =
+        "android.settings.ACCESSIBILITY_DETAILS_SETTINGS"
+    private const val EXTRA_ACCESSIBILITY_SERVICE_COMPONENT_NAME =
+        "android.provider.extra.ACCESSIBILITY_SERVICE_COMPONENT_NAME"
 
     /**
      * @return true nếu đã gọi start hoặc đã gửi broadcast chờ service nhận.
