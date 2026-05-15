@@ -798,7 +798,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         scope.launch {
             try {
                 preferredMode?.let { settingsManager.setLikeMode(it) }
-                val visitMode = settingsManager.getLikeMode() == LikeMode.VISIT
+                val visitMode = (preferredMode ?: settingsManager.getLikeMode()) == LikeMode.VISIT
                 val modeLabel = if (visitMode) "Visit danh bạ" else "Nhật ký"
                 updateStatus("↩ Mở Zalo — $modeLabel…")
                 if (!prepareZaloForCurrentMode()) {

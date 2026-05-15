@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - feat(ui): Trang chủ 2 nút **Like Nhật ký** / **Like danh bạ** — bỏ chọn Feed/Visit trong Cài đặt; bấm chạy tự mở Zalo đúng tab (`prepareZaloForCurrentMode`).
+- fix(start): `requestStartAutoLike(mode)` dùng đúng mode ngay khi mở Zalo (`preferredMode` thay vì đọc settings cũ).
 - fix(visit): tự **mở lại Zalo** khi thoát ra launcher/Home (`launchZaloMain` + `ensureZaloForegroundForBot`); Visit không pause vô hạn — tiếp tục tap script.
 - fix(visit): sau 1 profile không sang bạn tiếp — `backToContacts` (không back thừa); `tapContactAt` theo `$visitIndex`; cuộn danh bạ trước vòng mới; bỏ đếm profile 2 lần/vòng.
 - fix(visit/profile): vào profile nhưng không like — `prepareProfileTimelineForLikes` (tap Bài viết, cuộn tìm footer); không thoát ngay khi chưa thấy Thích; nới `isProfileScreen`.
