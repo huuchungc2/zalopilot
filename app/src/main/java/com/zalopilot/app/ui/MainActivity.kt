@@ -472,7 +472,7 @@ class MainActivity : ComponentActivity() {
                             }
                         } else {
                             Text(
-                                "Chọn loại like — app tự mở Zalo đúng tab",
+                                "Bấm là mở Zalo đúng tab và chạy luôn",
                                 color = Color.White.copy(alpha = 0.85f),
                                 fontSize = 12.sp
                             )
@@ -488,7 +488,7 @@ class MainActivity : ComponentActivity() {
                                     shape = RoundedCornerShape(12.dp)
                                 ) {
                                     Text(
-                                        "▶ Nhật ký",
+                                        "▶ Like Nhật ký",
                                         color = Color.White,
                                         fontSize = 14.sp,
                                         fontWeight = FontWeight.W600,
@@ -505,7 +505,7 @@ class MainActivity : ComponentActivity() {
                                     shape = RoundedCornerShape(12.dp)
                                 ) {
                                     Text(
-                                        "▶ Danh bạ",
+                                        "▶ Like danh bạ",
                                         color = Color.White,
                                         fontSize = 14.sp,
                                         fontWeight = FontWeight.W600,
