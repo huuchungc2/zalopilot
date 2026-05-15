@@ -41,8 +41,15 @@ data class LikeSettings(
     /** Ngưỡng % pin để pause (chỉ áp dụng khi [lowBatteryPauseEnabled]). */
     val lowBatteryThreshold: Int = 20,
     /** Khi user rời Zalo lâu, slow down poll mạnh để khỏi ngốn pin (vẫn check để biết khi nào về Zalo). */
-    val pauseWhenZaloAway: Boolean = true
+    val pauseWhenZaloAway: Boolean = true,
+    val visitLikeCount: Int = 3,
+    val visitCommentCount: Int = 0,
+    val visitActionMode: String = "LIKE_ONLY",
+    val visitMaxProfiles: Int = 50,
+    val visitCommentList: List<String> = listOf("👍", "❤️", "Hay quá!", "Tuyệt vời!")
 )
+
+enum class VisitActionMode { LIKE_ONLY, COMMENT_ONLY, MIX }
 
 @Singleton
 class LikeSettingsManager @Inject constructor(
@@ -54,11 +61,24 @@ class LikeSettingsManager @Inject constructor(
     fun load(): LikeSettings {
         val json = prefs.getString("settings", null) ?: return LikeSettings()
         return try {
-            gson.fromJson(json, LikeSettings::class.java) ?: LikeSettings()
+            normalizeVisitFields(gson.fromJson(json, LikeSettings::class.java) ?: LikeSettings())
         } catch (e: Exception) {
             LikeSettings()
         }
     }
+
+    private fun normalizeVisitFields(s: LikeSettings): LikeSettings {
+        val comments = s.visitCommentList.ifEmpty { defaultVisitComments() }
+        return s.copy(
+            visitLikeCount = s.visitLikeCount.coerceIn(0, 10),
+            visitCommentCount = s.visitCommentCount.coerceIn(0, 5),
+            visitMaxProfiles = s.visitMaxProfiles.coerceIn(1, 500),
+            visitCommentList = comments
+        )
+    }
+
+    private fun defaultVisitComments(): List<String> =
+        listOf("👍", "❤️", "Hay quá!", "Tuyệt vời!")
 
     fun save(settings: LikeSettings) {
         prefs.edit().putString("settings", gson.toJson(settings)).apply()
@@ -125,4 +145,33 @@ class LikeSettingsManager @Inject constructor(
     fun isLowBatteryPauseEnabled(): Boolean = load().lowBatteryPauseEnabled
     fun getLowBatteryThreshold(): Int = load().lowBatteryThreshold
     fun isPauseWhenZaloAway(): Boolean = load().pauseWhenZaloAway
+
+    fun getVisitLikeCount(): Int = load().visitLikeCount
+    fun getVisitCommentCount(): Int = load().visitCommentCount
+    fun getVisitMaxProfiles(): Int = load().visitMaxProfiles
+    fun getVisitCommentList(): List<String> = load().visitCommentList
+
+    fun getVisitActionMode(): VisitActionMode {
+        return try {
+            VisitActionMode.valueOf(load().visitActionMode)
+        } catch (e: Exception) {
+            VisitActionMode.LIKE_ONLY
+        }
+    }
+
+    fun setVisitLikeCount(count: Int) {
+        save(load().copy(visitLikeCount = count.coerceIn(0, 10)))
+    }
+
+    fun setVisitCommentCount(count: Int) {
+        save(load().copy(visitCommentCount = count.coerceIn(0, 5)))
+    }
+
+    fun setVisitActionMode(mode: VisitActionMode) {
+        save(load().copy(visitActionMode = mode.name))
+    }
+
+    fun resetVisitCommentsToDefault() {
+        save(load().copy(visitCommentList = defaultVisitComments()))
+    }
 }

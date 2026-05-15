@@ -62,8 +62,20 @@ class LikeProgressManager @Inject constructor(
         return updated
     }
 
+    fun getVisitIndex(): Int = load().visitIndex
+
     fun saveVisitIndex(index: Int) {
-        prefs.edit().putInt("visit_index", index).apply()
+        prefs.edit().putInt("visit_index", index.coerceAtLeast(0)).apply()
+    }
+
+    fun incrementVisitIndexAndSave(): Int {
+        val next = load().visitIndex + 1
+        saveVisitIndex(next)
+        return next
+    }
+
+    fun resetVisitIndex() {
+        saveVisitIndex(0)
     }
 
     fun isLimitReached(): Boolean {

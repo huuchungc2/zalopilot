@@ -6,10 +6,14 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.graphics.Rect
+import android.content.ContentValues
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Environment
+import android.provider.MediaStore
+import android.view.accessibility.AccessibilityNodeInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
@@ -21,10 +25,11 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
-import com.zalopilot.app.accessibility.NodeFinder
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
+import com.zalopilot.app.util.LikeMode
 import com.zalopilot.app.util.LikeProgressManager
 import com.zalopilot.app.util.LikeSettingsManager
+import com.zalopilot.app.util.VisitActionMode
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
 import dagger.hilt.android.AndroidEntryPoint
@@ -39,7 +44,6 @@ class FloatingMenuService : Service() {
     @Inject lateinit var settingsManager: LikeSettingsManager
     @Inject lateinit var progressManager: LikeProgressManager
     @Inject lateinit var logger: Logger
-    @Inject lateinit var nodeFinder: NodeFinder
 
     private lateinit var windowManager: WindowManager
     private var fabView: TextView? = null
@@ -56,8 +60,18 @@ class FloatingMenuService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            logger.log(LogTag.STATE, "FloatingMenuService", "STOP_REQUESTED")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        return START_STICKY
+    }
+
     override fun onCreate() {
         super.onCreate()
+        isOverlayRunning = true
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         startForeground(NOTIF_ID, buildNotification())
         logger.log(LogTag.STATE, "FloatingMenuService", "CREATED")
@@ -76,6 +90,8 @@ class FloatingMenuService : Service() {
     }
 
     override fun onDestroy() {
+        isOverlayRunning = false
+        closeMenu()
         super.onDestroy()
         try {
             unregisterReceiver(statusReceiver)
@@ -194,15 +210,46 @@ class FloatingMenuService : Service() {
             }
             addView(menuItem(statLabel, "#0068FF", null))
 
+            if (settingsManager.getLikeMode() == LikeMode.VISIT) {
+                val visitIdx = progress.visitIndex
+                addView(menuItem("👤 Profile: $visitIdx / ${settings.visitMaxProfiles}", "#34495E", null))
+                addView(menuItem("❤️ Like −  (${settings.visitLikeCount})", "#8E44AD") {
+                    settingsManager.setVisitLikeCount((settings.visitLikeCount - 1).coerceAtLeast(0))
+                    closeMenu(); openMenu()
+                })
+                addView(menuItem("❤️ Like +  (${settings.visitLikeCount})", "#8E44AD") {
+                    settingsManager.setVisitLikeCount((settings.visitLikeCount + 1).coerceAtMost(10))
+                    closeMenu(); openMenu()
+                })
+                addView(menuItem("💬 Cmt −  (${settings.visitCommentCount})", "#2980B9") {
+                    settingsManager.setVisitCommentCount((settings.visitCommentCount - 1).coerceAtLeast(0))
+                    closeMenu(); openMenu()
+                })
+                addView(menuItem("💬 Cmt +  (${settings.visitCommentCount})", "#2980B9") {
+                    settingsManager.setVisitCommentCount((settings.visitCommentCount + 1).coerceAtMost(5))
+                    closeMenu(); openMenu()
+                })
+                val modeLabel = when (settingsManager.getVisitActionMode()) {
+                    VisitActionMode.LIKE_ONLY -> "LIKE"
+                    VisitActionMode.COMMENT_ONLY -> "COMMENT"
+                    VisitActionMode.MIX -> "MIX"
+                }
+                addView(menuItem("Chế độ: $modeLabel (đổi trong app)", "#555555", null))
+            }
+
             addView(menuItem("📋 Dump UI", "#6C5CE7") {
                 runCatching {
-                    dumpFirst3FeedItemsToFilesDir()
-                    Toast.makeText(this@FloatingMenuService, "✅ Đã ghi filesDir/ui_dump.json", Toast.LENGTH_LONG).show()
-                    logger.log(LogTag.SCAN, "ui_dump.json", "SUCCESS")
+                    val fileName = dumpFullScreenToDownloads()
+                    Toast.makeText(
+                        this@FloatingMenuService,
+                        "✅ Downloads: $fileName",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    logger.log(LogTag.SCAN, fileName, "DUMP_DOWNLOADS_OK")
                 }.onFailure { e ->
                     Toast.makeText(this@FloatingMenuService, "❌ Dump UI lỗi: ${e.message}", Toast.LENGTH_LONG).show()
-                    logger.log(LogTag.ERROR, "ui_dump.json", "FAIL: ${e.message}")
-                    logger.logError("FloatingMenuService.dumpFirst3FeedItems", e)
+                    logger.log(LogTag.ERROR, "dump_downloads", "FAIL: ${e.message}")
+                    logger.logError("FloatingMenuService.dumpFullScreenToDownloads", e)
                 }
                 closeMenu()
             })
@@ -233,6 +280,13 @@ class FloatingMenuService : Service() {
                     closeMenu()
                 })
             }
+
+            addView(menuItem("🚫  Ẩn nút ZP", "#555555") {
+                Toast.makeText(this@FloatingMenuService, "Đã tắt nút nổi — bật lại trong app ZaloPilot", Toast.LENGTH_LONG).show()
+                logger.log(LogTag.STATE, "FloatingMenuService", "HIDE_OVERLAY_FROM_MENU")
+                stopSelf()
+                closeMenu()
+            })
 
             addView(menuItem("✕  Đóng", "#888888") { closeMenu() })
         }
@@ -287,151 +341,124 @@ class FloatingMenuService : Service() {
             Intent(ZaloPilotAccessibilityService.ACTION_DUMP_UI_TREE).setPackage(packageName),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val stopPi = PendingIntent.getService(
+            this,
+            3,
+            Intent(this, FloatingMenuService::class.java).apply { action = ACTION_STOP },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         return NotificationCompat.Builder(this, channelId)
-            .setContentTitle("ZaloPilot đang chạy")
+            .setContentTitle("Nút ZP nổi đang bật")
+            .setContentText("Bấm để mở menu · Tắt trong app hoặc thông báo")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(android.R.drawable.ic_menu_save, "📋 Dump UI", dumpPi)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Tắt nút ZP", stopPi)
             .build()
     }
 
-    private fun dumpFirst3FeedItemsToFilesDir() {
+    /** Dump toàn màn hình Zalo → thư mục Downloads (MediaStore). */
+    private fun dumpFullScreenToDownloads(): String {
         val svc = ZaloPilotAccessibilityService.instance
         val root = svc?.rootInActiveWindow
-        if (root == null) {
-            throw IllegalStateException("Không đọc được UI — hãy mở Zalo trước")
-        }
-
-        val likeButtons = nodeFinder.findLikeButtons(root)
-        if (likeButtons.isEmpty()) {
-            // Fallback: vẫn dump 1 cây root nhỏ để debug.
+            ?: throw IllegalStateException("Không đọc được UI — hãy mở Zalo trước")
+        return try {
+            val screenName = detectScreenName(root)
+            val (tree, nodeCount) = serializeNode(root, depthLimit = 12, nodeLimit = 1000)
             val json = JSONObject().apply {
                 put("scannedAtMs", System.currentTimeMillis())
-                put("note", "No like buttons found; dumping root subtree")
-                put("items", JSONArray())
-                put("root", serializeNode(root, depthLimit = 7, nodeLimit = 450).first)
+                put("screen", screenName)
+                put("nodeCount", nodeCount)
+                put("tree", tree)
             }
-            writeUiDump(json)
-            return
+            val fileName = "zp_dump_${screenName}_${System.currentTimeMillis()}.json"
+            writeJsonToDownloads(fileName, json)
+            fileName
+        } finally {
+            runCatching { root.recycle() }
         }
+    }
 
-        val items = JSONArray()
-        val seenKeys = HashSet<String>()
-        var picked = 0
-
-        for (like in likeButtons) {
-            val container = findFeedItemContainer(like) ?: continue
-            val key = buildContainerKey(container)
-            if (!seenKeys.add(key)) continue
-
-            val (tree, nodeCount) = serializeNode(container, depthLimit = 9, nodeLimit = 600)
-            val likeRect = Rect().also { like.getBoundsInScreen(it) }
-            val containerRect = Rect().also { container.getBoundsInScreen(it) }
-            items.put(
-                JSONObject().apply {
-                    put("index", picked)
-                    put("nodeCount", nodeCount)
-                    put("containerBounds", rectJson(containerRect))
-                    put("likeBounds", rectJson(likeRect))
-                    put("likeText", like.text?.toString().orEmpty())
-                    put("likeResId", like.viewIdResourceName?.toString().orEmpty())
-                    put("tree", tree)
-                }
-            )
-            picked++
-            if (picked >= 3) break
+    private fun detectScreenName(root: AccessibilityNodeInfo): String {
+        return when {
+            (screenHasText(root, "Contacts") || screenHasText(root, "Danh bạ")) &&
+                (screenHasText(root, "All") || screenHasText(root, "Tất cả")) -> "contacts"
+            (screenHasText(root, "Comments") || screenHasText(root, "Bình luận")) &&
+                (screenHasHint(root, "Write a comment") || screenHasHint(root, "Nhập bình luận")) -> "comments"
+            (screenHasText(root, "Photos") || screenHasText(root, "Ảnh")) &&
+                (screenHasText(root, "Videos") || screenHasText(root, "Video")) -> "profile"
+            screenHasHint(root, "Message") || screenHasHint(root, "Tin nhắn") -> "chat"
+            screenHasText(root, "Nhật ký") || screenHasText(root, "Timeline") -> "feed"
+            else -> "unknown"
         }
-
-        val json = JSONObject().apply {
-            put("scannedAtMs", System.currentTimeMillis())
-            put("picked", picked)
-            put("likeButtonsFound", likeButtons.size)
-            put("items", items)
-        }
-        writeUiDump(json)
     }
 
-    private fun writeUiDump(json: JSONObject) {
-        val out = File(filesDir, "ui_dump.json")
-        out.writeText(json.toString(2))
-    }
-
-    private fun buildContainerKey(node: android.view.accessibility.AccessibilityNodeInfo): String {
-        val r = Rect().also { node.getBoundsInScreen(it) }
-        val id = node.viewIdResourceName?.toString().orEmpty()
-        val cls = node.className?.toString().orEmpty()
-        val txt = node.text?.toString().orEmpty()
-        val cd = node.contentDescription?.toString().orEmpty()
-        return listOf(cls, id, txt.take(32), cd.take(32), "${r.left},${r.top},${r.right},${r.bottom}").joinToString("|")
-    }
-
-    private fun findFeedItemContainer(start: android.view.accessibility.AccessibilityNodeInfo): android.view.accessibility.AccessibilityNodeInfo? {
-        // Heuristic: climb up from Like control to a "card-ish" container.
-        var current: android.view.accessibility.AccessibilityNodeInfo? = start
-        var best: android.view.accessibility.AccessibilityNodeInfo? = null
-        var bestScore = Int.MIN_VALUE
-        var steps = 0
-
-        while (current != null && steps < 18) {
-            val score = scoreAsFeedItemContainer(current)
-            if (score > bestScore) {
-                bestScore = score
-                best = current
-            }
-            current = current.parent
-            steps++
-        }
-        return best
-    }
-
-    private fun scoreAsFeedItemContainer(node: android.view.accessibility.AccessibilityNodeInfo): Int {
-        val cls = node.className?.toString().orEmpty()
-        val id = node.viewIdResourceName?.toString().orEmpty()
-        val childCount = node.childCount
-
-        var score = 0
-        if (cls.contains("RecyclerView", ignoreCase = true)) score -= 80
-        if (cls.contains("ListView", ignoreCase = true)) score -= 80
-        if (cls.contains("ScrollView", ignoreCase = true)) score -= 50
-        if (id.contains("recycler", ignoreCase = true)) score -= 60
-        if (id.contains("vpager", ignoreCase = true)) score -= 80
-
-        if (childCount in 5..35) score += 40
-        if (childCount in 2..60) score += 10
-        if (node.isClickable) score += 6
-
-        val r = Rect().also { node.getBoundsInScreen(it) }
-        val height = r.height()
-        val width = r.width()
-        if (height in 350..2000) score += 35
-        if (width >= 500) score += 10
-
-        // Text density hint: feed item often contains some text nodes inside.
-        val textHits = countDescendantTextNodes(node, maxNodes = 120)
-        score += textHits.coerceAtMost(18)
-        return score
-    }
-
-    private fun countDescendantTextNodes(root: android.view.accessibility.AccessibilityNodeInfo, maxNodes: Int): Int {
-        val q = ArrayDeque<android.view.accessibility.AccessibilityNodeInfo>()
-        q.add(root)
+    private fun screenHasText(root: AccessibilityNodeInfo, needle: String, maxNodes: Int = 1500): Boolean {
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
         var visited = 0
-        var hits = 0
-        while (q.isNotEmpty() && visited < maxNodes) {
-            val n = q.removeFirst()
+        while (stack.isNotEmpty() && visited < maxNodes) {
+            val node = stack.removeLast()
             visited++
-            val t = n.text?.toString().orEmpty()
-            val cd = n.contentDescription?.toString().orEmpty()
-            if (t.isNotBlank() || cd.isNotBlank()) hits++
-            for (i in 0 until n.childCount) {
-                n.getChild(i)?.let { q.add(it) }
+            val t = node.text?.toString().orEmpty()
+            val d = node.contentDescription?.toString().orEmpty()
+            if (t.contains(needle, ignoreCase = true) || d.contains(needle, ignoreCase = true)) {
+                return true
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { stack.addLast(it) }
             }
         }
-        return hits
+        return false
+    }
+
+    private fun screenHasHint(root: AccessibilityNodeInfo, needle: String, maxNodes: Int = 1500): Boolean {
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < maxNodes) {
+            val node = stack.removeLast()
+            visited++
+            val hint = node.hintText?.toString().orEmpty()
+            val t = node.text?.toString().orEmpty()
+            val d = node.contentDescription?.toString().orEmpty()
+            if (hint.contains(needle, ignoreCase = true) ||
+                t.contains(needle, ignoreCase = true) ||
+                d.contains(needle, ignoreCase = true)
+            ) {
+                return true
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return false
+    }
+
+    private fun writeJsonToDownloads(displayName: String, json: JSONObject) {
+        val bytes = json.toString(2).toByteArray(Charsets.UTF_8)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, displayName)
+                put(MediaStore.Downloads.MIME_TYPE, "application/json")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("Không tạo được file trong Downloads")
+            contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                ?: throw IllegalStateException("Không ghi được file Downloads")
+        } else {
+            @Suppress("DEPRECATION")
+            val dest = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                displayName
+            )
+            dest.writeBytes(bytes)
+        }
     }
 
     private fun serializeNode(
-        root: android.view.accessibility.AccessibilityNodeInfo,
+        root: AccessibilityNodeInfo,
         depthLimit: Int,
         nodeLimit: Int
     ): Pair<JSONObject, Int> {
@@ -475,5 +502,27 @@ class FloatingMenuService : Service() {
 
     companion object {
         private const val NOTIF_ID = 1
+        const val ACTION_STOP = "com.zalopilot.action.STOP_FLOATING_MENU"
+
+        @Volatile
+        var isOverlayRunning: Boolean = false
+            private set
+
+        fun start(context: Context) {
+            val intent = Intent(context, FloatingMenuService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun stop(context: Context) {
+            if (!isOverlayRunning) return
+            val intent = Intent(context, FloatingMenuService::class.java).apply {
+                action = ACTION_STOP
+            }
+            context.startService(intent)
+        }
     }
 }

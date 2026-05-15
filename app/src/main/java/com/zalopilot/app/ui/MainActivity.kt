@@ -41,8 +41,11 @@ import com.zalopilot.app.accessibility.NodeFinder
 import com.zalopilot.app.accessibility.ZaloUIScanner
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
 import com.zalopilot.app.data.model.ZaloIDStore
+import com.zalopilot.app.accessibility.engine.ZPScriptStore
 import com.zalopilot.app.floating.FloatingMenuService
 import com.zalopilot.app.util.DebugHighlightPrefs
+import com.zalopilot.app.util.LikeMode
+import com.zalopilot.app.util.VisitActionMode
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.*
 import dagger.hilt.android.AndroidEntryPoint
@@ -58,6 +61,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var debugHighlightPrefs: DebugHighlightPrefs
     @Inject lateinit var uiScanner: ZaloUIScanner
     @Inject lateinit var zaloIdStore: ZaloIDStore
+    @Inject lateinit var scriptStore: ZPScriptStore
 
     private val zaloBlue = Color(0xFF0068FF)
 
@@ -132,11 +136,12 @@ class MainActivity : ComponentActivity() {
                     Spacer(Modifier.height(16.dp))
                     Text("Thiết lập hoàn tất!", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF27AE60))
                     Spacer(Modifier.height(8.dp))
-                    Text("Mở Zalo → vào tab Nhật ký → bấm nút ZP → Bắt đầu like",
-                        fontSize = 14.sp, color = Color.Gray, textAlign = TextAlign.Center)
+                    Text(
+                        "Trang chủ có BẮT ĐẦU/DỪNG và nút nổi ZP (bật khi cần).",
+                        fontSize = 14.sp, color = Color.Gray, textAlign = TextAlign.Center
+                    )
                     Spacer(Modifier.height(24.dp))
                     Button(onClick = {
-                        startService(Intent(this@MainActivity, FloatingMenuService::class.java))
                         recreate()
                     }, colors = ButtonDefaults.buttonColors(containerColor = zaloBlue),
                         modifier = Modifier.fillMaxWidth().height(50.dp),
@@ -190,6 +195,14 @@ class MainActivity : ComponentActivity() {
         var logsError by remember { mutableStateOf(logger.readErrorLogs()) }
         var verboseUiTreeLog by remember { mutableStateOf(debugHighlightPrefs.isVerboseUiTreeLoggingEnabled()) }
         var verboseLikeContextLog by remember { mutableStateOf(debugHighlightPrefs.isVerboseLikeContextLoggingEnabled()) }
+        var overlayTick by remember { mutableIntStateOf(0) }
+        LaunchedEffect(Unit) {
+            while (true) {
+                kotlinx.coroutines.delay(800)
+                overlayTick++
+            }
+        }
+        val floatingOverlayOn = remember(overlayTick) { FloatingMenuService.isOverlayRunning }
 
         DisposableEffect(Unit) {
             val receiver = object : BroadcastReceiver() {
@@ -233,7 +246,7 @@ class MainActivity : ComponentActivity() {
 
         Scaffold(bottomBar = {
             NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                listOf("Trang chủ", "Cài đặt", "Nhật ký", "UI Tree").forEachIndexed { i, label ->
+                listOf("Trang chủ", "Cài đặt", "Nhật ký", "Script", "UI").forEachIndexed { i, label ->
                     NavigationBarItem(
                         selected = selectedTab == i,
                         onClick = {
@@ -244,7 +257,7 @@ class MainActivity : ComponentActivity() {
                                 logsError = logger.readErrorLogs()
                             }
                         },
-                        icon = { Text(listOf("🏠", "⚙️", "📋", "🌳")[i], fontSize = 18.sp) },
+                        icon = { Text(listOf("🏠", "⚙️", "📋", "📜", "🌳")[i], fontSize = 18.sp) },
                         label = { Text(label, fontSize = 10.sp) }
                     )
                 }
@@ -252,7 +265,7 @@ class MainActivity : ComponentActivity() {
         }) { padding ->
             Box(Modifier.padding(padding)) {
                 when (selectedTab) {
-                    0 -> HomeScreen(isRunning, progress, settings)
+                    0 -> HomeScreen(isRunning, progress, settings, floatingOverlayOn)
                     1 -> SettingsScreen(settings) { settings = it; settingsManager.save(it) }
                     2 -> LogScreen(
                         logsSlim = logsSlim,
@@ -277,7 +290,8 @@ class MainActivity : ComponentActivity() {
                             Toast.makeText(this@MainActivity, "Đã xóa log & file tạm", Toast.LENGTH_SHORT).show()
                         }
                     )
-                    3 -> UiTreeScreen()
+                    3 -> ScriptScreen(scriptStore = scriptStore, zaloBlue = zaloBlue)
+                    4 -> UiTreeScreen()
                 }
             }
         }
@@ -286,7 +300,12 @@ class MainActivity : ComponentActivity() {
     // ─── Home ────────────────────────────────────────────────────
 
     @Composable
-    fun HomeScreen(isRunning: Boolean, progress: LikeProgress, settings: LikeSettings) {
+    fun HomeScreen(
+        isRunning: Boolean,
+        progress: LikeProgress,
+        settings: LikeSettings,
+        floatingOverlayOn: Boolean
+    ) {
         LazyColumn(modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)),
             contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
@@ -355,13 +374,30 @@ class MainActivity : ComponentActivity() {
                                 Text("Mở Zalo", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.W500)
                             }
                             Button(
-                                onClick = { startService(Intent(this@MainActivity, FloatingMenuService::class.java)) },
+                                onClick = {
+                                    if (floatingOverlayOn) {
+                                        stopFloatingOverlay()
+                                    } else {
+                                        startFloatingOverlay()
+                                    }
+                                },
                                 modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f)),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (floatingOverlayOn) {
+                                        Color(0xFFE24B4A).copy(alpha = 0.35f)
+                                    } else {
+                                        Color.White.copy(alpha = 0.18f)
+                                    }
+                                ),
                                 shape = RoundedCornerShape(10.dp),
                                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
                             ) {
-                                Text("Bật nút nổi", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.W500)
+                                Text(
+                                    if (floatingOverlayOn) "Tắt nút nổi" else "Bật nút nổi",
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.W500
+                                )
                             }
                         }
                     }
@@ -448,7 +484,20 @@ class MainActivity : ComponentActivity() {
         var lowBatteryPauseEnabled by remember { mutableStateOf(settings.lowBatteryPauseEnabled) }
         var lowBatteryThreshold by remember { mutableIntStateOf(settings.lowBatteryThreshold) }
         var pauseWhenZaloAway by remember { mutableStateOf(settings.pauseWhenZaloAway) }
-        // Ẩn bớt option nâng cao/debug để Cài đặt gọn hơn.
+        var likeMode by remember { mutableStateOf(settingsManager.getLikeMode()) }
+        var visitLikeCount by remember { mutableIntStateOf(settings.visitLikeCount) }
+        var visitCommentCount by remember { mutableIntStateOf(settings.visitCommentCount) }
+        var visitMaxProfiles by remember { mutableIntStateOf(settings.visitMaxProfiles) }
+        var visitActionMode by remember {
+            mutableStateOf(
+                try { VisitActionMode.valueOf(settings.visitActionMode) } catch (e: Exception) {
+                    VisitActionMode.LIKE_ONLY
+                }
+            )
+        }
+        var visitCommentsText by remember {
+            mutableStateOf(settings.visitCommentList.joinToString("\n"))
+        }
 
         LazyColumn(modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)),
             contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -612,6 +661,89 @@ class MainActivity : ComponentActivity() {
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
+                        Text("CHẾ ĐỘ BOT", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                        Spacer(Modifier.height(8.dp))
+                        listOf(LikeMode.FEED to "Feed Nhật ký", LikeMode.VISIT to "Visit danh bạ").forEach { (mode, label) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = likeMode == mode,
+                                    onClick = { likeMode = mode },
+                                    colors = RadioButtonDefaults.colors(selectedColor = zaloBlue)
+                                )
+                                Text(label, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("VISIT MODE", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Like mỗi profile: $visitLikeCount", fontSize = 13.sp)
+                        Slider(
+                            value = visitLikeCount.toFloat(),
+                            onValueChange = { visitLikeCount = it.toInt() },
+                            valueRange = 0f..10f,
+                            steps = 9,
+                            colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue)
+                        )
+                        Text("Comment mỗi profile: $visitCommentCount", fontSize = 13.sp)
+                        Slider(
+                            value = visitCommentCount.toFloat(),
+                            onValueChange = { visitCommentCount = it.toInt() },
+                            valueRange = 0f..5f,
+                            steps = 5,
+                            colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue)
+                        )
+                        Text("Profile tối đa / phiên: $visitMaxProfiles", fontSize = 13.sp)
+                        Slider(
+                            value = visitMaxProfiles.toFloat(),
+                            onValueChange = { visitMaxProfiles = it.toInt() },
+                            valueRange = 5f..200f,
+                            colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue)
+                        )
+                        listOf(
+                            VisitActionMode.LIKE_ONLY to "Chỉ like",
+                            VisitActionMode.COMMENT_ONLY to "Chỉ comment",
+                            VisitActionMode.MIX to "Mix"
+                        ).forEach { (mode, label) ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(
+                                    selected = visitActionMode == mode,
+                                    onClick = { visitActionMode = mode },
+                                    colors = RadioButtonDefaults.colors(selectedColor = zaloBlue)
+                                )
+                                Text(label, fontSize = 13.sp)
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text("Nội dung bình luận (mỗi dòng 1 câu)", fontSize = 12.sp, color = Color.Gray)
+                        OutlinedTextField(
+                            value = visitCommentsText,
+                            onValueChange = { visitCommentsText = it },
+                            modifier = Modifier.fillMaxWidth().height(120.dp),
+                            placeholder = { Text("👍\nHay quá!") }
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = {
+                                visitCommentsText = "👍\n❤️\nHay quá!\nTuyệt vời!"
+                            }) { Text("Khôi phục mặc định") }
+                            TextButton(onClick = {
+                                progressManager.resetVisitIndex()
+                                Toast.makeText(this@MainActivity, "Đã reset visitIndex", Toast.LENGTH_SHORT).show()
+                            }) { Text("Reset visitIndex") }
+                        }
+                    }
+                }
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
                         Text("CHẾ ĐỘ FEED", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
                         Spacer(Modifier.height(8.dp))
                         Text("Cách bot cuộn khi không tìm thấy like", fontSize = 12.sp, color = Color.Gray)
@@ -673,6 +805,9 @@ class MainActivity : ComponentActivity() {
             item {
                 Button(onClick = {
                     settingsManager.setFeedMode(feedMode)
+                    val comments = visitCommentsText.lines()
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
                     onSave(settings.copy(
                         dailyLimit = dailyLimit,
                         delayMinMs = (delayMin.toLongOrNull() ?: 1L) * 1000L,
@@ -683,7 +818,13 @@ class MainActivity : ComponentActivity() {
                         requireCharging = requireCharging,
                         lowBatteryPauseEnabled = lowBatteryPauseEnabled,
                         lowBatteryThreshold = lowBatteryThreshold,
-                        pauseWhenZaloAway = pauseWhenZaloAway
+                        pauseWhenZaloAway = pauseWhenZaloAway,
+                        likeModeStr = likeMode.name,
+                        visitLikeCount = visitLikeCount,
+                        visitCommentCount = visitCommentCount,
+                        visitMaxProfiles = visitMaxProfiles,
+                        visitActionMode = visitActionMode.name,
+                        visitCommentList = if (comments.isEmpty()) settings.visitCommentList else comments
                     ))
                     Toast.makeText(this@MainActivity, "✅ Đã lưu cài đặt", Toast.LENGTH_SHORT).show()
                 }, modifier = Modifier.fillMaxWidth().height(50.dp),
@@ -1230,6 +1371,30 @@ class MainActivity : ComponentActivity() {
         logger.log(LogTag.SCAN, "manual debugDump", "START")
         nodeFinder.debugDump(root, maxNodes = 800)
         Toast.makeText(this, "🔍 Đã dump UI vào log — bấm Lưu log để lấy file", Toast.LENGTH_LONG).show()
+    }
+
+    private fun startFloatingOverlay() {
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(
+                this,
+                "Cần quyền hiển thị trên app khác để bật nút ZP",
+                Toast.LENGTH_LONG
+            ).show()
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+            )
+            return
+        }
+        FloatingMenuService.start(this)
+        Toast.makeText(this, "✅ Đã bật nút ZP nổi", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun stopFloatingOverlay() {
+        FloatingMenuService.stop(this)
+        Toast.makeText(this, "✅ Đã tắt nút ZP nổi", Toast.LENGTH_SHORT).show()
     }
 
     private fun isSetupComplete() = isAccessibilityServiceEnabled() && Settings.canDrawOverlays(this)

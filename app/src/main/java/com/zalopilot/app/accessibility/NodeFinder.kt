@@ -4,6 +4,7 @@ import android.graphics.Rect
 import android.os.Build
 import android.view.accessibility.AccessibilityNodeInfo
 import com.zalopilot.app.data.model.ZaloIDStore
+import com.zalopilot.app.util.LikeSettingsManager
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
 import com.zalopilot.app.util.UiNodeEntry
@@ -17,7 +18,8 @@ import kotlin.math.abs
 @Singleton
 class NodeFinder @Inject constructor(
     private val idStore: ZaloIDStore,
-    private val logger: Logger
+    private val logger: Logger,
+    private val settingsManager: LikeSettingsManager
 ) {
     private val inlineCommentPhrases = listOf(
         "nhập bình luận",
@@ -305,6 +307,111 @@ class NodeFinder @Inject constructor(
     /**
      * Viewer ảnh toàn màn (vd. share / album) — [vpager] hoặc ViewPager lớn.
      */
+    /** Bottom sheet Zing MP3 (tap nhầm media trên feed). */
+    fun isZingMusicBottomSheet(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        return screenContainsTextOrDesc(root, "Nghe trên Zing MP3", maxNodes = 900) ||
+            screenContainsTextOrDesc(root, "Đăng lên nhật ký", maxNodes = 900)
+    }
+
+    /**
+     * Số lượt thích hiển thị trên bài (vd. 12 / "12 bạn") — chỉ log/UI.
+     * Không dùng để suy [isAlreadyLiked] (tránh nhầm like người khác).
+     */
+    fun readPostReactionCount(likeNode: AccessibilityNodeInfo): Int {
+        if (!likeNode.hasValidScreenBounds()) return 0
+        val likeRect = Rect().also { likeNode.getBoundsInScreen(it) }
+        var bestCount = 0
+        var bestScore = Int.MIN_VALUE
+
+        for (n in collectNearbyNodesForLikeState(likeNode, cap = 220)) {
+            if (System.identityHashCode(n) == System.identityHashCode(likeNode)) continue
+            if (LikeViewIdRules.isWhitelistedLikeResourceId(n.viewIdResourceName)) continue
+
+            val idTail = LikeViewIdRules.resourceIdTail(n.viewIdResourceName)
+            val fields = listOf(
+                n.text?.toString(),
+                n.contentDescription?.toString(),
+                n.hintText?.toString()
+            )
+            for (raw in fields) {
+                val parsed = parseReactionCountFromText(raw) ?: continue
+                if (parsed <= 0) continue
+
+                var score = 10
+                when {
+                    idTail.contains("reaction_info") -> score += 80
+                    idTail.contains("reaction_count") -> score += 70
+                    idTail.contains("reaction") -> score += 55
+                    idTail.contains("like_count") -> score += 50
+                    idTail.contains("num_like") -> score += 45
+                }
+
+                val r = Rect().also { n.getBoundsInScreen(it) }
+                if (r.width() <= 0 || r.height() <= 0) continue
+                if (r.left >= likeRect.right - 24) score += 25
+                val yDelta = abs(r.centerY() - likeRect.centerY())
+                if (yDelta <= (likeRect.height() * 2).coerceAtLeast(80)) score += 15
+                val rawLen = raw?.trim()?.length ?: 0
+                if (rawLen in 1..16) score += 8
+
+                if (score > bestScore) {
+                    bestScore = score
+                    bestCount = parsed
+                }
+            }
+        }
+        return bestCount
+    }
+
+    fun readPostReactionCountLabel(likeNode: AccessibilityNodeInfo): String? {
+        val n = readPostReactionCount(likeNode)
+        return if (n > 0) n.toString() else null
+    }
+
+    private fun parseReactionCountFromText(raw: String?): Int? {
+        val t = raw?.trim().orEmpty()
+        if (t.isEmpty() || isReactionCountLabelNoise(t)) return null
+        if (textIndicatesCurrentUserLiked(t)) return null
+
+        val digitsOnly = t.replace(",", "").replace(".", "")
+        if (digitsOnly.all { it.isDigit() }) {
+            return digitsOnly.toIntOrNull()?.takeIf { it > 0 }
+        }
+
+        val patterns = listOf(
+            Regex("""(\d[\d,]*)\s*(?:bạn|friends?|người|others?)""", RegexOption.IGNORE_CASE),
+            Regex("""(\d[\d,]*)\s*(?:likes?|thích)""", RegexOption.IGNORE_CASE),
+            Regex("""(\d[\d,]*)\s*(?:đã\s+thích|liked)""", RegexOption.IGNORE_CASE),
+            Regex("""^(\d[\d,]*)$""")
+        )
+        for (pattern in patterns) {
+            val m = pattern.find(t) ?: continue
+            val num = m.groupValues[1].replace(",", "")
+            val v = num.toIntOrNull() ?: continue
+            if (v > 0) return v
+        }
+        return null
+    }
+
+    private fun isReactionCountLabelNoise(raw: String): Boolean {
+        val t = raw.trim().lowercase()
+        if (t.length > 48) return true
+        if (t == ZaloIDStore.TEXT_LIKE.lowercase() || t == ZaloIDStore.TEXT_LIKED.lowercase()) return true
+        val noise = listOf(
+            "bình luận",
+            "comment",
+            "chia sẻ",
+            "share",
+            "nhập bình luận",
+            "write a comment",
+            "nghe trên zing",
+            "đăng lên nhật ký"
+        )
+        if (noise.any { t == it || t.startsWith(it) }) return true
+        return false
+    }
+
     fun isLikelyZaloImageViewer(root: AccessibilityNodeInfo?, screenW: Int, screenH: Int): Boolean {
         if (root == null || screenW <= 0 || screenH <= 0) return false
         val thresh = (screenW * screenH * 0.42f).toInt().coerceAtLeast(1)
@@ -598,6 +705,174 @@ class NodeFinder @Inject constructor(
      * Khi đúng màn này, bot phải `GLOBAL_ACTION_BACK` để về feed; không thoát sẽ kẹt
      * và heuristic [hasInlineCommentComposerNearLikeAnchor] dễ confirm sai ngữ cảnh.
      */
+    fun isContactListScreen(root: AccessibilityNodeInfo): Boolean {
+        val hasContacts = screenContainsTextOrDesc(root, "Contacts", 2000) ||
+            screenContainsTextOrDesc(root, "Danh bạ", 2000)
+        val hasAll = screenContainsTextOrDesc(root, "All", 2000) ||
+            screenContainsTextOrDesc(root, "Tất cả", 2000)
+        return hasContacts && hasAll
+    }
+
+    fun isChatScreen(root: AccessibilityNodeInfo): Boolean {
+        return screenContainsHintOrText(root, "Message", 2000) ||
+            screenContainsHintOrText(root, "Tin nhắn", 2000)
+    }
+
+    fun isProfileScreen(root: AccessibilityNodeInfo): Boolean {
+        val hasPhotos = screenContainsTextOrDesc(root, "Photos", 2000) ||
+            screenContainsTextOrDesc(root, "Ảnh", 2000)
+        val hasVideos = screenContainsTextOrDesc(root, "Videos", 2000) ||
+            screenContainsTextOrDesc(root, "Video", 2000)
+        return hasPhotos && hasVideos
+    }
+
+    fun findNodeWithTextOrDesc(
+        root: AccessibilityNodeInfo,
+        needle: String,
+        ignoreCase: Boolean = true,
+        maxNodes: Int = 2000
+    ): AccessibilityNodeInfo? = findFirstNodeWithTextOrDesc(root, needle, maxNodes, ignoreCase)
+
+    fun findNodeWithHint(
+        root: AccessibilityNodeInfo,
+        needle: String,
+        maxNodes: Int = 2000
+    ): AccessibilityNodeInfo? {
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < maxNodes) {
+            val node = stack.removeLast()
+            visited++
+            val fields = listOf(
+                node.hintText?.toString(),
+                node.text?.toString(),
+                node.contentDescription?.toString()
+            )
+            for (raw in fields) {
+                val t = raw?.trim().orEmpty()
+                if (t.isNotEmpty() && t.contains(needle, ignoreCase = true)) return node
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return null
+    }
+
+    /** Stub — tinh chỉnh sau khi có dump contacts. */
+    fun findContactListItems(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+        val skipPhrases = listOf(
+            "friend request", "lời mời kết bạn",
+            "birthday", "sinh nhật", "contacts", "danh bạ", "tất cả", "all"
+        )
+        val out = mutableListOf<AccessibilityNodeInfo>()
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 2500 && out.size < 80) {
+            val n = stack.removeLast()
+            visited++
+            if (n.isClickable && n.hasValidScreenBounds()) {
+                val label = collectNodeLabel(n)
+                val low = label.lowercase()
+                if (label.length in 2..48 &&
+                    skipPhrases.none { low.contains(it) } &&
+                    !low.all { it.isDigit() }
+                ) {
+                    out.add(n)
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return out.distinctBy { collectNodeLabel(it) }
+    }
+
+    /** Stub — tinh chỉnh sau dump chat/profile. */
+    fun findProfileEntryNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val rootRect = Rect()
+        root.getBoundsInScreen(rootRect)
+        val h = rootRect.height().takeIf { it > 0 } ?: return null
+        val top = (h * 0.25f).toInt()
+        val bottom = (h * 0.75f).toInt()
+        var best: AccessibilityNodeInfo? = null
+        var bestArea = Int.MAX_VALUE
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 2000) {
+            val n = stack.removeLast()
+            visited++
+            if (n.isClickable && n.hasValidScreenBounds()) {
+                val r = Rect()
+                n.getBoundsInScreen(r)
+                if (r.centerY() in top..bottom && hasAvatarHint(n)) {
+                    val area = r.width() * r.height()
+                    if (area in 8_000..(rootRect.width() * h / 2) && area < bestArea) {
+                        bestArea = area
+                        best = n
+                    }
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return best
+    }
+
+    fun findCommentButton(likeNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val likeRect = Rect().also { likeNode.getBoundsInScreen(it) }
+        val parent = likeNode.parent ?: return null
+        for (i in 0 until parent.childCount) {
+            val sib = parent.getChild(i) ?: continue
+            if (sib == likeNode) continue
+            if (!sib.isClickable) continue
+            val r = Rect().also { sib.getBoundsInScreen(it) }
+            if (r.left < likeRect.right - 8) continue
+            val cls = sib.className?.toString()?.lowercase().orEmpty()
+            if (!cls.contains("image") && !cls.contains("button")) continue
+            val t = sib.text?.toString().orEmpty()
+            if (t.contains("…") || t.contains("...")) continue
+            return sib
+        }
+        return null
+    }
+
+    fun getRandomComment(): String {
+        val list = settingsManager.getVisitCommentList()
+        if (list.isEmpty()) return ""
+        return list.random()
+    }
+
+    private fun collectNodeLabel(n: AccessibilityNodeInfo): String {
+        val t = n.text?.toString()?.trim().orEmpty()
+        if (t.isNotEmpty()) return t
+        return n.contentDescription?.toString()?.trim().orEmpty()
+    }
+
+    private fun hasAvatarHint(n: AccessibilityNodeInfo): Boolean {
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.addLast(n)
+        var visited = 0
+        var hasImage = false
+        var hasText = false
+        while (q.isNotEmpty() && visited < 40) {
+            val x = q.removeFirst()
+            visited++
+            val cls = x.className?.toString()?.lowercase().orEmpty()
+            if (cls.contains("image")) hasImage = true
+            val t = x.text?.toString()?.trim().orEmpty()
+            if (t.length in 2..40) hasText = true
+            for (i in 0 until x.childCount) {
+                x.getChild(i)?.let { q.addLast(it) }
+            }
+        }
+        return hasImage && hasText
+    }
+
     fun isFullScreenCommentScreen(root: AccessibilityNodeInfo?): Boolean {
         if (root == null) return false
         val rootRect = Rect()
@@ -728,10 +1003,40 @@ class NodeFinder @Inject constructor(
         return findFirstNodeWithTextOrDesc(root, ZaloIDStore.TEXT_TIMELINE, maxNodes = 2000)
     }
 
-    private fun findFirstNodeWithTextOrDesc(
+    private fun screenContainsTextOrDesc(
         root: AccessibilityNodeInfo,
         needle: String,
         maxNodes: Int
+    ): Boolean {
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < maxNodes) {
+            val node = stack.removeLast()
+            visited++
+            val t = node.text?.toString().orEmpty()
+            val d = node.contentDescription?.toString().orEmpty()
+            if (t.contains(needle, ignoreCase = true) || d.contains(needle, ignoreCase = true)) {
+                return true
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return false
+    }
+
+    private fun screenContainsHintOrText(
+        root: AccessibilityNodeInfo,
+        needle: String,
+        maxNodes: Int
+    ): Boolean = findNodeWithHint(root, needle, maxNodes) != null
+
+    private fun findFirstNodeWithTextOrDesc(
+        root: AccessibilityNodeInfo,
+        needle: String,
+        maxNodes: Int,
+        ignoreCase: Boolean = true
     ): AccessibilityNodeInfo? {
         val stack = ArrayDeque<AccessibilityNodeInfo>()
         stack.addLast(root)
@@ -741,7 +1046,7 @@ class NodeFinder @Inject constructor(
             visited++
             val t = node.text?.toString() ?: ""
             val d = node.contentDescription?.toString() ?: ""
-            if (t.contains(needle, ignoreCase = true) || d.contains(needle, ignoreCase = true)) {
+            if (t.contains(needle, ignoreCase = ignoreCase) || d.contains(needle, ignoreCase = ignoreCase)) {
                 return node
             }
             for (i in 0 until node.childCount) {

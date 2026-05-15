@@ -1,0 +1,34 @@
+{
+  "id": "visit_contacts_v1",
+  "version": 1,
+  "desc": "Visit danh bạ — placeholder (tinh chỉnh sau dump UI)",
+  "steps": [
+    { "id": "s1", "action": "ensureScreen", "screen": "contacts", "timeoutMs": 4000 },
+    { "id": "s2", "action": "findContactItems" },
+    { "id": "s3", "action": "tapContactAt", "indexVar": "$visitIndex" },
+    { "id": "s4", "action": "ensureScreen", "screen": "chat", "timeoutMs": 3000 },
+    { "id": "s5", "action": "tapProfileEntry" },
+    { "id": "s6", "action": "ensureScreen", "screen": "profile", "timeoutMs": 3000 },
+    { "id": "s7", "action": "repeat", "count": "$visitLikeCount", "do": [
+      { "action": "findLikeButton" },
+      { "action": "tapLike" },
+      { "action": "wait", "ms": 1200 },
+      { "action": "verifyLiked" }
+    ]},
+    { "id": "s8", "action": "ifSetting", "key": "visitCommentCount", "gt": 0, "do": [
+      { "action": "repeat", "count": "$visitCommentCount", "do": [
+        { "action": "findCommentButton" },
+        { "action": "tap" },
+        { "action": "ensureScreen", "screen": "comments", "timeoutMs": 2000 },
+        { "action": "inputRandomComment" },
+        { "action": "tapSend" },
+        { "action": "back" }
+      ]}
+    ]},
+    { "id": "s9", "action": "back" },
+    { "id": "s10", "action": "back" },
+    { "id": "s11", "action": "incrementVar", "var": "$visitIndex" },
+    { "id": "s12", "action": "saveVar", "var": "$visitIndex" },
+    { "id": "s13", "action": "goto", "step": "s1" }
+  ]
+}

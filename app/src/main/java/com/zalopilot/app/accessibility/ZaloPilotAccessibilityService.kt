@@ -29,8 +29,11 @@ import com.zalopilot.app.data.model.ZaloIDStore
 import com.zalopilot.app.util.LikeProgressManager
 import com.zalopilot.app.util.LikeSettings
 import com.zalopilot.app.util.DebugHighlightPrefs
+import com.zalopilot.app.accessibility.engine.ZPScriptRunner
+import com.zalopilot.app.accessibility.engine.ZPScriptStore
 import com.zalopilot.app.util.FeedMode
 import com.zalopilot.app.util.InteractMode
+import com.zalopilot.app.util.LikeMode
 import com.zalopilot.app.util.LikeSettingsManager
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
@@ -69,6 +72,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     @Inject lateinit var settingsManager: LikeSettingsManager
     @Inject lateinit var logger: Logger
     @Inject lateinit var debugHighlightPrefs: DebugHighlightPrefs
+    @Inject lateinit var scriptRunner: ZPScriptRunner
+    @Inject lateinit var scriptStore: ZPScriptStore
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -370,51 +375,84 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Nếu [root] đang là màn **full-screen Bình luận**, BACK tối đa 2 lượt để về feed.
-     * Trả về `true` nếu đã xử lý (caller nên `continue` vòng và lấy root mới).
-     * Đạt [STUCK_COMMENT_SCREEN_STOP_STREAK] → stop bot để user thoát thủ công.
+     * Thoát màn lạc (Bình luận / Zing MP3 / viewer ảnh). Trả về `true` nếu đã BACK — caller `continue`.
+     * Package không phải Zalo → chỉ log, không BACK.
      */
-    private suspend fun tryEscapeCommentScreen(root: AccessibilityNodeInfo?): Boolean {
+    private suspend fun detectAndEscapeWrongScreen(root: AccessibilityNodeInfo?): Boolean {
         if (root == null) return false
-        if (!nodeFinder.isFullScreenCommentScreen(root)) {
-            consecutiveStuckCommentScreen = 0
+
+        val pkg = root.packageName?.toString().orEmpty()
+        if (pkg.isNotBlank() && !isZaloRelatedPackage(pkg)) {
+            logger.log(LogTag.STATE, "pkg=$pkg", "WRONG_PACKAGE_NO_BACK")
             return false
         }
-        logger.log(LogTag.STATE, "comment_screen", "DETECTED_BACK")
-        updateStatus("↩️ Phát hiện màn Bình luận — back về feed")
 
-        suspend fun pressBackAndCheck(): Boolean {
-            performGlobalAction(GLOBAL_ACTION_BACK)
-            lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
-            delayEco(700L..1100L)
-            val r = acquireRootOrNull(4, 80L..220L, LogTag.STATE, quietLog = true)
-            return try {
-                r != null && nodeFinder.isFullScreenCommentScreen(r)
-            } finally {
-                runCatching { r?.recycle() }
+        val dm = resources.displayMetrics
+        val screenW = dm.widthPixels
+        val screenH = dm.heightPixels
+
+        when {
+            nodeFinder.isFullScreenCommentScreen(root) -> {
+                logger.log(LogTag.STATE, "comment_screen", "DETECTED_BACK")
+                updateStatus("↩️ Phát hiện màn Bình luận — back về feed")
+
+                suspend fun pressBackAndCheck(): Boolean {
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                    lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+                    delayEco(700L..1100L)
+                    val r = acquireRootOrNull(4, 80L..220L, LogTag.STATE, quietLog = true)
+                    return try {
+                        r != null && nodeFinder.isFullScreenCommentScreen(r)
+                    } finally {
+                        runCatching { r?.recycle() }
+                    }
+                }
+
+                var stillStuck = pressBackAndCheck()
+                if (stillStuck) stillStuck = pressBackAndCheck()
+
+                if (stillStuck) {
+                    consecutiveStuckCommentScreen++
+                    logger.log(
+                        LogTag.STATE,
+                        "stuckStreak=$consecutiveStuckCommentScreen",
+                        "STUCK_COMMENT_SCREEN"
+                    )
+                    if (consecutiveStuckCommentScreen >= STUCK_COMMENT_SCREEN_STOP_STREAK) {
+                        showToast("⚠️ Kẹt màn Bình luận — vui lòng thoát thủ công")
+                        logger.log(LogTag.STATE, "autoLike", "STOP_STUCK_COMMENT_SCREEN")
+                        stopAutoLike()
+                    }
+                } else {
+                    consecutiveStuckCommentScreen = 0
+                    logger.log(LogTag.STATE, "comment_screen", "ESCAPED_BACK_OK")
+                }
+                return true
+            }
+
+            nodeFinder.isZingMusicBottomSheet(root) -> {
+                logger.log(LogTag.STATE, "zing_mp3_sheet", "DETECTED_BACK")
+                updateStatus("↩️ Zing MP3 — back về feed")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+                delay(ecoVerifyMs(500L))
+                return true
+            }
+
+            nodeFinder.isLikelyZaloImageViewer(root, screenW, screenH) -> {
+                logger.log(LogTag.STATE, "image_viewer", "DETECTED_BACK")
+                updateStatus("↩️ Viewer ảnh — back về feed")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+                delayEco(400L..700L)
+                return true
+            }
+
+            else -> {
+                consecutiveStuckCommentScreen = 0
+                return false
             }
         }
-
-        var stillStuck = pressBackAndCheck()
-        if (stillStuck) stillStuck = pressBackAndCheck()
-
-        if (stillStuck) {
-            consecutiveStuckCommentScreen++
-            logger.log(
-                LogTag.STATE,
-                "stuckStreak=$consecutiveStuckCommentScreen",
-                "STUCK_COMMENT_SCREEN"
-            )
-            if (consecutiveStuckCommentScreen >= STUCK_COMMENT_SCREEN_STOP_STREAK) {
-                showToast("⚠️ Kẹt màn Bình luận — vui lòng thoát thủ công")
-                logger.log(LogTag.STATE, "autoLike", "STOP_STUCK_COMMENT_SCREEN")
-                stopAutoLike()
-            }
-        } else {
-            consecutiveStuckCommentScreen = 0
-            logger.log(LogTag.STATE, "comment_screen", "ESCAPED_BACK_OK")
-        }
-        return true
     }
 
     /**
@@ -738,12 +776,135 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 showStatusOverlay("▶ Đang khởi động...")
 
                 likeJob?.cancel()
-                likeJob = scope.launch { autoLikeLoop() }
+                likeJob = scope.launch {
+                    if (settingsManager.getLikeMode() == LikeMode.VISIT) {
+                        visitScriptLoop()
+                    } else {
+                        autoLikeLoop()
+                    }
+                }
             } finally {
                 startAutoLikeInProgress = false
             }
         }
     }
+
+    /** Chạy 1 vòng script Visit (không lặp goto) — từ tab Script. */
+    fun startVisitScriptTestRound() {
+        if (isRunning) {
+            showToast("ℹ️ Bot đang chạy — dừng trước")
+            return
+        }
+        scope.launch {
+            val root = acquireRootOrNull(5, 120L..350L, LogTag.STATE) ?: run {
+                showToast("⚠️ Mở Zalo trước")
+                return@launch
+            }
+            runCatching { root.recycle() }
+            isRunning = true
+            sendInternalBroadcast(Intent("com.zalopilot.STATUS_UPDATE").putExtra("running", true))
+            try {
+                visitScriptLoop(testOneRound = true)
+            } finally {
+                stopAutoLike()
+            }
+        }
+    }
+
+    private suspend fun visitScriptLoop(testOneRound: Boolean = false) {
+        val json = scriptStore.loadActiveScript()
+        if (json == null) {
+            updateStatus("⚠️ Chưa có script Visit")
+            showToast("⚠️ Chưa có script — tab Script hoặc assets")
+            logger.log(LogTag.ERROR, "visit", "SCRIPT_MISSING")
+            stopAutoLike()
+            return
+        }
+        val script = scriptRunner.loadScriptJson(json)
+        updateStatus("👤 Visit: ${script.id} v${script.version}")
+        logger.log(LogTag.STATE, "id=${script.id} test=$testOneRound", "VISIT_SCRIPT_START")
+        scriptRunner.run(this, script, testOneRound = testOneRound)
+        logger.log(LogTag.STATE, script.id, "VISIT_SCRIPT_END")
+        if (isRunning) {
+            updateStatus("✅ Visit script xong — dừng")
+            stopAutoLike()
+        }
+    }
+
+    suspend fun scriptAcquireRoot(retries: Int = 5): AccessibilityNodeInfo? =
+        acquireRootOrNull(
+            maxAttempts = retries,
+            delayRangeMs = 80L..220L,
+            logTag = LogTag.STATE,
+            quietLog = true
+        )
+
+    suspend fun scriptTapNode(node: AccessibilityNodeInfo): Boolean = tapNodeByCoordinate(node)
+
+    suspend fun scriptTapCenter(rect: Rect): Boolean {
+        if (rect.isEmpty) return false
+        val x = rect.centerX().toFloat()
+        val y = rect.centerY().toFloat()
+        val path = Path().apply { moveTo(x, y) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 150))
+            .build()
+        return withTimeoutOrNull(600L) {
+            suspendCancellableCoroutine { cont ->
+                val callback = object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription) {
+                        if (cont.isActive) cont.resume(true)
+                    }
+                    override fun onCancelled(gestureDescription: GestureDescription) {
+                        if (cont.isActive) cont.resume(false)
+                    }
+                }
+                if (!dispatchGesture(gesture, callback, null)) {
+                    cont.resume(false)
+                }
+            }
+        } ?: false
+    }
+
+    suspend fun scriptSwipeUp(screenH: Int): Boolean {
+        val h = if (screenH > 0) screenH.toFloat() else resources.displayMetrics.heightPixels.toFloat()
+        val w = resources.displayMetrics.widthPixels.toFloat()
+        val fromY = h * 0.70f
+        val toY = h * 0.30f
+        val x = w * 0.5f
+        val path = Path().apply {
+            moveTo(x, fromY)
+            lineTo(x, toY)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 450))
+            .build()
+        return withTimeoutOrNull(1_200L) {
+            suspendCancellableCoroutine { cont ->
+                val callback = object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription) {
+                        if (cont.isActive) cont.resume(true)
+                    }
+                    override fun onCancelled(gestureDescription: GestureDescription) {
+                        if (cont.isActive) cont.resume(false)
+                    }
+                }
+                if (!dispatchGesture(gesture, callback, null)) {
+                    cont.resume(false)
+                }
+            }
+        } ?: false
+    }
+
+    suspend fun scriptBack(): Boolean {
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+        delay(400)
+        return true
+    }
+
+    suspend fun scriptDetectAndEscapeWrongScreen(root: AccessibilityNodeInfo?): Boolean =
+        detectAndEscapeWrongScreen(root)
 
     fun stopAutoLike() {
         if (!isRunning) return
@@ -852,8 +1013,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 root = awaitFeedLikeScanRoot(root!!)
                 val liveRoot = root!!
 
-                // Vào nhầm full-screen "Bình luận" (vd. tap nhầm icon comment) → BACK + reload root.
-                if (tryEscapeCommentScreen(liveRoot)) {
+                if (detectAndEscapeWrongScreen(liveRoot)) {
                     if (!isRunning) return
                     runCatching { root?.recycle() }
                     root = null
@@ -1085,9 +1245,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     continue
                 }
 
-                logAutoBeforeClick(postKey, node, rect)
+                val reactionsBefore = nodeFinder.readPostReactionCount(node)
+                logAutoBeforeClick(postKey, node, rect, reactionsBefore)
 
-                updateStatus("👍 Đang like bài của ${author ?: "..."}...")
+                val reactionHint = if (reactionsBefore > 0) " · $reactionsBefore thích" else ""
+                updateStatus("👍 Đang like bài của ${author ?: "..."}$reactionHint")
                 delayEco(200L..500L)
 
                 updateDebugNodeHighlights(likeNodes, node)
@@ -1100,13 +1262,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 if (nodeForClick !== node) {
                     logger.log(LogTag.STATE, boundsSummary(nodeForClick), "RE_RESOLVED_BEFORE_CLICK")
                 }
-                // Snapshot composer TRƯỚC click — dùng so delta sau click để chống unlike nhầm
-                // khi UI Zalo không lộ trạng thái "đã thích" (isAlreadyLiked sai).
-                val composerBefore = runCatching {
-                    nodeFinder.hasInlineCommentComposerNearLikeAnchor(nodeForClick)
-                }.getOrDefault(false)
-                logger.log(LogTag.CLICK, "composerBefore=$composerBefore", "COMPOSER_SNAPSHOT")
-
                 try {
                     val clicked = performLikeClickWithFallbacks(nodeForClick)
 
@@ -1117,37 +1272,16 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         val peekRoot = acquireRootOrNull(3, 60L..180L, LogTag.CLICK, quietLog = true)
                         if (peekRoot != null) {
                             try {
-                                val dm = resources.displayMetrics
-                                if (nodeFinder.isLikelyZaloImageViewer(
-                                        peekRoot,
-                                        dm.widthPixels,
-                                        dm.heightPixels
-                                    )
-                                ) {
+                                if (detectAndEscapeWrongScreen(peekRoot)) {
                                     logger.log(
                                         LogTag.CLICK,
                                         author ?: "unknown",
-                                        "IMAGE_VIEWER_BACK_SKIP_POST"
+                                        "WRONG_SCREEN_AFTER_CLICK_SKIP"
                                     )
-                                    updateStatus("🖼 Mở nhầm viewer — bỏ qua bài này")
+                                    updateStatus("↩️ Sau click mở màn khác — back & bỏ qua bài")
                                     progressManager.incrementPostsHandledAndSave()
                                     sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
-                                    delayEco(400L..700L)
-                                    continue
-                                }
-
-                                // Click rơi vào full-screen "Bình luận" (tap nhầm icon comment) → BACK + skip.
-                                if (nodeFinder.isFullScreenCommentScreen(peekRoot)) {
-                                    logger.log(
-                                        LogTag.CLICK,
-                                        author ?: "unknown",
-                                        "COMMENT_SCREEN_BACK_SKIP_POST"
-                                    )
-                                    updateStatus("💬 Mở nhầm Bình luận — back & bỏ qua bài này")
-                                    tryEscapeCommentScreen(peekRoot)
-                                    progressManager.incrementPostsHandledAndSave()
-                                    sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
-                                    delayEco(400L..700L)
+                                    delayEco(400L..800L)
                                     continue
                                 }
                             } finally {
@@ -1155,42 +1289,26 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                             }
                         }
 
-                        // Đợi Zalo animate / cập nhật state (checked/selected), không tin mỗi text "Thích".
-                        delay(ecoVerifyMs(1500L))
+                        delay(ecoVerifyMs(1200L))
 
-                        // Snapshot bounds + id của node trước click để verify ở fresh root mà KHÔNG bị
-                        // findLikeButtons lọc mất (sau like nút thành "Đã thích" → findLikeButtons bỏ qua).
                         val origRectForVerify = Rect().apply { nodeForClick.getBoundsInScreen(this) }
                         val origIdForVerify = nodeForClick.viewIdResourceName
-
-                        // Verify trên root mới — finder mới KHÔNG lọc theo isAlreadyLiked, dùng id whitelist + bounds.
-                        suspend fun resolvedLikeAreaOnFreshRoot(): AccessibilityNodeInfo? {
-                            val fresh = acquireRootOrNull(4, 80L..220L, LogTag.CLICK, quietLog = true) ?: return null
-                            return try {
-                                nodeFinder.findLikeAreaNodeAt(fresh, origRectForVerify, origIdForVerify)
-                            } finally {
-                                runCatching { fresh.recycle() }
-                            }
-                        }
 
                         suspend fun verifyLikedOnFreshRoot(): Boolean {
                             val fresh = acquireRootOrNull(4, 80L..220L, LogTag.CLICK, quietLog = true) ?: return false
                             return try {
-                                val resolved = nodeFinder.findLikeAreaNodeAt(fresh, origRectForVerify, origIdForVerify)
+                                val resolved = nodeFinder.findLikeAreaNodeAt(
+                                    fresh,
+                                    origRectForVerify,
+                                    origIdForVerify
+                                )
                                 if (resolved != null) nodeFinder.isAlreadyLiked(resolved) else false
                             } finally {
                                 runCatching { fresh.recycle() }
                             }
                         }
 
-                        // Pass 1 — verify ngay sau 1500ms.
                         var confirmedLiked = verifyLikedOnFreshRoot()
-                        // Pass 2 — wait thêm 800ms (Zalo lag UI) rồi verify lần 2.
-                        if (!confirmedLiked) {
-                            delay(ecoVerifyMs(800L))
-                            confirmedLiked = verifyLikedOnFreshRoot()
-                        }
-                        // Pass 3 — wait thêm 800ms cho thiết bị chậm.
                         if (!confirmedLiked) {
                             delay(ecoVerifyMs(800L))
                             confirmedLiked = verifyLikedOnFreshRoot()
@@ -1202,93 +1320,41 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         )
 
                         if (!confirmedLiked) {
-                            // Fallback theo yêu cầu: nếu không thấy ô bình luận (composer) sau click,
-                            // có thể click 1 phát vừa toggle sang UNLIKE trên bài đã like trước đó → click lại để LIKE lại.
-                            val resolved = resolvedLikeAreaOnFreshRoot()
-                            if (resolved != null) {
-                                // Nếu đang ở full-screen Bình luận thì heuristic composer KHÔNG còn nghĩa "đã like"
-                                // — escape rồi bỏ qua bài, không treat-as-confirmed sai ngữ cảnh.
-                                val verifyRoot = acquireRootOrNull(3, 60L..180L, LogTag.CLICK, quietLog = true)
-                                val onCommentScreen = verifyRoot?.let { nodeFinder.isFullScreenCommentScreen(it) } == true
-                                if (onCommentScreen) {
-                                    logger.log(LogTag.CLICK, author ?: "unknown", "COMMENT_SCREEN_AFTER_CLICK_SKIP")
-                                    updateStatus("💬 Sau click rơi vào Bình luận — back & bỏ qua")
-                                    tryEscapeCommentScreen(verifyRoot)
-                                    runCatching { verifyRoot?.recycle() }
-                                    progressManager.incrementPostsHandledAndSave()
-                                    sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
-                                    continue
-                                }
-                                runCatching { verifyRoot?.recycle() }
-
-                                val composerAfter = nodeFinder.hasInlineCommentComposerNearLikeAnchor(resolved)
-                                logger.log(
-                                    LogTag.CLICK,
-                                    "before=$composerBefore after=$composerAfter",
-                                    "COMPOSER_DELTA"
-                                )
-
-                                suspend fun reLikeAndVerify(target: AccessibilityNodeInfo, tag: String) {
-                                    val reClicked = performLikeClickWithFallbacks(target)
-                                    logger.log(
-                                        LogTag.CLICK,
-                                        author ?: "unknown",
-                                        if (reClicked) "${tag}_DISPATCHED" else "${tag}_FAILED"
-                                    )
-                                    if (reClicked) {
-                                        delay(ecoVerifyMs(1500L))
-                                        confirmedLiked = verifyLikedOnFreshRoot()
-                                        if (!confirmedLiked) {
-                                            delay(ecoVerifyMs(800L))
-                                            confirmedLiked = verifyLikedOnFreshRoot()
-                                        }
-                                        if (!confirmedLiked) {
-                                            delay(ecoVerifyMs(800L))
-                                            confirmedLiked = verifyLikedOnFreshRoot()
-                                        }
-                                        logger.log(
-                                            LogTag.CLICK,
-                                            "confirmed=$confirmedLiked tag=$tag",
-                                            "VERIFY_AFTER_RECLICK"
-                                        )
-                                    }
-                                }
-
-                                when {
-                                    // Composer XUẤT HIỆN (trước không có, giờ có) → like vừa được thêm thành công.
-                                    !composerBefore && composerAfter -> {
-                                        logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_COMPOSER_APPEARED_CONFIRMED")
-                                        confirmedLiked = true
-                                    }
-                                    // Composer BIẾN MẤT (trước có, giờ không) → click vừa toggle sang UNLIKE → re-click ngay.
-                                    composerBefore && !composerAfter -> {
-                                        logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_COMPOSER_DISAPPEARED_RECLICK")
-                                        reLikeAndVerify(resolved, "RECLICK_TO_RELIKE")
-                                    }
-                                    // Trước & sau đều CÓ composer → coi như đã like (nguyên rule cũ).
-                                    composerBefore && composerAfter -> {
-                                        logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_HAS_COMMENT_COMPOSER_TREAT_AS_CONFIRMED")
-                                        confirmedLiked = true
-                                    }
-                                    // Trước & sau đều KHÔNG có composer (heuristic không kết luận được) →
-                                    // KHÔNG re-click bừa (tránh unlike nhầm). Coi là CLICK_UNCONFIRMED → skip bài.
-                                    else -> {
-                                        logger.log(LogTag.CLICK, author ?: "unknown", "POST_CLICK_NO_COMPOSER_EVIDENCE_SKIP")
-                                    }
-                                }
-                            }
-                        }
-
-                        if (!confirmedLiked) {
-                            logger.log(LogTag.CLICK, author ?: "unknown", "CLICK_UNCONFIRMED")
+                            logger.log(LogTag.CLICK, author ?: "unknown", "WARNING_CLICK_UNCONFIRMED")
                             updateStatus("❓ Chưa xác nhận được like — bỏ qua bài này, thử bài khác")
                             continue
                         }
 
+                        var reactionsOnPost = reactionsBefore
+                        val freshForCount = acquireRootOrNull(3, 60L..180L, LogTag.CLICK, quietLog = true)
+                        if (freshForCount != null) {
+                            try {
+                                val resolvedForCount = nodeFinder.findLikeAreaNodeAt(
+                                    freshForCount,
+                                    origRectForVerify,
+                                    origIdForVerify
+                                )
+                                val anchorForCount = resolvedForCount ?: nodeForClick
+                                val afterCount = nodeFinder.readPostReactionCount(anchorForCount)
+                                if (afterCount > 0) reactionsOnPost = afterCount
+                            } finally {
+                                runCatching { freshForCount.recycle() }
+                            }
+                        }
+                        logger.log(
+                            LogTag.CLICK,
+                            "${author ?: "unknown"}|reactions=$reactionsOnPost",
+                            "LIKE_COUNT"
+                        )
+
                         val progressAfterClick = progressManager.incrementAndSave()
                         sessionLikeCount++
                         if (author != null) likedAuthorsThisSession.add(author)
-                        updateStatus("✅ Like #${progressAfterClick.todayLikeCount} — ${author ?: "unknown"}")
+                        val postReactionSuffix =
+                            if (reactionsOnPost > 0) " · $reactionsOnPost thích trên bài" else ""
+                        updateStatus(
+                            "✅ Like #${progressAfterClick.todayLikeCount} — ${author ?: "unknown"}$postReactionSuffix"
+                        )
                         sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
 
                         processedPosts.add(postKey)
@@ -1453,17 +1519,27 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         return "CONTENT|$author|$snippet"
     }
 
-    private fun logAutoBeforeClick(postKey: String, node: AccessibilityNodeInfo, rect: Rect) {
+    private fun logAutoBeforeClick(
+        postKey: String,
+        node: AccessibilityNodeInfo,
+        rect: Rect,
+        reactionsOnPost: Int
+    ) {
         Log.d(
             "AUTO",
             """
             POST_KEY=$postKey
+            REACTIONS=$reactionsOnPost
             TEXT=${node.text}
             DESC=${node.contentDescription}
             BOUNDS=$rect
             """.trimIndent()
         )
-        logger.log(LogTag.STATE, "POST_KEY=$postKey BOUNDS=$rect", "BEFORE_CLICK")
+        logger.log(
+            LogTag.STATE,
+            "POST_KEY=$postKey reactions=$reactionsOnPost BOUNDS=$rect",
+            "BEFORE_CLICK"
+        )
     }
 
     /** Neo layout feed (Zalo cố định package) — chờ render trước khi scan bài. */
