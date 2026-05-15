@@ -10,9 +10,15 @@ import com.zalopilot.app.util.LikeSettingsManager
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
 import com.zalopilot.app.util.hasValidScreenBounds
+import com.zalopilot.app.util.randomDelay
 import kotlinx.coroutines.delay
 
 enum class ScrollDirection { UP, DOWN }
+
+data class ProfileLikeResult(
+    val likedCount: Int,
+    val noPostsOnProfile: Boolean
+)
 
 class ZPEngine(
     private val service: ZaloPilotAccessibilityService,
@@ -25,6 +31,7 @@ class ZPEngine(
     var lastContactTargets: List<ScriptTapTarget> = emptyList()
     var lastLikeTarget: ScriptTapTarget? = null
     var lastTapTarget: ScriptTapTarget? = null
+    private val profileTappedPostKeys = mutableSetOf<String>()
 
     suspend fun acquireRoot(retries: Int = 5): AccessibilityNodeInfo? =
         service.scriptAcquireRoot(retries)
@@ -114,6 +121,105 @@ class ZPEngine(
     suspend fun scrollContacts(): Boolean {
         val h = service.resources.displayMetrics.heightPixels
         return service.scriptSwipeUp(h)
+    }
+
+    suspend fun scrollProfileTimeline(): Boolean {
+        val h = service.resources.displayMetrics.heightPixels
+        return service.scriptSwipeUp(h)
+    }
+
+    fun resetProfileLikeSession() {
+        profileTappedPostKeys.clear()
+        lastLikeTarget = null
+    }
+
+    /**
+     * Like trên timeline profile — giống feed: cuộn, bỏ bài đã like, không dừng cả script.
+     * Profile không có ô "Nhập bình luận" inline như Nhật ký — chỉ dùng [NodeFinder.isAlreadyLiked].
+     */
+    suspend fun runProfileLikeLoop(maxLikes: Int): ProfileLikeResult {
+        resetProfileLikeSession()
+        if (maxLikes <= 0) {
+            logger.log(LogTag.STATE, "maxLikes=0", "PROFILE_LIKE_SKIP")
+            return ProfileLikeResult(0, noPostsOnProfile = false)
+        }
+        var liked = 0
+        var allLikedScrollStreak = 0
+        val maxRounds = maxOf(maxLikes * 4, 12).coerceAtMost(28)
+        for (round in 0 until maxRounds) {
+            if (liked >= maxLikes) break
+            val root = acquireRoot() ?: break
+            try {
+                if (!detectScreen(root, "profile")) {
+                    logger.log(LogTag.STATE, "round=$round", "PROFILE_LEFT_SCREEN")
+                    break
+                }
+                val candidates = nodeFinder.findProfileLikeButtons(root)
+                    .filter { nodeFinder.shouldLike(it) }
+                if (candidates.isEmpty()) {
+                    if (nodeFinder.hasVisibleSelfAlreadyLikedLikeControl(root)) {
+                        allLikedScrollStreak++
+                        logger.log(LogTag.SCAN, "streak=$allLikedScrollStreak", "PROFILE_ALL_LIKED_SCROLL")
+                        if (allLikedScrollStreak >= 5) break
+                        scrollProfileTimeline()
+                        randomDelay(500L, 900L)
+                        continue
+                    }
+                    logger.log(LogTag.SCAN, "round=$round", "PROFILE_NO_POSTS")
+                    progressManager.incrementPostsHandledAndSave()
+                    service.notifyProgressUpdate()
+                    return ProfileLikeResult(liked, noPostsOnProfile = true)
+                }
+                allLikedScrollStreak = 0
+                val targetNode = candidates.firstOrNull { node ->
+                    profileTappedPostKeys.add(profilePostKey(node))
+                }
+                if (targetNode == null) {
+                    scrollProfileTimeline()
+                    randomDelay(500L, 900L)
+                    continue
+                }
+                val tapTarget = ScriptTapTarget.fromNode(targetNode)
+                if (tapTarget == null) {
+                    profileTappedPostKeys.remove(profilePostKey(targetNode))
+                    continue
+                }
+                lastLikeTarget = tapTarget
+                if (!tap(tapTarget)) {
+                    profileTappedPostKeys.remove(profilePostKey(targetNode))
+                    progressManager.incrementPostsHandledAndSave()
+                    service.notifyProgressUpdate()
+                    scrollProfileTimeline()
+                    randomDelay(400L, 700L)
+                    continue
+                }
+                randomDelay(1100L, 1500L)
+                if (verifyLiked(root)) {
+                    progressManager.incrementAndSave()
+                    service.notifyProgressUpdate()
+                    liked++
+                    logger.log(LogTag.CLICK, "profile", "SUCCESS")
+                } else {
+                    logger.log(LogTag.CLICK, "profile", "CLICK_UNCONFIRMED")
+                    progressManager.incrementPostsHandledAndSave()
+                    service.notifyProgressUpdate()
+                }
+                scrollProfileTimeline()
+                randomDelay(450L, 850L)
+            } finally {
+                runCatching { root.recycle() }
+            }
+        }
+        if (liked == 0 && allLikedScrollStreak > 0) {
+            logger.log(LogTag.SCAN, "profile", "PROFILE_ALL_ALREADY_LIKED")
+        }
+        return ProfileLikeResult(liked, noPostsOnProfile = false)
+    }
+
+    private fun profilePostKey(node: AccessibilityNodeInfo): String {
+        val r = Rect().also { node.getBoundsInScreen(it) }
+        val idTail = node.viewIdResourceName?.substringAfter(":id/").orEmpty()
+        return "PROFILE|${r.top / 24}_${idTail}"
     }
 
     fun clearTapCache() {

@@ -920,6 +920,10 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         return isZaloMainForeground()
     }
 
+    fun notifyProgressUpdate() {
+        sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
+    }
+
     suspend fun scriptAcquireRoot(retries: Int = 5): AccessibilityNodeInfo? =
         acquireRootOrNull(
             maxAttempts = retries,

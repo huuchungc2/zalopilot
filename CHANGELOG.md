@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- feat(visit/profile): like profile giống feed — `likeProfilePosts` cuộn timeline, bỏ bài đã like (`isAlreadyLiked`), không có bài / ít bài thì skip sang người kế (không `SCRIPT_STEP_FAIL_STOP`); tăng **Đã like** / **Đã duyệt**; không dùng heuristic ô comment inline Nhật ký.
 - fix(visit): `ensureScreen` fail khi pkg launcher/ZaloPilot — `isZaloRelatedPackage` loại trừ `zalopilot`; thêm `isZaloMainAppPackage`; Visit chờ/retry màn Zalo thay vì dừng ngay; nới `isContactListScreen`.
 - fix(visit): `StackOverflowError` — `isChatScreen` ↔ `isProfileScreen` gọi đệ quy lẫn nhau; tách `hasChatScreenMarkers` / `hasProfileScreenMarkers` không cross-call.
 - fix(script): `ZPScriptParser` — `JSONObject.optString(key, null)` gây NPE trên Android khi parse Visit script (bước thiếu `count`/`screen`/…); dùng `optString(key, "")` + helper an toàn.

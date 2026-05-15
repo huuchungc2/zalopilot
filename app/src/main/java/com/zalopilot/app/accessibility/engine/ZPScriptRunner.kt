@@ -162,11 +162,22 @@ class ZPScriptRunner @Inject constructor(
                     runCatching { root.recycle() }
                 }
             }
+            "likeprofileposts" -> {
+                val max = engine.resolveVarInt(step.count ?: "\$visitLikeCount")
+                val result = engine.runProfileLikeLoop(max)
+                logger.log(
+                    LogTag.STATE,
+                    "liked=${result.likedCount} noPosts=${result.noPostsOnProfile}",
+                    "PROFILE_LIKE_DONE"
+                )
+                true
+            }
             "findlikebutton" -> {
                 val root = engine.acquireRoot() ?: return false
                 try {
                     val btn = if (engine.detectScreen(root, "profile")) {
-                        nodeFinder.findProfileLikeButtons(root).firstOrNull()
+                        nodeFinder.findProfileLikeButtons(root)
+                            .firstOrNull { nodeFinder.shouldLike(it) }
                     } else {
                         nodeFinder.findLikeButtons(root).firstOrNull()
                     } ?: return false

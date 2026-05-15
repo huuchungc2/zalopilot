@@ -1,6 +1,6 @@
 {
   "id": "visit_contacts_v1",
-  "version": 3,
+  "version": 4,
   "desc": "Visit danh bạ — IDs từ dump (tv_friends, chatinput, profile footer, cmtinput)",
   "steps": [
     { "id": "s1", "action": "ensureScreen", "screen": "contacts", "timeoutMs": 6000 },
@@ -9,12 +9,7 @@
     { "id": "s4", "action": "ensureScreen", "screen": "chat", "timeoutMs": 3000 },
     { "id": "s5", "action": "tapProfileEntry" },
     { "id": "s6", "action": "ensureScreen", "screen": "profile", "timeoutMs": 3000 },
-    { "id": "s7", "action": "repeat", "count": "$visitLikeCount", "do": [
-      { "action": "findLikeButton" },
-      { "action": "tapLike" },
-      { "action": "wait", "ms": 1200 },
-      { "action": "verifyLiked" }
-    ]},
+    { "id": "s7", "action": "likeProfilePosts", "count": "$visitLikeCount" },
     { "id": "s8", "action": "ifSetting", "key": "visitCommentCount", "gt": 0, "do": [
       { "action": "repeat", "count": "$visitCommentCount", "do": [
         { "action": "findCommentButton" },
