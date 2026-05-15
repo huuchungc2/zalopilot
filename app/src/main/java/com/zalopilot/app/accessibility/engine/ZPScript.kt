@@ -50,22 +50,39 @@ object ZPScriptParser {
     private fun parseStep(o: JSONObject): ZPStep {
         val doArr = o.optJSONArray("do")
         return ZPStep(
-            id = o.optString("id", null).takeIf { it.isNotBlank() },
+            id = optNonBlank(o, "id"),
             action = o.optString("action", ""),
-            screen = o.optString("screen", null).takeIf { it.isNotBlank() },
-            timeoutMs = if (o.has("timeoutMs")) o.optLong("timeoutMs") else null,
-            count = o.optString("count", null).takeIf { it.isNotBlank() },
-            indexVar = o.optString("indexVar", null).takeIf { it.isNotBlank() },
-            key = o.optString("key", null).takeIf { it.isNotBlank() },
-            gt = if (o.has("gt")) o.optInt("gt") else null,
-            lt = if (o.has("lt")) o.optInt("lt") else null,
-            eq = if (o.has("eq")) o.optInt("eq") else null,
-            gte = if (o.has("gte")) o.optInt("gte") else null,
-            lte = if (o.has("lte")) o.optInt("lte") else null,
-            ms = if (o.has("ms")) o.optLong("ms") else null,
-            varName = o.optString("var", null).takeIf { it.isNotBlank() },
-            step = o.optString("step", null).takeIf { it.isNotBlank() },
+            screen = optNonBlank(o, "screen"),
+            timeoutMs = optLongField(o, "timeoutMs"),
+            count = optNonBlank(o, "count"),
+            indexVar = optNonBlank(o, "indexVar"),
+            key = optNonBlank(o, "key"),
+            gt = optIntField(o, "gt"),
+            lt = optIntField(o, "lt"),
+            eq = optIntField(o, "eq"),
+            gte = optIntField(o, "gte"),
+            lte = optIntField(o, "lte"),
+            ms = optLongField(o, "ms"),
+            varName = optNonBlank(o, "var"),
+            step = optNonBlank(o, "step"),
             doSteps = if (doArr != null) parseSteps(doArr) else emptyList()
         )
+    }
+
+    /** Android [JSONObject.optString] với fallback `null` → NPE khi key thiếu. */
+    private fun optNonBlank(o: JSONObject, key: String): String? =
+        o.optString(key, "").takeIf { it.isNotBlank() }
+
+    private fun optIntField(o: JSONObject, key: String): Int? {
+        if (!o.has(key) || o.isNull(key)) return null
+        return o.optInt(key)
+    }
+
+    private fun optLongField(o: JSONObject, key: String): Long? {
+        if (!o.has(key) || o.isNull(key)) return null
+        return when (val raw = o.opt(key)) {
+            is Number -> raw.toLong()
+            else -> null
+        }
     }
 }

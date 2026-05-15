@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- fix(script): `ZPScriptParser` — `JSONObject.optString(key, null)` gây NPE trên Android khi parse Visit script (bước thiếu `count`/`screen`/…); dùng `optString(key, "")` + helper an toàn.
 - feat(store/visit): `ZaloIDStore` học `contact_list_id` + `contact_item_id` (`ZaloUIScanner.scanContactList` trên màn Danh bạ→Bạn bè); `NodeFinder.findContactListItems` ưu tiên ID đã học, clear khi stale; script `$contactListId`/`$contactItemId` + action `logStoreIds`.
 - fix(ci): bỏ `lifecycle-compose` (`LocalLifecycleOwner`); `PermissionGate` dùng `onResume` + `permissionGateTick`. `AccessibilityHelper` dùng string intent API 33 (tránh unresolved `Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS` trên CI).
 - fix(visit/script): **crash Visit danh bạ** — script giữ `AccessibilityNodeInfo` sau `root.recycle()` → tap/verify đọc node chết → 「ZaloPilot tiếp tục dừng」→ Android tắt Trợ năng. Sửa: `ScriptTapTarget` (lưu `Rect` + viewId), `ZPEngine`/`ZPScriptRunner` không cache node; `findCommentButton` resolve like mới từ root; `visit_contacts_v1.json` v3 — `tapContactAt` tap **hàng đầu** trên màn (không dùng `$visitIndex` làm index list); cuộn danh bạ khi list rỗng / tap fail; `try/catch` quanh job Visit.
