@@ -89,7 +89,7 @@ class ZPScriptRunner @Inject constructor(
                             else -> "⚠️ Mở Zalo → Danh bạ → Bạn bè rồi để bot chạy"
                         }
                         service.showToast(hint)
-                        service.waitForZaloMainForeground(12_000L)
+                        service.ensureZaloForegroundForBot(15_000L)
                     } else {
                         delay(600)
                     }
@@ -385,6 +385,10 @@ class ZPScriptRunner @Inject constructor(
             }
             engine.back()
             delay(550)
+        }
+        if (!service.ensureZaloForegroundForBot(10_000L)) {
+            logger.log(LogTag.SCAN, "contacts", "BACK_CONTACTS_NO_ZALO")
+            return false
         }
         val root = engine.acquireRoot() ?: return false
         return try {

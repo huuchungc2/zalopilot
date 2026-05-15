@@ -121,6 +121,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
     /** Tránh dừng nhầm ngay sau GLOBAL_ACTION_BACK (transition animation). */
     private var lastGlobalBackAtElapsedMs: Long = 0L
+    /** Visit script đang chạy — cho phép tự mở lại Zalo khi lộ launcher. */
+    @Volatile
+    private var visitScriptRunning = false
     /** Vừa quét thấy feed Nhật ký — không BACK viewer trong cửa sổ này. */
     private var lastFeedUiConfirmedAtElapsedMs: Long = 0L
 
@@ -594,7 +597,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             if (isZaloForeground) {
                 // Grace period 1s sau BACK: tránh false-positive "Zalo closed" khi transition về feed.
                 val sinceBack = SystemClock.elapsedRealtime() - lastGlobalBackAtElapsedMs
-                if (lastGlobalBackAtElapsedMs > 0L && sinceBack in 0L..GLOBAL_BACK_FOREGROUND_GRACE_MS) {
+                val graceMs = foregroundGraceAfterBackMs()
+                if (lastGlobalBackAtElapsedMs > 0L && sinceBack in 0L..graceMs) {
                     logger.log(LogTag.STATE, "pkg=$pkg sinceBackMs=$sinceBack", "BACKGROUND_POLL_GRACE")
                     return
                 }
@@ -610,11 +614,25 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun foregroundGraceAfterBackMs(): Long =
+        if (visitScriptRunning) 5_000L else GLOBAL_BACK_FOREGROUND_GRACE_MS
+
     private fun applyZaloBackground(reason: String) {
-        // Grace period 1s sau GLOBAL_ACTION_BACK: tránh stop nhầm khi transition/animation làm window-state nhảy sang launcher.
         val sinceBack = SystemClock.elapsedRealtime() - lastGlobalBackAtElapsedMs
-        if (lastGlobalBackAtElapsedMs > 0L && sinceBack in 0L..GLOBAL_BACK_FOREGROUND_GRACE_MS) {
+        val graceMs = foregroundGraceAfterBackMs()
+        if (lastGlobalBackAtElapsedMs > 0L && sinceBack in 0L..graceMs) {
             logger.log(LogTag.STATE, "reason=$reason sinceBackMs=$sinceBack", "BACKGROUND_IGNORED_GRACE")
+            return
+        }
+        if (isRunning && visitScriptRunning) {
+            logger.log(LogTag.STATE, "reason=$reason", "VISIT_TRY_REOPEN_ZALO")
+            updateStatus("↩ Mở lại Zalo…")
+            scope.launch {
+                if (ensureZaloForegroundForBot(18_000L)) {
+                    updateStatus("👤 Visit — tiếp tục")
+                    applyKeepScreenOnToStatusOverlayIfNeeded()
+                }
+            }
             return
         }
         isZaloForeground = false
@@ -878,6 +896,21 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun visitScriptLoop(testOneRound: Boolean = false) {
+        visitScriptRunning = true
+        try {
+            visitScriptLoopInner(testOneRound)
+        } finally {
+            visitScriptRunning = false
+        }
+    }
+
+    private suspend fun visitScriptLoopInner(testOneRound: Boolean = false) {
+        if (!ensureZaloForegroundForBot(12_000L)) {
+            updateStatus("⚠️ Không mở được Zalo")
+            showToast("⚠️ Mở Zalo thủ công → Danh bạ → Bạn bè")
+            stopAutoLike("không mở Zalo")
+            return
+        }
         val json = scriptStore.loadActiveScript()
         if (json == null) {
             updateStatus("⚠️ Chưa có script Visit")
@@ -910,8 +943,34 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         return isZaloMainAppPackage(pkg)
     }
 
+    fun launchZaloMain(): Boolean {
+        val launch = packageManager.getLaunchIntentForPackage("com.zing.zalo") ?: return false
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return try {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                startActivity(launch)
+            } else {
+                mainHandler.post { startActivity(launch) }
+            }
+            logger.log(LogTag.STATE, "zalo", "LAUNCH_ZALO")
+            true
+        } catch (e: Exception) {
+            logger.log(LogTag.ERROR, e.message ?: "launch", "LAUNCH_ZALO_FAIL")
+            false
+        }
+    }
+
+    suspend fun ensureZaloForegroundForBot(timeoutMs: Long = 15_000L): Boolean {
+        if (isZaloMainForeground()) return true
+        launchZaloMain()
+        delay(900)
+        return waitForZaloMainForeground(timeoutMs)
+    }
+
     suspend fun waitForZaloMainForeground(timeoutMs: Long = 12_000L): Boolean {
         if (isZaloMainForeground()) return true
+        launchZaloMain()
+        delay(700)
         val deadline = System.currentTimeMillis() + timeoutMs
         while (isRunning && System.currentTimeMillis() < deadline) {
             delay(400)
@@ -1035,6 +1094,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
         if (!isZaloForeground) {
                 if (settingsManager.isPauseWhenZaloAway()) {
+                    if (settingsManager.getLikeMode() == LikeMode.VISIT || visitScriptRunning) {
+                        updateStatus("↩ Mở lại Zalo…")
+                        ensureZaloForegroundForBot(15_000L)
+                        continue@mainLoop
+                    }
                     updateStatus("⏸ Đã rời Zalo — chờ mở lại")
                     logger.log(LogTag.STATE, "autoLike", "ZALO_AWAY_PAUSED")
                     delay(8_000L)
