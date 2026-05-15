@@ -281,7 +281,7 @@ enum class ScrollDirection { UP, DOWN }
 
 Script hoàn chỉnh cho Visit Mode theo cấu trúc TASK 7. Đây là script mặc định — khi có bug chỉ cần sửa file JSON này, không build lại APK.
 
-> **Trạng thái (2026-05):** `version: 3` — `tapContactAt` tap **hàng bạn đầu tiên** trên màn (không dùng `$visitIndex` làm index list). `$visitIndex` chỉ đếm profile đã visit (`incrementVar`/`saveVar`). Engine dùng `ScriptTapTarget` (Rect) — **không** cache `AccessibilityNodeInfo` sau recycle (tránh crash → Android tắt Trợ năng). Action `scrollContacts` khi list rỗng / tap fail.
+> **Trạng thái (2026-05):** `version: 3` — `tapContactAt` tap **hàng bạn đầu tiên** trên màn (không dùng `$visitIndex` làm index list). `$visitIndex` chỉ đếm profile đã visit (`incrementVar`/`saveVar`). Engine dùng `ScriptTapTarget` (Rect) — **không** cache `AccessibilityNodeInfo` sau recycle (tránh crash → Android tắt Trợ năng). Action `scrollContacts` khi list rỗng / tap fail. **ZaloIDStore** học `contact_list_id` / `contact_item_id` khi ở Danh bạ→Bạn bè; script vars `$contactListId`, `$contactItemId`; debug `logStoreIds`.
 
 **Thêm vào `NodeFinder.kt` — các action node cần thiết cho script:**
 

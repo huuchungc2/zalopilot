@@ -920,25 +920,23 @@ class NodeFinder @Inject constructor(
         return null
     }
 
-    /** Hàng danh bạ / bạn bè — ưu tiên con RecyclerView, lọc preview hội thoại. */
+    /** Hàng danh bạ / bạn bè — ưu tiên ID đã học ([ZaloIDStore]), rồi RecyclerView/heuristic. */
     fun findContactListItems(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
         val rootRect = Rect().also { root.getBoundsInScreen(it) }
         val tabBottom = findByViewId(root, "layoutTab").firstOrNull()?.let { tab ->
             Rect().also { tab.getBoundsInScreen(it) }.bottom
         } ?: (rootRect.top + rootRect.height() / 7)
         val navTop = rootRect.top + (rootRect.height() * 0.86f).toInt()
+        val skipPhrases = contactSkipPhrases()
+
+        findContactItemsFromStore(root, tabBottom, navTop, skipPhrases)?.let { return it }
 
         val fromRecycler = mutableListOf<AccessibilityNodeInfo>()
-        collectRecyclerRowItems(root, tabBottom, navTop, fromRecycler)
+        collectRecyclerRowItems(root, tabBottom, navTop, fromRecycler, skipPhrases)
         if (fromRecycler.isNotEmpty()) {
             return fromRecycler.distinctBy { contactRowKey(it) }
         }
 
-        val skipPhrases = listOf(
-            "friend request", "lời mời kết bạn",
-            "birthday", "sinh nhật", "contacts", "danh bạ", "tất cả", "all",
-            "bạn bè", "friends", "nhóm", "groups", "oa", "tìm kiếm", "search"
-        )
         val out = mutableListOf<AccessibilityNodeInfo>()
         val stack = ArrayDeque<AccessibilityNodeInfo>()
         stack.addLast(root)
@@ -1043,17 +1041,69 @@ class NodeFinder @Inject constructor(
     fun hasViewId(root: AccessibilityNodeInfo, idSuffix: String): Boolean =
         findByViewId(root, idSuffix).isNotEmpty()
 
+    private fun findContactItemsFromStore(
+        root: AccessibilityNodeInfo,
+        tabBottom: Int,
+        navTop: Int,
+        skipPhrases: List<String>
+    ): List<AccessibilityNodeInfo>? {
+        val listId = idStore.getContactListID()
+        if (!listId.isNullOrBlank()) {
+            val recyclers = root.findAccessibilityNodeInfosByViewId(listId) ?: emptyList()
+            if (recyclers.isEmpty()) {
+                idStore.clearContactListID()
+            } else {
+                val out = mutableListOf<AccessibilityNodeInfo>()
+                for (rv in recyclers) {
+                    collectContactRowsFromRecycler(rv, tabBottom, navTop, skipPhrases, out)
+                }
+                val sorted = out.distinctBy { contactRowKey(it) }
+                    .sortedBy { Rect().also { r -> it.getBoundsInScreen(r) }.top }
+                if (sorted.isNotEmpty()) return sorted
+            }
+        }
+        val itemId = idStore.getContactItemID()
+        if (!itemId.isNullOrBlank()) {
+            val rows = (root.findAccessibilityNodeInfosByViewId(itemId) ?: emptyList())
+                .filter { isContactRowCandidate(it, tabBottom, navTop, skipPhrases) }
+            if (rows.isEmpty()) {
+                idStore.clearContactItemID()
+            } else {
+                return rows.distinctBy { contactRowKey(it) }
+                    .sortedBy { Rect().also { r -> it.getBoundsInScreen(r) }.top }
+            }
+        }
+        return null
+    }
+
+    private fun contactSkipPhrases(): List<String> = listOf(
+        "friend request", "lời mời kết bạn",
+        "birthday", "sinh nhật", "contacts", "danh bạ", "tất cả", "all",
+        "bạn bè", "friends", "nhóm", "groups", "oa", "tìm kiếm", "search"
+    )
+
+    private fun collectContactRowsFromRecycler(
+        recycler: AccessibilityNodeInfo,
+        tabBottom: Int,
+        navTop: Int,
+        skipPhrases: List<String>,
+        out: MutableList<AccessibilityNodeInfo>
+    ) {
+        for (i in 0 until recycler.childCount) {
+            val child = recycler.getChild(i) ?: continue
+            if (isContactRowCandidate(child, tabBottom, navTop, skipPhrases)) {
+                out.add(child)
+            }
+        }
+    }
+
     private fun collectRecyclerRowItems(
         root: AccessibilityNodeInfo,
         tabBottom: Int,
         navTop: Int,
-        out: MutableList<AccessibilityNodeInfo>
+        out: MutableList<AccessibilityNodeInfo>,
+        skipPhrases: List<String>
     ) {
-        val skipPhrases = listOf(
-            "friend request", "lời mời kết bạn",
-            "birthday", "sinh nhật", "contacts", "danh bạ", "tất cả", "all",
-            "bạn bè", "friends", "nhóm", "groups", "oa", "tìm kiếm", "search"
-        )
         val stack = ArrayDeque<AccessibilityNodeInfo>()
         stack.addLast(root)
         var visited = 0
@@ -1062,12 +1112,7 @@ class NodeFinder @Inject constructor(
             visited++
             val cls = n.className?.toString().orEmpty()
             if (cls.contains("RecyclerView", ignoreCase = true)) {
-                for (i in 0 until n.childCount) {
-                    val child = n.getChild(i) ?: continue
-                    if (isContactRowCandidate(child, tabBottom, navTop, skipPhrases)) {
-                        out.add(child)
-                    }
-                }
+                collectContactRowsFromRecycler(n, tabBottom, navTop, skipPhrases, out)
             }
             for (i in 0 until n.childCount) {
                 n.getChild(i)?.let { stack.addLast(it) }

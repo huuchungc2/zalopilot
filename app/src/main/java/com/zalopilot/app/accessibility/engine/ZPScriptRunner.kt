@@ -2,6 +2,7 @@ package com.zalopilot.app.accessibility.engine
 
 import com.zalopilot.app.accessibility.NodeFinder
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
+import com.zalopilot.app.data.model.ZaloIDStore
 import com.zalopilot.app.util.LikeProgressManager
 import com.zalopilot.app.util.LikeSettingsManager
 import com.zalopilot.app.util.LogTag
@@ -14,6 +15,7 @@ import org.json.JSONObject
 @Singleton
 class ZPScriptRunner @Inject constructor(
     private val nodeFinder: NodeFinder,
+    private val idStore: ZaloIDStore,
     private val settingsManager: LikeSettingsManager,
     private val progressManager: LikeProgressManager,
     private val logger: Logger
@@ -26,7 +28,7 @@ class ZPScriptRunner @Inject constructor(
         testOneRound: Boolean = false,
         maxProfiles: Int? = null
     ): Boolean {
-        val engine = ZPEngine(service, nodeFinder, settingsManager, progressManager, logger)
+        val engine = ZPEngine(service, nodeFinder, idStore, settingsManager, progressManager, logger)
         gotoCount = 0
         val profilesLimit = maxProfiles ?: settingsManager.getVisitMaxProfiles()
         var profilesDone = 0
@@ -121,6 +123,15 @@ class ZPScriptRunner @Inject constructor(
             "scrollcontacts" -> {
                 engine.scrollContacts()
                 delay(650)
+                true
+            }
+            "logstoreids" -> {
+                logger.log(
+                    LogTag.STATE,
+                    "like=${idStore.getLikeButtonID()} feedRv=${idStore.getFeedRecyclerID()} " +
+                        "contacts=${idStore.getContactListID()} item=${idStore.getContactItemID()}",
+                    "STORE_IDS"
+                )
                 true
             }
             "tapcontactat" -> runTapContactAt(engine, step)

@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- feat(store/visit): `ZaloIDStore` học `contact_list_id` + `contact_item_id` (`ZaloUIScanner.scanContactList` trên màn Danh bạ→Bạn bè); `NodeFinder.findContactListItems` ưu tiên ID đã học, clear khi stale; script `$contactListId`/`$contactItemId` + action `logStoreIds`.
 - fix(ci): bỏ `lifecycle-compose` (`LocalLifecycleOwner`); `PermissionGate` dùng `onResume` + `permissionGateTick`. `AccessibilityHelper` dùng string intent API 33 (tránh unresolved `Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS` trên CI).
 - fix(visit/script): **crash Visit danh bạ** — script giữ `AccessibilityNodeInfo` sau `root.recycle()` → tap/verify đọc node chết → 「ZaloPilot tiếp tục dừng」→ Android tắt Trợ năng. Sửa: `ScriptTapTarget` (lưu `Rect` + viewId), `ZPEngine`/`ZPScriptRunner` không cache node; `findCommentButton` resolve like mới từ root; `visit_contacts_v1.json` v3 — `tapContactAt` tap **hàng đầu** trên màn (không dùng `$visitIndex` làm index list); cuộn danh bạ khi list rỗng / tap fail; `try/catch` quanh job Visit.
 - fix(ui/accessibility): **mất Trợ năng sau crash** — `PermissionGate` kiểm tra lại mỗi `ON_RESUME` (không chỉ lần cài đầu); mất Trợ năng/overlay → quay `SetupWizard` bước tương ứng + toast giải thích; Setup bước 1 dùng `AccessibilityHelper.openAccessibilitySettings` (Android 13+ mở thẳng trang ZaloPilot); nút **Thông tin ứng dụng** (cài đặt hạn chế Samsung); thẻ cam Trang chủ **Mở cài đặt Trợ năng**; `AccessibilityHelper` + broadcast `ACTION_START_AUTO_LIKE` khi `instance == null` nhưng Trợ năng vẫn bật.

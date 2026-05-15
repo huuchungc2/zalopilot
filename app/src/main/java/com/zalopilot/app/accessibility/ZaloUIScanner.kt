@@ -59,6 +59,7 @@ class ZaloUIScanner @Inject constructor(
             foundAny = scanTabTimeline(root) || foundAny
             foundAny = scanAuthorName(root) || foundAny
             foundAny = scanFeedRecycler(root) || foundAny
+            foundAny = scanContactList(root) || foundAny
 
             if (foundAny) {
                 scanCount++
@@ -363,5 +364,158 @@ class ZaloUIScanner @Inject constructor(
             if (found != null) return found
         }
         return null
+    }
+
+    /** Danh bạ → Bạn bè: học RecyclerView danh sách + id hàng bạn (cho Visit script). */
+    private fun scanContactList(root: AccessibilityNodeInfo): Boolean {
+        if (!looksLikeContactListScreen(root)) return false
+        val env = scanEnvFromRoot(root)
+        val recycler = findContactsRecyclerView(root, env) ?: return false
+        if (shouldRejectScanNode(recycler, env)) return false
+        val listId = recycler.viewIdResourceName ?: return false
+        if (!listId.startsWith("com.zing.zalo:id/")) return false
+
+        var savedAny = false
+        val currentList = idStore.getContactListID()
+        if (currentList != listId) {
+            idStore.saveContactListID(listId)
+            logger.log(LogTag.SCAN, "contact_list = $listId", "ID_SAVED")
+            savedAny = true
+        }
+
+        val rootRect = Rect().also { root.getBoundsInScreen(it) }
+        val tabBottom = rootRect.top + (rootRect.height() / 7)
+        val navTop = rootRect.top + (rootRect.height() * 0.86f).toInt()
+        val itemIdCounts = LinkedHashMap<String, Int>()
+        for (i in 0 until recycler.childCount) {
+            val child = recycler.getChild(i) ?: continue
+            val row = pickContactRowNode(child, tabBottom, navTop) ?: continue
+            val rowId = row.viewIdResourceName ?: continue
+            if (!rowId.startsWith("com.zing.zalo:id/")) continue
+            itemIdCounts[rowId] = (itemIdCounts[rowId] ?: 0) + 1
+        }
+        val bestItemId = itemIdCounts.maxByOrNull { it.value }?.key
+        if (bestItemId != null) {
+            val currentItem = idStore.getContactItemID()
+            if (currentItem != bestItemId) {
+                idStore.saveContactItemID(bestItemId)
+                logger.log(LogTag.SCAN, "contact_item = $bestItemId", "ID_SAVED")
+                savedAny = true
+            }
+        }
+        return savedAny || currentList == listId
+    }
+
+    private fun looksLikeContactListScreen(root: AccessibilityNodeInfo): Boolean {
+        if (hasViewIdSuffix(root, "main_chat_view")) return false
+        val onContacts = hasViewIdSuffix(root, "maintab_contact") ||
+            containsTextOrDesc(root, "Danh bạ", 800) ||
+            containsTextOrDesc(root, "Contacts", 800)
+        val hasFriends = containsTextOrDesc(root, "Bạn bè", 800) ||
+            containsTextOrDesc(root, "Friends", 800)
+        return onContacts && hasFriends
+    }
+
+    private fun findContactsRecyclerView(
+        root: AccessibilityNodeInfo,
+        env: ScanEnv
+    ): AccessibilityNodeInfo? {
+        val rootRect = Rect().also { root.getBoundsInScreen(it) }
+        val minY = rootRect.top + (rootRect.height() * 0.12f).toInt()
+        val maxY = rootRect.top + (rootRect.height() * 0.88f).toInt()
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        var best: AccessibilityNodeInfo? = null
+        var bestArea = 0
+        while (stack.isNotEmpty() && visited < 2200) {
+            val n = stack.removeLast()
+            visited++
+            val cls = n.className?.toString().orEmpty()
+            if (cls.contains("RecyclerView", ignoreCase = true)) {
+                if (!shouldRejectScanNode(n, env)) {
+                    val r = Rect().also { n.getBoundsInScreen(it) }
+                    val cy = r.centerY()
+                    val area = (r.width().coerceAtLeast(0) * r.height().coerceAtLeast(0))
+                    if (cy in minY..maxY && area > bestArea && !n.viewIdResourceName.isNullOrBlank()) {
+                        bestArea = area
+                        best = n
+                    }
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return best
+    }
+
+    private fun pickContactRowNode(
+        node: AccessibilityNodeInfo,
+        tabBottom: Int,
+        navTop: Int
+    ): AccessibilityNodeInfo? {
+        if (isContactRowForScan(node, tabBottom, navTop)) {
+            return if (node.isClickable) node else findClickableDescendant(node, 4)
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            pickContactRowNode(child, tabBottom, navTop)?.let { return it }
+        }
+        return null
+    }
+
+    private fun isContactRowForScan(
+        n: AccessibilityNodeInfo,
+        tabBottom: Int,
+        navTop: Int
+    ): Boolean {
+        if (!n.hasValidScreenBounds()) return false
+        val r = Rect().also { n.getBoundsInScreen(it) }
+        if (r.height() !in 80..340 || r.width() < 180) return false
+        if (r.centerY() < tabBottom || r.centerY() > navTop) return false
+        val label = (n.text?.toString() ?: n.contentDescription?.toString()).orEmpty().trim()
+        if (label.length !in 2..120) return false
+        val low = label.lowercase()
+        val skip = listOf(
+            "friend request", "lời mời", "birthday", "sinh nhật",
+            "tất cả", "all ", "bạn bè", "friends", "nhóm", "tìm kiếm", "search"
+        )
+        if (skip.any { low.contains(it) }) return false
+        return true
+    }
+
+    private fun findClickableDescendant(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
+        if (node.isClickable && node.hasValidScreenBounds()) return node
+        if (depth <= 0) return null
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            findClickableDescendant(child, depth - 1)?.let { return it }
+        }
+        return null
+    }
+
+    private fun hasViewIdSuffix(root: AccessibilityNodeInfo, suffix: String): Boolean {
+        val fullId = "com.zing.zalo:id/$suffix"
+        return !(root.findAccessibilityNodeInfosByViewId(fullId).isNullOrEmpty())
+    }
+
+    private fun containsTextOrDesc(root: AccessibilityNodeInfo, needle: String, maxNodes: Int): Boolean {
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < maxNodes) {
+            val n = stack.removeLast()
+            visited++
+            val hay = listOf(n.text, n.contentDescription)
+                .mapNotNull { it?.toString()?.trim() }
+                .filter { it.isNotEmpty() }
+                .joinToString(" ")
+            if (hay.contains(needle, ignoreCase = true)) return true
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return false
     }
 }

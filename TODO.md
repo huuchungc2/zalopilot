@@ -90,6 +90,7 @@
 - [x] UI toggle Feed/Visit + VISIT sliders; `setLikeMode` lưu ngay khi đổi radio
 - [x] Fix crash Visit (recycle node) + cuộn danh bạ khi list rỗng
 - [ ] Test ổn định Visit trên máy thật (Samsung) — không crash, không mất Trợ năng
+- [x] ZaloIDStore học `contact_list_id` / `contact_item_id` + NodeFinder/script vars
 - [ ] Visit: cuộn danh bạ có chủ đích sau mỗi profile (hiện chủ yếu tap hàng đầu + scroll khi fail)
 - [ ] `$visitIndex` = số profile đã xử lý (prefs), không phải index RecyclerView — cần verify flow 2700+ bạn
 

@@ -11,6 +11,10 @@ import javax.inject.Singleton
  * Lưu trữ resource-id thực tế của Zalo UI elements.
  * App tự học từ UI Zalo → lưu vào đây → dùng lại.
  * Zalo update đổi ID → ZaloUIScanner tìm lại → lưu đè.
+ *
+ * Script DSL (`ZPEngine.resolveVar`): `$contactListId`, `$contactItemId`,
+ * `$likeButtonId`, `$feedRecyclerId` (chuỗi id đầy đủ hoặc rỗng nếu chưa học).
+ * Action `logStoreIds` ghi các id đã học ra log (debug script).
  */
 @Singleton
 class ZaloIDStore @Inject constructor(
@@ -55,6 +59,8 @@ class ZaloIDStore @Inject constructor(
     fun getTabTimelineID(): String? = getID(KEY_TAB_TIMELINE)
     fun getFeedRecyclerID(): String? = getID(KEY_FEED_RECYCLER)
     fun getAuthorNameID(): String? = getID(KEY_AUTHOR_NAME)
+    fun getContactListID(): String? = getID(KEY_CONTACT_LIST)
+    fun getContactItemID(): String? = getID(KEY_CONTACT_ITEM)
 
     fun saveLikeButtonID(id: String) = saveID(KEY_LIKE_BUTTON, id)
 
@@ -64,8 +70,20 @@ class ZaloIDStore @Inject constructor(
     fun saveTabTimelineID(id: String) = saveID(KEY_TAB_TIMELINE, id)
     fun saveFeedRecyclerID(id: String) = saveID(KEY_FEED_RECYCLER, id)
     fun saveAuthorNameID(id: String) = saveID(KEY_AUTHOR_NAME, id)
+    fun saveContactListID(id: String) = saveID(KEY_CONTACT_LIST, id)
+    fun saveContactItemID(id: String) = saveID(KEY_CONTACT_ITEM, id)
+
+    fun clearContactListID() {
+        prefs.edit().remove(KEY_CONTACT_LIST).apply()
+    }
+
+    fun clearContactItemID() {
+        prefs.edit().remove(KEY_CONTACT_ITEM).apply()
+    }
 
     fun hasScanned(): Boolean = getLikeButtonID() != null
+
+    fun hasVisitContactIds(): Boolean = getContactListID() != null
 
     fun clearAll() = prefs.edit().clear().apply()
 

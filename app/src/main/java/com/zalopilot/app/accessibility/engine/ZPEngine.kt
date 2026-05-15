@@ -4,6 +4,7 @@ import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 import com.zalopilot.app.accessibility.NodeFinder
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
+import com.zalopilot.app.data.model.ZaloIDStore
 import com.zalopilot.app.util.LikeProgressManager
 import com.zalopilot.app.util.LikeSettingsManager
 import com.zalopilot.app.util.LogTag
@@ -16,6 +17,7 @@ enum class ScrollDirection { UP, DOWN }
 class ZPEngine(
     private val service: ZaloPilotAccessibilityService,
     private val nodeFinder: NodeFinder,
+    private val idStore: ZaloIDStore,
     private val settingsManager: LikeSettingsManager,
     private val progressManager: LikeProgressManager,
     private val logger: Logger
@@ -164,6 +166,10 @@ class ZPEngine(
                 "visitIndex" -> progressManager.getVisitIndex()
                 "visitLikeCount" -> settingsManager.getVisitLikeCount()
                 "visitCommentCount" -> settingsManager.getVisitCommentCount()
+                "contactlistid", "contact_list_id" -> idStore.getContactListID().orEmpty()
+                "contactitemid", "contact_item_id" -> idStore.getContactItemID().orEmpty()
+                "likebuttonid", "like_button_id" -> idStore.getLikeButtonID().orEmpty()
+                "feedrecyclerid", "feed_recycler_id" -> idStore.getFeedRecyclerID().orEmpty()
                 else -> raw.removePrefix("$").toIntOrNull() ?: 0
             }
         }
