@@ -859,7 +859,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 wakeLock?.acquire(10 * 60 * 60 * 1000L)
 
                 sendInternalBroadcast(Intent("com.zalopilot.STATUS_UPDATE").putExtra("running", true))
-                val modeLabel = if (settingsManager.getLikeMode() == LikeMode.VISIT) "Visit" else "Feed"
                 logger.log(LogTag.STATE, "mode=$modeLabel pkg=$pkg", "STARTED")
                 showToast("▶ Bắt đầu $modeLabel")
                 showStatusOverlay("▶ Đang khởi động...")
@@ -981,7 +980,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 delayRangeMs = 120L..300L,
                 logTag = LogTag.STATE,
                 quietLog = true
-            ) ?: continue
+            )
+            if (root == null) return@repeat
             try {
                 if (visit) {
                     if (nodeFinder.isContactListScreen(root)) {

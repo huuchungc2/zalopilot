@@ -237,7 +237,7 @@ class ZPScriptRunner @Inject constructor(
                 }
             }
             "back" -> engine.back()
-            "backtocontacts" -> runBackToContactList(engine)
+            "backtocontacts" -> runBackToContactList(service, engine)
             "wait" -> {
                 delay(step.ms ?: 500L)
                 true
@@ -371,16 +371,20 @@ class ZPScriptRunner @Inject constructor(
     }
 
     /** Back từ profile/chat tới Danh bạ — tránh back thừa ra launcher. */
-    private suspend fun runBackToContactList(engine: ZPEngine): Boolean {
-        repeat(5) {
-            val root = engine.acquireRoot() ?: break
+    private suspend fun runBackToContactList(
+        service: ZaloPilotAccessibilityService,
+        engine: ZPEngine
+    ): Boolean {
+        for (attempt in 0 until 5) {
+            val root = engine.acquireRoot()
+            if (root == null) break
             val onList = try {
                 nodeFinder.isContactListScreen(root)
             } finally {
                 runCatching { root.recycle() }
             }
             if (onList) {
-                logger.log(LogTag.STATE, "attempt=$it", "BACK_ON_CONTACTS")
+                logger.log(LogTag.STATE, "attempt=$attempt", "BACK_ON_CONTACTS")
                 return true
             }
             engine.back()
