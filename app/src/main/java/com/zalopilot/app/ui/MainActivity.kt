@@ -461,7 +461,7 @@ class MainActivity : ComponentActivity() {
                                 color = Color.White.copy(alpha = 0.9f),
                                 fontSize = 13.sp
                             )
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(10.dp))
                             Button(
                                 onClick = { AccessibilityHelper.requestStopAutoLike() },
                                 modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -472,7 +472,7 @@ class MainActivity : ComponentActivity() {
                             }
                         } else {
                             Text(
-                                "Bấm là mở Zalo đúng tab và chạy luôn",
+                                "Chạm để like — tham số trong tab Cài đặt",
                                 color = Color.White.copy(alpha = 0.85f),
                                 fontSize = 12.sp
                             )
@@ -831,11 +831,10 @@ class MainActivity : ComponentActivity() {
                     Column(Modifier.padding(16.dp)) {
                         Text("LIKE DANH BẠ (VISIT)", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
                         Text(
-                            "Bấm ▶ Danh bạ ở Trang chủ để chạy — không chọn chế độ ở đây",
+                            "Bấm Like danh bạ ở Trang chủ để chạy — chỉnh số liệu bên dưới",
                             fontSize = 12.sp,
                             color = Color.Gray
                         )
-                        Spacer(Modifier.height(8.dp))
                         Spacer(Modifier.height(8.dp))
                         Text("Like mỗi profile: $visitLikeCount", fontSize = 13.sp)
                         Slider(
