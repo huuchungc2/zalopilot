@@ -1368,6 +1368,40 @@ class NodeFinder @Inject constructor(
         return findFirstNodeWithTextOrDesc(root, ZaloIDStore.TEXT_TIMELINE, maxNodes = 2000)
     }
 
+    fun resolveClickableTapTarget(node: AccessibilityNodeInfo): AccessibilityNodeInfo? =
+        findClickableAncestor(node) ?: node.takeIf { it.isClickable && it.hasValidScreenBounds() }
+
+    /** Tab Nhật ký dưới cùng — null nếu đã chọn. */
+    fun findTimelineTabTapTarget(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val tab = findTimelineTab(root) ?: return null
+        if (tab.isSelected || tab.isChecked) return null
+        return resolveClickableTapTarget(tab)
+    }
+
+    /** Tab Danh bạ (bottom nav) — null nếu đã ở Danh bạ. */
+    fun findContactMainTabTapTarget(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        findByViewId(root, "maintab_contact").forEach { tab ->
+            if (tab.isSelected || tab.isChecked) return null
+            resolveClickableTapTarget(tab)?.let { return it }
+        }
+        findClickableWithPhrase(root, "danh bạ")?.let { return it }
+        findClickableWithPhrase(root, "contacts")?.let { return it }
+        return null
+    }
+
+    /** Sub-tab Bạn bè trên màn Danh bạ. */
+    fun findFriendsSubTabTapTarget(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val tabs = findByViewId(root, "tv_friends")
+        val pick = tabs.filter { !it.isSelected && !it.isChecked }.ifEmpty { tabs }
+        for (node in pick) {
+            resolveClickableTapTarget(node)?.let { return it }
+        }
+        if (tabs.any { it.isSelected || it.isChecked }) return null
+        findClickableWithPhrase(root, "bạn bè")?.let { return it }
+        findClickableWithPhrase(root, "friends")?.let { return it }
+        return null
+    }
+
     private fun screenContainsTextOrDesc(
         root: AccessibilityNodeInfo,
         needle: String,

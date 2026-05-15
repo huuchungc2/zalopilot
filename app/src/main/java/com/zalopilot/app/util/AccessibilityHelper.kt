@@ -71,9 +71,9 @@ object AccessibilityHelper {
     /**
      * @return true nếu đã gọi start hoặc đã gửi broadcast chờ service nhận.
      */
-    fun requestStartAutoLike(context: Context): Boolean {
+    fun requestStartAutoLike(context: Context, mode: LikeMode? = null): Boolean {
         ZaloPilotAccessibilityService.instance?.let {
-            it.startAutoLike()
+            it.startAutoLike(mode)
             return true
         }
         if (!isAccessibilityEnabled(context)) {
@@ -85,14 +85,14 @@ object AccessibilityHelper {
             openAccessibilitySettings(context)
             return false
         }
-        context.sendBroadcast(
-            Intent(ZaloPilotAccessibilityService.ACTION_START_AUTO_LIKE)
-                .setPackage(context.packageName)
-        )
+        val broadcast = Intent(ZaloPilotAccessibilityService.ACTION_START_AUTO_LIKE)
+            .setPackage(context.packageName)
+        mode?.let { broadcast.putExtra(ZaloPilotAccessibilityService.EXTRA_LIKE_MODE, it.name) }
+        context.sendBroadcast(broadcast)
         Handler(Looper.getMainLooper()).postDelayed({
             val svc = ZaloPilotAccessibilityService.instance
             if (svc != null) {
-                svc.startAutoLike()
+                svc.startAutoLike(mode)
             } else {
                 Toast.makeText(
                     context,

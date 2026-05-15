@@ -451,27 +451,68 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         Spacer(Modifier.height(14.dp))
-                        // Nút chính: BẮT ĐẦU / DỪNG — to, dễ thấy, ngay trang chủ.
-                        Button(
-                            onClick = {
-                                if (isRunning) {
-                                    AccessibilityHelper.requestStopAutoLike()
-                                } else {
-                                    AccessibilityHelper.requestStartAutoLike(this@MainActivity)
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth().height(52.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isRunning) Color(0xFFE24B4A) else Color(0xFF27AE60)
-                            ),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
+                        val runningMode = remember(settings.likeModeStr) {
+                            runCatching { LikeMode.valueOf(settings.likeModeStr) }
+                                .getOrDefault(LikeMode.FEED)
+                        }
+                        if (isRunning) {
                             Text(
-                                if (isRunning) "■  DỪNG" else "▶  BẮT ĐẦU",
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.W600
+                                "Đang chạy: ${if (runningMode == LikeMode.VISIT) "Like danh bạ" else "Like Nhật ký"}",
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 13.sp
                             )
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = { AccessibilityHelper.requestStopAutoLike() },
+                                modifier = Modifier.fillMaxWidth().height(52.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE24B4A)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("■  DỪNG", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.W600)
+                            }
+                        } else {
+                            Text(
+                                "Chọn loại like — app tự mở Zalo đúng tab",
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontSize = 12.sp
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Button(
+                                    onClick = {
+                                        settingsManager.setLikeMode(LikeMode.FEED)
+                                        AccessibilityHelper.requestStartAutoLike(this@MainActivity, LikeMode.FEED)
+                                    },
+                                    modifier = Modifier.weight(1f).height(52.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF27AE60)),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text(
+                                        "▶ Nhật ký",
+                                        color = Color.White,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.W600,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                                Button(
+                                    onClick = {
+                                        settingsManager.setLikeMode(LikeMode.VISIT)
+                                        AccessibilityHelper.requestStartAutoLike(this@MainActivity, LikeMode.VISIT)
+                                    },
+                                    modifier = Modifier.weight(1f).height(52.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8E44AD)),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text(
+                                        "▶ Danh bạ",
+                                        color = Color.White,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.W600,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
                         }
                         Spacer(Modifier.height(10.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -554,12 +595,16 @@ class MainActivity : ComponentActivity() {
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
-                        Text("CHẾ ĐỘ CHẠY", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                        Text("TỰ CHẠY", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
                         Spacer(Modifier.height(8.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Column {
-                                Text(if (settingsManager.isAutoStart()) "🤖 Tự động" else "👆 Thủ công", fontSize = 14.sp, fontWeight = FontWeight.W500)
-                                Text(if (settingsManager.isAutoStart()) "Zalo mở là tự chạy" else "Bấm Start trên nút ZP", fontSize = 12.sp, color = Color.Gray)
+                            Column(Modifier.weight(1f)) {
+                                Text(if (settingsManager.isAutoStart()) "🤖 Bật" else "👆 Tắt", fontSize = 14.sp, fontWeight = FontWeight.W500)
+                                Text(
+                                    "Khi bật: mở Zalo sẽ chạy theo lần chọn Nhật ký/Danh bạ gần nhất",
+                                    fontSize = 12.sp,
+                                    color = Color.Gray
+                                )
                             }
                             Switch(checked = settingsManager.isAutoStart(),
                                 onCheckedChange = { settingsManager.setAutoStart(it) },
@@ -603,7 +648,6 @@ class MainActivity : ComponentActivity() {
         var lowBatteryPauseEnabled by remember { mutableStateOf(settings.lowBatteryPauseEnabled) }
         var lowBatteryThreshold by remember { mutableIntStateOf(settings.lowBatteryThreshold) }
         var pauseWhenZaloAway by remember { mutableStateOf(settings.pauseWhenZaloAway) }
-        var likeMode by remember { mutableStateOf(settingsManager.getLikeMode()) }
         var visitLikeCount by remember { mutableIntStateOf(settings.visitLikeCount) }
         var visitCommentCount by remember { mutableIntStateOf(settings.visitCommentCount) }
         var visitMaxProfiles by remember { mutableIntStateOf(settings.visitMaxProfiles) }
@@ -785,31 +829,13 @@ class MainActivity : ComponentActivity() {
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
-                        Text("CHẾ ĐỘ BOT", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                        Text("LIKE DANH BẠ (VISIT)", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                        Text(
+                            "Bấm ▶ Danh bạ ở Trang chủ để chạy — không chọn chế độ ở đây",
+                            fontSize = 12.sp,
+                            color = Color.Gray
+                        )
                         Spacer(Modifier.height(8.dp))
-                        listOf(LikeMode.FEED to "Feed Nhật ký", LikeMode.VISIT to "Visit danh bạ").forEach { (mode, label) ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = likeMode == mode,
-                                    onClick = {
-                                        likeMode = mode
-                                        settingsManager.setLikeMode(mode)
-                                    },
-                                    colors = RadioButtonDefaults.colors(selectedColor = zaloBlue)
-                                )
-                                Text(label, fontSize = 13.sp)
-                            }
-                        }
-                    }
-                }
-            }
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("VISIT MODE", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
                         Spacer(Modifier.height(8.dp))
                         Text("Like mỗi profile: $visitLikeCount", fontSize = 13.sp)
                         Slider(
@@ -955,7 +981,7 @@ class MainActivity : ComponentActivity() {
                         lowBatteryPauseEnabled = lowBatteryPauseEnabled,
                         lowBatteryThreshold = lowBatteryThreshold,
                         pauseWhenZaloAway = pauseWhenZaloAway,
-                        likeModeStr = likeMode.name,
+                        likeModeStr = settingsManager.getLikeMode().name,
                         visitLikeCount = visitLikeCount,
                         visitCommentCount = visitCommentCount,
                         visitMaxProfiles = visitMaxProfiles,
