@@ -463,7 +463,7 @@ class MainActivity : ComponentActivity() {
                             )
                             Spacer(Modifier.height(10.dp))
                             Button(
-                                onClick = { AccessibilityHelper.requestStopAutoLike() },
+                                onClick = { AccessibilityHelper.requestStopAutoLike(context) },
                                 modifier = Modifier.fillMaxWidth().height(52.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE24B4A)),
                                 shape = RoundedCornerShape(12.dp)

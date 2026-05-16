@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- fix(feed): like Nhật ký theo SPEC — skip khi đã có ô bình luận; xác nhận like bằng ô bình luận sau tap (re-tap nếu unlike); không tăng counter khi chưa xác nhận; COMMENT_ONLY neo `feedItemFooterBarModule`.
+- fix(feed/comment): MIX/COMMENT_ONLY — chỉ báo «Đã gửi comment» khi `sent=true`; `runFeedCommentsAfterLike` trả `Boolean`.
+- fix(stop): DỪNG không còn tự chạy lại — `startAutoLike` từ poll không xóa cờ chặn; lưu `bot_run_suppressed` vào prefs; hủy visit job + không `ensureZaloForeground` sau DỪNG.
+- fix(visit): batch contact tuần tự (không reset ordinal mỗi vòng); scroll danh bạ sau hết batch; chat intro card + title bar → `isProfileTimelineReady`; like profile footer text gộp (`likeTapRectForAggregatedFooter`); không like khi kẹt chat; DỪNG chặn autoStart/reopen visit.
+- docs: **CLAUDE.md** — section «Visit danh bạ — SPEC» (batch tuần tự; chat→profile bắt buộc; like footer text gộp; không cuộn sau mỗi người; visitIndex chọn hàng; DỪNG/autoStart; code hiện tại lệch spec).
+- docs: **CLAUDE.md** — section «Feed comment — SPEC» (3 mode LIKE_ONLY / COMMENT_ONLY / MIX; cuộn chung; neo nút Bình luận; không skip phức tạp; không báo xong khi gửi fail; tách với spec like).
+- docs: **CLAUDE.md** — section «Feed like — SPEC» (ô bình luận trên item: skip / sau tap re-scan / re-like / counter); ghi rõ code có thể chưa khớp; §6–§7 feed không override spec này.
 - fix(feed): bỏ qua bài có ô bình luận **đã mở** (cmtinput/focus/bàn phím) — không like hết feed; placeholder «Nhập bình luận» thu gọn vẫn like bình thường.
 - fix(feed/comment): MIX — ưu tiên sheet/full-screen sau like (gửi rồi đóng); không nhầm placeholder inline; màn Bình luận full cũng gửi trước BACK; cải thiện focus/SET_TEXT/nút Gửi.
 - fix(start): khóa `sessionLikeMode` suốt phiên bot — không nhảy Feed→Visit khi đổi prefs giữa chừng; suy mode từ màn Zalo (Nhật ký/Danh bạ) khi bấm nổi không chọn mode; tab Script **▶ Chạy** luôn `VISIT`.

@@ -72,8 +72,9 @@ object AccessibilityHelper {
      * @return true nếu đã gọi start hoặc đã gửi broadcast chờ service nhận.
      */
     fun requestStartAutoLike(context: Context, mode: LikeMode? = null): Boolean {
+        LikeSettingsManager(context.applicationContext).setBotRunSuppressed(false)
         ZaloPilotAccessibilityService.instance?.let {
-            it.startAutoLike(mode)
+            it.startAutoLike(mode, userInitiated = true)
             return true
         }
         if (!isAccessibilityEnabled(context)) {
@@ -92,7 +93,7 @@ object AccessibilityHelper {
         Handler(Looper.getMainLooper()).postDelayed({
             val svc = ZaloPilotAccessibilityService.instance
             if (svc != null) {
-                svc.startAutoLike(mode)
+                svc.startAutoLike(mode, userInitiated = true)
             } else {
                 Toast.makeText(
                     context,
@@ -104,10 +105,8 @@ object AccessibilityHelper {
         return true
     }
 
-    fun requestStopAutoLike() {
-        ZaloPilotAccessibilityService.instance?.stopAutoLike()
-            ?: run {
-                // Service có thể đã disconnect — broadcast không cần cho stop.
-            }
+    fun requestStopAutoLike(context: Context) {
+        LikeSettingsManager(context.applicationContext).setBotRunSuppressed(true)
+        ZaloPilotAccessibilityService.instance?.stopAutoLike(userRequested = true)
     }
 }

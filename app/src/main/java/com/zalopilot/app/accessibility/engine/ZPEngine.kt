@@ -152,7 +152,11 @@ class ZPEngine(
             if (liked >= maxLikes) break
             val root = acquireRoot() ?: break
             try {
-                if (!nodeFinder.isProfileScreen(root)) {
+                if (nodeFinder.isChatScreen(root)) {
+                    logger.log(LogTag.STATE, "round=$round", "PROFILE_STUCK_CHAT")
+                    break
+                }
+                if (!nodeFinder.isProfileTimelineReady(root)) {
                     if (round < 4) {
                         logger.log(LogTag.SCAN, "round=$round", "PROFILE_WAIT_SCREEN")
                         randomDelay(700L, 1100L)
@@ -202,7 +206,7 @@ class ZPEngine(
                     continue
                 }
                 lastLikeTarget = tapTarget
-                if (!tap(tapTarget)) {
+                if (!tapProfileLikeTarget(targetNode)) {
                     profileTappedPostKeys.remove(profilePostKey(targetNode))
                     progressManager.incrementPostsHandledAndSave()
                     service.notifyProgressUpdate()
@@ -238,7 +242,7 @@ class ZPEngine(
         for (attempt in 0 until 7) {
             val root = acquireRoot() ?: break
             try {
-                if (!nodeFinder.isProfileScreen(root)) {
+                if (!nodeFinder.isProfileTimelineReady(root)) {
                     randomDelay(500L, 900L)
                     continue
                 }
@@ -376,11 +380,20 @@ class ZPEngine(
         return inputText(input, text)
     }
 
+    private suspend fun tapProfileLikeTarget(node: AccessibilityNodeInfo): Boolean {
+        nodeFinder.likeTapRectForAggregatedFooter(node)?.let { band ->
+            logger.log(LogTag.CLICK, "profile", "AGGREGATED_FOOTER_TAP")
+            if (service.scriptTapCenter(band)) return true
+        }
+        val target = ScriptTapTarget.fromNode(node) ?: return false
+        return tap(target)
+    }
+
     fun detectScreen(root: AccessibilityNodeInfo, screen: String): Boolean {
         return when (screen.lowercase()) {
             "contacts" -> nodeFinder.isContactListScreen(root)
             "chat" -> nodeFinder.isChatScreen(root)
-            "profile" -> nodeFinder.isProfileScreen(root)
+            "profile" -> nodeFinder.isProfileTimelineReady(root)
             "comments" -> {
                 nodeFinder.isFullScreenCommentScreen(root) ||
                     nodeFinder.isCommentBottomSheetOverFeed(root) ||

@@ -875,6 +875,37 @@ class NodeFinder @Inject constructor(
      * Ô bình luận **đã mở** dưới bài (EditText/cmtinput, focus, bàn phím) — không chỉ placeholder "Nhập bình luận".
      * Tap Thích lúc này dễ unlike / trượt vùng comment.
      */
+    /**
+     * Feed SPEC: có ô bình luận trên item (placeholder «Nhập bình luận» / composer / cmtinput) → coi đã like → skip trước tap.
+     */
+    fun hasCommentBoxOnFeedItemNearLike(likeNode: AccessibilityNodeInfo): Boolean {
+        if (hasExpandedInlineCommentComposerNearLike(likeNode)) return true
+        val host = findFeedFooterHostNearLike(likeNode)
+        findByViewId(host, "cmtinput_text").forEach { n ->
+            if (n.isVisibleToUser && n.hasValidScreenBounds()) return true
+        }
+        if (findCommentInputPlaceholderNearLike(likeNode) != null) return true
+        if (findCommentInputNearLike(likeNode) != null) return true
+        val footerText = host.text?.toString().orEmpty()
+        if (footerText.isNotBlank()) {
+            val low = footerText.lowercase()
+            if (inlineCommentPhrases.any { phrase -> low.contains(phrase) }) return true
+        }
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(host)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 400) {
+            val n = stack.removeLast()
+            visited++
+            if (!n.isVisibleToUser || !n.hasValidScreenBounds()) continue
+            if (isCommentPlaceholderNode(n) || isLikelyCommentInputNode(n)) return true
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return false
+    }
+
     fun hasExpandedInlineCommentComposerNearLike(likeNode: AccessibilityNodeInfo): Boolean {
         val host = findFeedFooterHostNearLike(likeNode)
         findByViewId(host, "cmtinput_text").forEach { n ->
@@ -1224,13 +1255,95 @@ class NodeFinder @Inject constructor(
         return best
     }
 
+    /** Các footer bài trên feed / profile timeline. */
+    fun findFeedItemFooters(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> =
+        findByViewId(root, "feedItemFooterBarModule").filter { it.isVisibleToUser && it.hasValidScreenBounds() }
+
+    private fun footerAggregatedTextHasLikeAction(footer: AccessibilityNodeInfo): Boolean {
+        val hay = buildString {
+            append(footer.text?.toString().orEmpty())
+            append(' ')
+            append(footer.contentDescription?.toString().orEmpty())
+        }.lowercase()
+        if (hay.contains("đã thích") || hay.contains("liked")) return false
+        return hay.contains(ZaloIDStore.TEXT_LIKE.lowercase())
+    }
+
+    /** Tap vùng dòng «Thích» trên footer text gộp (dump: childCount=0). */
+    fun likeTapRectForAggregatedFooter(footer: AccessibilityNodeInfo): Rect? {
+        if (!footer.hasValidScreenBounds()) return null
+        val r = Rect().also { footer.getBoundsInScreen(it) }
+        if (r.height() < 40) return null
+        val bandTop = r.top + (r.height() * 0.55f).toInt()
+        return Rect(r.left + 24, bandTop, r.right - 24, r.bottom - 8)
+    }
+
     /** Like trên timeline profile — quét trong feedItemFooterBarModule trước; không dùng ID học từ feed. */
     fun findProfileLikeButtons(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
-        for (footer in findByViewId(root, "feedItemFooterBarModule")) {
-            val inFooter = findLikeButtonsWithoutLearnedId(footer)
-            if (inFooter.isNotEmpty()) return inFooter
+        val result = mutableListOf<AccessibilityNodeInfo>()
+        val seen = LinkedHashSet<String>()
+        fun addTarget(n: AccessibilityNodeInfo) {
+            val r = Rect().also { n.getBoundsInScreen(it) }
+            val key = "${r.centerX()}_${r.centerY()}_${n.viewIdResourceName ?: ""}"
+            if (seen.add(key)) result.add(n)
         }
-        return findLikeButtonsWithoutLearnedId(root)
+        for (footer in findFeedItemFooters(root)) {
+            val inFooter = findLikeButtonsWithoutLearnedId(footer)
+            if (inFooter.isNotEmpty()) {
+                inFooter.forEach { addTarget(it) }
+                continue
+            }
+            if (footerAggregatedTextHasLikeAction(footer) && !hasCommentBoxOnFeedItemNearLike(footer)) {
+                addTarget(footer)
+            }
+        }
+        if (result.isNotEmpty()) return result
+        findLikeButtonsWithoutLearnedId(root).forEach { addTarget(it) }
+        return result
+    }
+
+    /** Feed COMMENT_ONLY: neo theo footer từng bài (không dùng findLikeButtons toàn màn). */
+    fun findFeedCommentAnchors(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> =
+        findFeedItemFooters(root)
+
+    /** Chat sau tap contact — thẻ «Bắt đầu chia sẻ…» / vùng có thể tap mở profile. */
+    fun findChatIntroProfileTapTarget(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (!hasViewId(root, "chatinput_text") && !hasViewId(root, "main_chat_view")) return null
+        val phrases = listOf(
+            "bắt đầu chia sẻ",
+            "start sharing",
+            "interesting stories"
+        )
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 1600) {
+            val n = stack.removeLast()
+            visited++
+            if (!n.hasValidScreenBounds()) continue
+            val t = n.text?.toString()?.trim().orEmpty()
+            val low = t.lowercase()
+            if (t.length in 12..200 && phrases.any { low.contains(it) }) {
+                if (n.isClickable) return n
+                var p: AccessibilityNodeInfo? = n
+                repeat(6) {
+                    val parent = p?.parent ?: return@repeat
+                    if (parent.isClickable && parent.hasValidScreenBounds()) return parent
+                    p = parent
+                }
+                return n
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return null
+    }
+
+    fun isProfileTimelineReady(root: AccessibilityNodeInfo): Boolean {
+        if (isChatScreen(root) && !hasProfileFeedFooter(root)) return false
+        return isProfileScreen(root) &&
+            (hasProfileTimelineContent(root) || hasViewId(root, "profile_avatar"))
     }
 
     fun isLikeControlNode(node: AccessibilityNodeInfo): Boolean {

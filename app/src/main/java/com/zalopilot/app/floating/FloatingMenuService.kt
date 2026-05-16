@@ -268,7 +268,7 @@ class FloatingMenuService : Service() {
 
             if (botRunning) {
                 addView(menuItem("■  Dừng", "#E24B4A") {
-                    AccessibilityHelper.requestStopAutoLike()
+                    AccessibilityHelper.requestStopAutoLike(this@FloatingMenuService)
                     closeMenu()
                 })
             } else {

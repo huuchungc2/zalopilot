@@ -56,7 +56,19 @@ class LikeSettingsManager @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
     private val prefs = context.getSharedPreferences("like_settings", Context.MODE_PRIVATE)
+    private val runtimePrefs = context.getSharedPreferences("zalopilot_runtime", Context.MODE_PRIVATE)
     private val gson = Gson()
+
+    /** User bấm DỪNG — chặn poll autoStart cho đến lần BẮT ĐẦU tiếp theo (sống qua restart service). */
+    fun isBotRunSuppressed(): Boolean = runtimePrefs.getBoolean(KEY_BOT_RUN_SUPPRESSED, false)
+
+    fun setBotRunSuppressed(suppressed: Boolean) {
+        runtimePrefs.edit().putBoolean(KEY_BOT_RUN_SUPPRESSED, suppressed).apply()
+    }
+
+    private companion object {
+        const val KEY_BOT_RUN_SUPPRESSED = "bot_run_suppressed"
+    }
 
     fun load(): LikeSettings {
         val json = prefs.getString("settings", null) ?: return LikeSettings()

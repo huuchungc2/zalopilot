@@ -40,6 +40,9 @@
 - [x] `NodeFinder.debugDump(root)` — in toàn bộ node tree ra log để debug
 - [x] Dump feed item UI tree (liked/unliked) ra filesDir + export Downloads trong tab Nhật ký
 - [x] Màn hình debug trong app — hiện ID đã học được từ ZaloIDStore (tab **UI** · card «ID đã học» + copy)
+- [x] **Feed like (SPEC `CLAUDE.md`)** — ô bình luận trên item: skip trước tap; sau tap re-scan + re-tap unlike; counter chỉ khi xác nhận ô bình luận
+- [x] **Feed comment (SPEC `CLAUDE.md`)** — COMMENT_ONLY neo footer; MIX sau like; chỉ báo xong khi `sent=true`
+- [x] **Visit danh bạ (SPEC `CLAUDE.md`)** — batch tuần tự; chat→profile timeline; footer Thích gộp; scroll sau batch; DỪNG + autoStart
 - [ ] Test thực tế trên máy Samsung — xác nhận tìm được nút Thích
 - [ ] Xử lý trường hợp Zalo đang ở sai tab → tự navigate sang tab Nhật ký
 

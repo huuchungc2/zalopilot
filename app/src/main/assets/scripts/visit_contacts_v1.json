@@ -1,7 +1,7 @@
 {
   "id": "visit_contacts_v1",
-  "version": 10,
-  "desc": "Visit v10 — bỏ nhầm list tin nhắn; tab pill Bạn bè; chat→profile action bar",
+  "version": 11,
+  "desc": "Visit v11 — batch contact 1..n rồi mới scroll; chat intro→profile timeline",
   "steps": [
     { "id": "s1", "action": "findContactItems" },
     { "id": "s2", "action": "tapContactAt" },

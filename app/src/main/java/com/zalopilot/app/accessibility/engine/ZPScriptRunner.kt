@@ -26,8 +26,9 @@ class ZPScriptRunner @Inject constructor(
     private var gotoCount = 0
     /** Mỗi vòng visit: chỉ [profilesDone]++ khi nhánh goto nếu round này không bị đánh dấu incomplete (vd. profile không có bài). */
     private var visitRoundSuccess = true
-    /** Chọn hàng contact theo thứ tự trong list hiện tại — reset khi [runFindContactItems]. */
-    private var sessionContactTapOrdinal = 0
+    /** Index trong batch contact hiện tại (0..n-1); scroll chỉ khi hết batch. */
+    private var contactBatchIndex = 0
+    private var contactBatchActive = false
     private var visitRecoveryStreak = 0
 
     suspend fun run(
@@ -39,7 +40,8 @@ class ZPScriptRunner @Inject constructor(
         val engine = ZPEngine(service, nodeFinder, idStore, settingsManager, progressManager, logger)
         gotoCount = 0
         visitRoundSuccess = true
-        sessionContactTapOrdinal = 0
+        contactBatchIndex = 0
+        contactBatchActive = false
         visitRecoveryStreak = 0
         val profilesLimit = maxProfiles ?: settingsManager.getVisitMaxProfiles()
         var profilesDone = 0
@@ -169,11 +171,7 @@ class ZPScriptRunner @Inject constructor(
         return when (step.action.lowercase()) {
             "ensurescreen" -> runEnsureScreen(engine, step)
             "findcontactitems" -> runFindContactItems(engine)
-            "scrollcontacts" -> {
-                engine.scrollContacts()
-                delay(650)
-                true
-            }
+            "scrollcontacts" -> runScrollContactsWhenBatchDone(engine)
             "logstoreids" -> {
                 logger.log(
                     LogTag.STATE,
@@ -378,6 +376,24 @@ class ZPScriptRunner @Inject constructor(
     }
 
     private suspend fun runFindContactItems(engine: ZPEngine): Boolean {
+        if (contactBatchActive && engine.lastContactTargets.isNotEmpty() &&
+            contactBatchIndex < engine.lastContactTargets.size
+        ) {
+            logger.log(
+                LogTag.SCAN,
+                "idx=$contactBatchIndex/${engine.lastContactTargets.size}",
+                "VISIT_BATCH_CONTINUE"
+            )
+            return true
+        }
+        if (contactBatchActive && engine.lastContactTargets.isNotEmpty() &&
+            contactBatchIndex >= engine.lastContactTargets.size
+        ) {
+            logger.log(LogTag.SCAN, "batch", "VISIT_BATCH_SCROLL_NEW")
+            engine.scrollContacts()
+            delay(700)
+            contactBatchIndex = 0
+        }
         engine.clearTapCache()
         suspend fun scanOnce(): List<ScriptTapTarget> {
             val root = engine.acquireRoot() ?: return emptyList()
@@ -395,7 +411,7 @@ class ZPScriptRunner @Inject constructor(
             targets = scanOnce()
         }
         engine.lastContactTargets = targets
-        sessionContactTapOrdinal = 0
+        contactBatchActive = targets.isNotEmpty()
         if (targets.isNotEmpty()) {
             logger.log(LogTag.SCAN, "contacts=${targets.size}", "VISIT_CONTACTS_FOUND")
         } else {
@@ -404,31 +420,44 @@ class ZPScriptRunner @Inject constructor(
         return targets.isNotEmpty()
     }
 
-    /** Tap bạn theo thứ tự trong list hiện tại — ordinal reset mỗi lần [runFindContactItems]; $visitIndex chỉ lưu storage. */
-    private suspend fun runTapContactAt(engine: ZPEngine, step: ZPStep): Boolean {
-        if (engine.lastContactTargets.isEmpty()) return false
+    private suspend fun runScrollContactsWhenBatchDone(engine: ZPEngine): Boolean {
         val targets = engine.lastContactTargets
-        val index = (sessionContactTapOrdinal % targets.size).coerceIn(0, targets.lastIndex)
-        logger.log(
-            LogTag.CLICK,
-            "sessionOrd=$sessionContactTapOrdinal index=$index/${targets.size}",
-            "TAP_CONTACT"
-        )
-        if (engine.tapNodeAt(targets, index)) {
-            sessionContactTapOrdinal++
+        if (targets.isNotEmpty() && contactBatchIndex < targets.size) {
+            logger.log(
+                LogTag.SCAN,
+                "idx=$contactBatchIndex/${targets.size}",
+                "SCROLL_SKIP_MID_BATCH"
+            )
             return true
         }
         engine.scrollContacts()
-        delay(700)
-        if (!runFindContactItems(engine)) return false
-        val retryTargets = engine.lastContactTargets
-        if (retryTargets.isEmpty()) return false
-        val retryIndex = (sessionContactTapOrdinal % retryTargets.size).coerceIn(0, retryTargets.lastIndex)
-        if (engine.tapNodeAt(retryTargets, retryIndex)) {
-            sessionContactTapOrdinal++
-            return true
+        delay(650)
+        contactBatchActive = false
+        contactBatchIndex = 0
+        return true
+    }
+
+    /** Tap contact theo thứ tự trong batch — không cuộn giữa batch. */
+    private suspend fun runTapContactAt(engine: ZPEngine, step: ZPStep): Boolean {
+        if (engine.lastContactTargets.isEmpty()) return false
+        val targets = engine.lastContactTargets
+        val stored = progressManager.getVisitIndex()
+        val index = if (contactBatchIndex < targets.size) {
+            contactBatchIndex
+        } else {
+            (stored % targets.size).coerceIn(0, targets.lastIndex)
         }
-        return false
+        logger.log(
+            LogTag.CLICK,
+            "batchIdx=$contactBatchIndex visitIndex=$stored index=$index/${targets.size}",
+            "TAP_CONTACT"
+        )
+        if (!engine.tapNodeAt(targets, index)) {
+            logger.log(LogTag.CLICK, "index=$index", "TAP_CONTACT_FAIL")
+            return false
+        }
+        contactBatchIndex++
+        return true
     }
 
     /**
@@ -553,17 +582,30 @@ class ZPScriptRunner @Inject constructor(
     ): Boolean {
         val root = engine.acquireRoot() ?: return false
         try {
-            if (nodeFinder.isProfileScreen(root)) {
-                logger.log(LogTag.STATE, "tapProfileEntry", "SKIP_ALREADY_ON_PROFILE")
+            if (nodeFinder.isProfileTimelineReady(root)) {
+                logger.log(LogTag.STATE, "tapProfileEntry", "ALREADY_ON_TIMELINE")
                 return true
             }
-            val node = nodeFinder.findProfileEntryNode(root) ?: return false
-            if (!service.scriptTapProfileEntryNode(node)) return false
-            delay(900)
-            if (service.waitForProfileScreen(6_000L)) return true
+            if (nodeFinder.isChatScreen(root)) {
+                nodeFinder.findChatIntroProfileTapTarget(root)?.let { intro ->
+                    logger.log(LogTag.CLICK, "tapProfileEntry", "INTRO_CARD")
+                    if (service.scriptTapProfileEntryNode(intro)) {
+                        delay(1_100)
+                        if (service.waitForProfileScreen(5_000L)) return true
+                    }
+                }
+                tryTapProfileTitleBar(service, root, "CHAT_TITLE")
+                delay(1_000)
+                if (service.waitForProfileScreen(4_000L)) return true
+            }
+            val node = nodeFinder.findProfileEntryNode(root)
+            if (node != null && service.scriptTapProfileEntryNode(node)) {
+                delay(900)
+                if (service.waitForProfileScreen(6_000L)) return true
+            }
             val r2 = engine.acquireRoot() ?: return false
             try {
-                if (nodeFinder.isProfileScreen(r2)) return true
+                if (nodeFinder.isProfileTimelineReady(r2)) return true
                 if (nodeFinder.isChatScreen(r2)) {
                     tryTapProfileTitleBar(service, r2, "RETRY_CHAT")
                     delay(1_000)
@@ -572,20 +614,19 @@ class ZPScriptRunner @Inject constructor(
                 runCatching { r2.recycle() }
             }
             if (service.waitForProfileScreen(4_000L)) return true
-            val r3 = engine.acquireRoot()
-            if (r3 != null) {
-                try {
-                    if (nodeFinder.isProfileScreen(r3)) return true
-                    if (nodeFinder.isChatScreen(r3)) {
+            val r3 = engine.acquireRoot() ?: return false
+            return try {
+                when {
+                    nodeFinder.isProfileTimelineReady(r3) -> true
+                    nodeFinder.isChatScreen(r3) -> {
                         logger.log(LogTag.ERROR, "tapProfileEntry", "STILL_CHAT_AFTER_TAPS")
-                        return false
+                        false
                     }
-                    return true
-                } finally {
-                    runCatching { r3.recycle() }
+                    else -> false
                 }
+            } finally {
+                runCatching { r3.recycle() }
             }
-            return false
         } finally {
             runCatching { root.recycle() }
         }
