@@ -1,5 +1,6 @@
 package com.zalopilot.app.accessibility.engine
 
+import android.view.accessibility.AccessibilityNodeInfo
 import com.zalopilot.app.accessibility.NodeFinder
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
 import com.zalopilot.app.data.model.ZaloIDStore
@@ -174,22 +175,6 @@ class ZPScriptRunner @Inject constructor(
                         return true
                     }
                     val node = nodeFinder.findProfileEntryNode(root) ?: return false
-                    fun tryTapTitleBar(r: AccessibilityNodeInfo, label: String): Boolean {
-                        val mid = nodeFinder.findByViewId(r, "actionbar_middle_container")
-                            .firstOrNull()
-                            ?.takeIf { it.hasValidScreenBounds() }
-                        if (mid != null) {
-                            logger.log(LogTag.CLICK, "tapProfileEntry", label + "_MIDDLE")
-                            return service.scriptTapProfileEntryNode(mid)
-                        }
-                        val title = nodeFinder.findByViewId(r, "actionbar_txtTitle").firstOrNull()
-                            ?: nodeFinder.findByViewId(r, "action_bar_title").firstOrNull()
-                        if (title != null && title.hasValidScreenBounds()) {
-                            logger.log(LogTag.CLICK, "tapProfileEntry", label + "_TITLE")
-                            return service.scriptTapProfileEntryNode(title)
-                        }
-                        return false
-                    }
                     var ok = service.scriptTapProfileEntryNode(node)
                     if (ok) delay(750)
                     if (!ok) return false
@@ -198,7 +183,7 @@ class ZPScriptRunner @Inject constructor(
                         try {
                             if (nodeFinder.isProfileScreen(r2)) return true
                             if (nodeFinder.isChatScreen(r2)) {
-                                ok = tryTapTitleBar(r2, "RETRY_STILL_CHAT") && ok
+                                ok = tryTapProfileTitleBar(service, r2, "RETRY_STILL_CHAT") && ok
                                 if (ok) delay(750)
                             }
                         } finally {
@@ -210,7 +195,7 @@ class ZPScriptRunner @Inject constructor(
                         when {
                             nodeFinder.isProfileScreen(r3) -> true
                             nodeFinder.isChatScreen(r3) -> {
-                                val last = tryTapTitleBar(r3, "THIRD_CHAT")
+                                val last = tryTapProfileTitleBar(service, r3, "THIRD_CHAT")
                                 if (last) delay(800)
                                 val r4 = engine.acquireRoot()
                                 if (r4 != null) {
@@ -597,6 +582,27 @@ class ZPScriptRunner @Inject constructor(
 
     private fun normalizeVar(raw: String?): String =
         raw?.trim()?.removePrefix("$")?.lowercase().orEmpty()
+
+    private suspend fun tryTapProfileTitleBar(
+        service: ZaloPilotAccessibilityService,
+        r: AccessibilityNodeInfo,
+        label: String
+    ): Boolean {
+        val mid = nodeFinder.findByViewId(r, "actionbar_middle_container")
+            .firstOrNull()
+            ?.takeIf { it.hasValidScreenBounds() }
+        if (mid != null) {
+            logger.log(LogTag.CLICK, "tapProfileEntry", "${label}_MIDDLE")
+            return service.scriptTapProfileEntryNode(mid)
+        }
+        val title = nodeFinder.findByViewId(r, "actionbar_txtTitle").firstOrNull()
+            ?: nodeFinder.findByViewId(r, "action_bar_title").firstOrNull()
+        if (title != null && title.hasValidScreenBounds()) {
+            logger.log(LogTag.CLICK, "tapProfileEntry", "${label}_TITLE")
+            return service.scriptTapProfileEntryNode(title)
+        }
+        return false
+    }
 
     companion object {
         private const val MAX_GOTO = 10_000

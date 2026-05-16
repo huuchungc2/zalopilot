@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- fix(ci): `ZPScriptRunner` — import `AccessibilityNodeInfo`; `tryTapProfileTitleBar` là `suspend` ở cấp class (local function không gọi được `scriptTapProfileEntryNode`).
 - fix(visit/chat): mở profile từ chat 1–1 — `findProfileEntryNode` ưu tiên `actionbar_middle_container` + `actionbar_txtTitle` (trước `zds_action_bar` full width); `tapProfileEntry` dùng `scriptTapProfileEntryNode` (ACTION_CLICK + parent rồi gesture), retry/verify tới 3 lượt; `isProfileScreen`/`isChatScreen` ưu tiên khối profile mạnh + `feedItemFooterBarModule` khi cây vẫn có chat (tránh `likeProfilePosts` tưởng chưa vào profile).
 - fix(visit/profile): like timeline profile **không dùng** `idStore.getLikeButtonID()` (ID học từ feed làm miss trên profile) — `findLikeButtonsWithoutLearnedId` / `findProfileLikeButtons`; tab **Bài viết** dùng `ACTION_CLICK` thay gesture (tránh tap nhầm SystemUI); `profilePostKey` thêm snippet + bucket thô hơn.
 - fix(visit/script): `goto` chỉ tăng `profilesDone` khi vòng visit **thành công** (`visitRoundSuccess`; profile không có bài + 0 like → không đếm); `tapContactAt` dùng **ordinal trong session** (reset sau `findContactItems`), không `visitIndex % size`.
