@@ -1773,6 +1773,9 @@ class NodeFinder @Inject constructor(
 
     /** Ô nhập bình luận — sheet feed (`bottom_sheet_container`) hoặc inline dưới bài. */
     fun findCommentInput(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        findByViewId(root, "feed_comment_input_container").forEach { container ->
+            findCommentInputInScope(container)?.let { return it }
+        }
         findByViewId(root, "cmtinput_text").firstOrNull { isLikelyCommentInputNode(it) }?.let { return it }
         commentInputSheetScopes(root).forEach { scope ->
             findCommentInputInScope(scope)?.let { return it }
