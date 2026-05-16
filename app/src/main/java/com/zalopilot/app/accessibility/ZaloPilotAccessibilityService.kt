@@ -1535,7 +1535,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                             (settings.delayMaxMs * 3L + 1L) / 2L
                         } else settings.delayMaxMs
                         randomDelay(dMin, dMax)
-                        logger.log(LogTag.STATE, "feedMode=$feedMode interactMode=$interactMode", "LOOP_PARAMS")
+                        logger.log(
+                            LogTag.STATE,
+                            "feedMode=$feedMode interactMode=${settingsManager.getInteractMode()}",
+                            "LOOP_PARAMS"
+                        )
                     }
                     FeedScanResult.ALL_SKIPPED -> {
                         consecutiveEmptyLikeScanStreak = 0
