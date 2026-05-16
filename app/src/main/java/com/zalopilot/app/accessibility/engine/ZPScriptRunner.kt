@@ -21,6 +21,10 @@ class ZPScriptRunner @Inject constructor(
     private val logger: Logger
 ) {
     private var gotoCount = 0
+    /** Mỗi vòng visit: chỉ [profilesDone]++ khi nhánh goto nếu round này không bị đánh dấu incomplete (vd. profile không có bài). */
+    private var visitRoundSuccess = true
+    /** Chọn hàng contact theo thứ tự trong list hiện tại — reset khi [runFindContactItems]. */
+    private var sessionContactTapOrdinal = 0
 
     suspend fun run(
         service: ZaloPilotAccessibilityService,
@@ -30,6 +34,8 @@ class ZPScriptRunner @Inject constructor(
     ): Boolean {
         val engine = ZPEngine(service, nodeFinder, idStore, settingsManager, progressManager, logger)
         gotoCount = 0
+        visitRoundSuccess = true
+        sessionContactTapOrdinal = 0
         val profilesLimit = maxProfiles ?: settingsManager.getVisitMaxProfiles()
         var profilesDone = 0
         var index = 0
@@ -56,7 +62,12 @@ class ZPScriptRunner @Inject constructor(
                         logger.log(LogTag.ERROR, "gotoCount=$gotoCount", "SCRIPT_GOTO_LIMIT")
                         return false
                     }
-                    profilesDone++
+                    if (visitRoundSuccess) {
+                        profilesDone++
+                    } else {
+                        logger.log(LogTag.STATE, "profilesDone skip (round incomplete)", "PROFILES_DONE_SKIP")
+                    }
+                    visitRoundSuccess = true
                     if (profilesDone >= profilesLimit) {
                         logger.log(LogTag.STATE, "profiles=$profilesDone", "SCRIPT_PROFILE_LIMIT")
                         return true
@@ -171,6 +182,9 @@ class ZPScriptRunner @Inject constructor(
                     "liked=${result.likedCount} noPosts=${result.noPostsOnProfile}",
                     "PROFILE_LIKE_DONE"
                 )
+                if (result.likedCount == 0 && result.noPostsOnProfile) {
+                    visitRoundSuccess = false
+                }
                 true
             }
             "findlikebutton" -> {
@@ -345,6 +359,7 @@ class ZPScriptRunner @Inject constructor(
             targets = scanOnce()
         }
         engine.lastContactTargets = targets
+        sessionContactTapOrdinal = 0
         if (targets.isNotEmpty()) {
             logger.log(LogTag.SCAN, "contacts=${targets.size}", "VISIT_CONTACTS_FOUND")
         } else {
@@ -353,21 +368,31 @@ class ZPScriptRunner @Inject constructor(
         return targets.isNotEmpty()
     }
 
-    /** Tap bạn theo $visitIndex — mỗi vòng 1 người khác trên list đang thấy. */
+    /** Tap bạn theo thứ tự trong list hiện tại — ordinal reset mỗi lần [runFindContactItems]; $visitIndex chỉ lưu storage. */
     private suspend fun runTapContactAt(engine: ZPEngine, step: ZPStep): Boolean {
         if (engine.lastContactTargets.isEmpty()) return false
         val targets = engine.lastContactTargets
-        val visitIdx = progressManager.getVisitIndex()
-        val index = (visitIdx % targets.size).coerceIn(0, targets.lastIndex)
-        logger.log(LogTag.CLICK, "visitIdx=$visitIdx index=$index/${targets.size}", "TAP_CONTACT")
-        if (engine.tapNodeAt(targets, index)) return true
+        val index = (sessionContactTapOrdinal % targets.size).coerceIn(0, targets.lastIndex)
+        logger.log(
+            LogTag.CLICK,
+            "sessionOrd=$sessionContactTapOrdinal index=$index/${targets.size}",
+            "TAP_CONTACT"
+        )
+        if (engine.tapNodeAt(targets, index)) {
+            sessionContactTapOrdinal++
+            return true
+        }
         engine.scrollContacts()
         delay(700)
         if (!runFindContactItems(engine)) return false
         val retryTargets = engine.lastContactTargets
         if (retryTargets.isEmpty()) return false
-        val retryIndex = (visitIdx % retryTargets.size).coerceIn(0, retryTargets.lastIndex)
-        return engine.tapNodeAt(retryTargets, retryIndex)
+        val retryIndex = (sessionContactTapOrdinal % retryTargets.size).coerceIn(0, retryTargets.lastIndex)
+        if (engine.tapNodeAt(retryTargets, retryIndex)) {
+            sessionContactTapOrdinal++
+            return true
+        }
+        return false
     }
 
     /** Back từ profile/chat tới Danh bạ — tránh back thừa ra launcher. */

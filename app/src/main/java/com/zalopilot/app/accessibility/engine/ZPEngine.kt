@@ -254,8 +254,7 @@ class ZPEngine(
 
     private suspend fun tapProfilePostsTabIfNeeded(root: AccessibilityNodeInfo) {
         val tab = nodeFinder.findProfilePostsTabTapTarget(root) ?: return
-        val target = ScriptTapTarget.fromNode(tab) ?: return
-        if (tap(target)) {
+        if (tab.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
             logger.log(LogTag.CLICK, "profile_tab", "POSTS_TAB")
             randomDelay(650L, 1000L)
         }
@@ -264,7 +263,15 @@ class ZPEngine(
     private fun profilePostKey(node: AccessibilityNodeInfo): String {
         val r = Rect().also { node.getBoundsInScreen(it) }
         val idTail = node.viewIdResourceName?.substringAfter(":id/").orEmpty()
-        return "PROFILE|${r.top / 24}_${idTail}"
+        val snippet = nodeFinder.getPostSnippetForKey(node)
+            .replace("\\s+".toRegex(), " ")
+            .trim()
+            .take(96)
+        if (snippet.isNotEmpty()) {
+            return "PROFILE|CONTENT|$snippet|$idTail"
+        }
+        val bucketY = r.top / 240
+        return "PROFILE|BOUNDS|${bucketY}_${r.centerX()}_${r.bottom}_$idTail"
     }
 
     fun clearTapCache() {

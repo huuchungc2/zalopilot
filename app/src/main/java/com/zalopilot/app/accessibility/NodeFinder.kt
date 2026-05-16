@@ -35,7 +35,20 @@ class NodeFinder @Inject constructor(
      * Tìm tất cả nút like chưa được like.
      * Ưu tiên ID đã học, sau đó text hệ thống, rồi duyệt cây (text + contentDescription).
      */
-    fun findLikeButtons(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+    fun findLikeButtons(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> =
+        findLikeButtonsInternal(root, useLearnedLikeId = true)
+
+    /**
+     * Quét nút like chỉ bằng text + traversal — **không** dùng [ZaloIDStore.getLikeButtonID].
+     * Layout profile/timeline dùng id khác feed nhật ký; saved id feed gây ID_MISS và bỏ lỡ nút like profile.
+     */
+    private fun findLikeButtonsWithoutLearnedId(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> =
+        findLikeButtonsInternal(root, useLearnedLikeId = false)
+
+    private fun findLikeButtonsInternal(
+        root: AccessibilityNodeInfo,
+        useLearnedLikeId: Boolean
+    ): List<AccessibilityNodeInfo> {
         val seen = LinkedHashSet<String>()
         val result = mutableListOf<AccessibilityNodeInfo>()
 
@@ -63,23 +76,25 @@ class NodeFinder @Inject constructor(
             }
         }
 
-        var savedId = idStore.getLikeButtonID()
-        if (savedId != null && LikeViewIdRules.isBlacklistedResourceId(savedId)) {
-            logger.log(LogTag.SCAN, "savedId=$savedId", "LIKE_ID_BLACKLIST_CLEARED")
-            idStore.clearLikeButtonID()
-            savedId = null
-        }
-        if (savedId != null) {
-            val byId = root.findAccessibilityNodeInfosByViewId(savedId)
-            if (byId.isNotEmpty()) {
-                byId.filter { !LikeViewIdRules.shouldRejectNodeForLike(it) && !isAlreadyLiked(it) }
-                    .forEach { addResolved(it) }
-                if (result.isNotEmpty()) {
-                    logFoundSummary(result)
-                    return result
-                }
+        if (useLearnedLikeId) {
+            var savedId = idStore.getLikeButtonID()
+            if (savedId != null && LikeViewIdRules.isBlacklistedResourceId(savedId)) {
+                logger.log(LogTag.SCAN, "savedId=$savedId", "LIKE_ID_BLACKLIST_CLEARED")
+                idStore.clearLikeButtonID()
+                savedId = null
             }
-            logger.log(LogTag.SCAN, "savedId=$savedId", "ID_MISS_FALLBACK")
+            if (savedId != null) {
+                val byId = root.findAccessibilityNodeInfosByViewId(savedId)
+                if (byId.isNotEmpty()) {
+                    byId.filter { !LikeViewIdRules.shouldRejectNodeForLike(it) && !isAlreadyLiked(it) }
+                        .forEach { addResolved(it) }
+                    if (result.isNotEmpty()) {
+                        logFoundSummary(result)
+                        return result
+                    }
+                }
+                logger.log(LogTag.SCAN, "savedId=$savedId", "ID_MISS_FALLBACK")
+            }
         }
 
         // findAccessibilityNodeInfosByText("Thích") có thể khớp cả "Đã thích" (substring).
@@ -92,10 +107,11 @@ class NodeFinder @Inject constructor(
             addResolved(raw)
         }
 
+        val logTag = if (useLearnedLikeId) "findLikeButtons" else "findProfileLikeButtonsNoId"
         if (result.isNotEmpty()) {
             logFoundSummary(result)
         } else {
-            logger.log(LogTag.SCAN, "findLikeButtons", "EMPTY")
+            logger.log(LogTag.SCAN, logTag, "EMPTY")
         }
 
         return result
@@ -430,6 +446,25 @@ class NodeFinder @Inject constructor(
     fun hasZaloMainBottomTabs(root: AccessibilityNodeInfo?): Boolean {
         if (root == null) return false
         return hasViewId(root, "maintab_message") || hasViewId(root, "maintab_contact")
+    }
+
+    /**
+     * Bottom sheet bình luận nửa màn đè lên feed nhật ký (tap nhầm icon comment).
+     * Khác [isFullScreenCommentScreen] (không có action_bar_title + ô dedicated theo heuristic cũ).
+     * Cần `bottom_sheet_container` + `main_comment_view` và vẫn thấy Neo feed/tab để tránh false positive.
+     */
+    fun isCommentBottomSheetOverFeed(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        if (!hasViewId(root, "bottom_sheet_container")) return false
+        if (!hasViewId(root, "main_comment_view")) return false
+        val feedStillVisible =
+            hasViewId(root, "layoutSocialFeed") ||
+                hasViewId(root, "lv_media_store") ||
+                hasViewId(root, "maintab_timeline") ||
+                hasViewId(root, "swipe_refresh_layout") ||
+                hasViewId(root, "feedItemFooterBarModule") ||
+                hasZaloMainBottomTabs(root)
+        return feedStillVisible
     }
 
     /**
@@ -847,14 +882,8 @@ class NodeFinder @Inject constructor(
     }
 
     /**
-     * Màn full-screen "Bình luận" của Zalo (mở từ tap vào icon comment hoặc nhầm khi click).
-     *
-     * Khác với composer **inline trên feed** (nhiều bài cũng có "Nhập bình luận" gần nút Like):
-     *  - Header (top app bar) có text == "Bình luận" nằm sát đỉnh màn hình
-     *  - + Có ô nhập "Nhập bình luận" hoặc text "Chưa có bình luận" / "Thả sticker..."
-     *
-     * Khi đúng màn này, bot phải `GLOBAL_ACTION_BACK` để về feed; không thoát sẽ kẹt
-     * và heuristic [hasInlineCommentComposerNearLikeAnchor] dễ confirm sai ngữ cảnh.
+     * Đang ở danh sách bạn bè (tab Bạn bè trong Danh bạ / Contacts) — sau [backToContacts] để xác nhận đã về đúng màn.
+     * Không nhầm với chat hay profile (loại trừ qua marker).
      */
     fun isContactListScreen(root: AccessibilityNodeInfo): Boolean {
         if (hasChatScreenMarkers(root) || hasProfileScreenMarkers(root)) return false
@@ -1003,13 +1032,13 @@ class NodeFinder @Inject constructor(
         return null
     }
 
-    /** Like trên timeline profile — quét trong feedItemFooterBarModule trước. */
+    /** Like trên timeline profile — quét trong feedItemFooterBarModule trước; không dùng ID học từ feed. */
     fun findProfileLikeButtons(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
         for (footer in findByViewId(root, "feedItemFooterBarModule")) {
-            val inFooter = findLikeButtons(footer)
+            val inFooter = findLikeButtonsWithoutLearnedId(footer)
             if (inFooter.isNotEmpty()) return inFooter
         }
-        return findLikeButtons(root)
+        return findLikeButtonsWithoutLearnedId(root)
     }
 
     fun findCommentButton(likeNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -1244,6 +1273,16 @@ class NodeFinder @Inject constructor(
         return hasImage && hasText
     }
 
+    /**
+     * Màn full-screen "Bình luận" của Zalo (mở từ tap vào icon comment hoặc nhầm khi click).
+     *
+     * Khác với composer **inline trên feed** (nhiều bài cũng có "Nhập bình luận" gần nút Like):
+     *  - Header (top app bar) có text == "Bình luận" nằm sát đỉnh màn hình
+     *  - + Có ô nhập "Nhập bình luận" hoặc text "Chưa có bình luận" / "Thả sticker..."
+     *
+     * Khi đúng màn này, bot phải `GLOBAL_ACTION_BACK` để về feed; không thoát sẽ kẹt
+     * và heuristic [hasInlineCommentComposerNearLikeAnchor] dễ confirm sai ngữ cảnh.
+     */
     fun isFullScreenCommentScreen(root: AccessibilityNodeInfo?): Boolean {
         if (root == null) return false
 

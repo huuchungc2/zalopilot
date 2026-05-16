@@ -12,6 +12,7 @@ import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import android.os.Handler
@@ -420,6 +421,82 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Bottom sheet bình luận trên feed — đóng về nhật ký.
+     * [LikeSettingsManager.getVisitCommentCount] > 0: gửi comment ngẫu nhiên rồi BACK; không thì BACK ngay.
+     */
+    private suspend fun tryEscapeCommentBottomSheet(root: AccessibilityNodeInfo): Boolean {
+        if (!nodeFinder.isCommentBottomSheetOverFeed(root)) return false
+
+        logger.log(LogTag.STATE, "comment_bottom_sheet", "DETECTED")
+        updateStatus("↩️ Sheet bình luận — đóng về feed")
+
+        val wantAutoComment = settingsManager.getVisitCommentCount() > 0
+        if (!wantAutoComment) {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+            delayEco(550L..950L)
+            logger.log(LogTag.STATE, "comment_bottom_sheet", "BACK_NO_COMMENT_MODE")
+            return true
+        }
+
+        val text = nodeFinder.getRandomComment().trim()
+        if (text.isEmpty()) {
+            logger.log(LogTag.STATE, "comment_bottom_sheet", "EMPTY_COMMENT_LIST_BACK")
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+            delayEco(550L..950L)
+            return true
+        }
+
+        val input = nodeFinder.findCommentInput(root)
+        if (input == null) {
+            logger.log(LogTag.STATE, "comment_bottom_sheet", "NO_CMT_INPUT_BACK")
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+            delayEco(550L..950L)
+            return true
+        }
+
+        if (!input.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
+            input.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+        delay(120)
+        val args = Bundle().apply {
+            putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                text
+            )
+        }
+        if (!input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+            logger.log(LogTag.STATE, "comment_bottom_sheet", "SET_TEXT_FAIL_BACK")
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+            delayEco(550L..950L)
+            return true
+        }
+        logger.log(LogTag.STATE, "len=${text.length}", "COMMENT_BOTTOM_SHEET_FILLED")
+        delayEco(320L..550L)
+
+        val send = nodeFinder.findCommentSendButton(root)
+        if (send != null) {
+            if (performClickWithFallback(send)) {
+                logger.log(LogTag.CLICK, "comment_bottom_sheet", "SEND_OK")
+            } else {
+                logger.log(LogTag.CLICK, "comment_bottom_sheet", "SEND_FAIL")
+            }
+            delayEco(400L..750L)
+        } else {
+            logger.log(LogTag.CLICK, "comment_bottom_sheet", "SEND_NOT_FOUND")
+        }
+
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+        delayEco(550L..950L)
+        logger.log(LogTag.STATE, "comment_bottom_sheet", "ESCAPED_AFTER_SEND_OR_BACK")
+        return true
+    }
+
+    /**
      * Thoát màn lạc (Bình luận / Zing MP3). Không BACK viewer ở đây — feed có vpager lớn gây thoát Zalo.
      * Viewer chỉ xử lý sau tap like: [escapeFullscreenImageViewerAfterLike].
      */
@@ -428,6 +505,12 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         if (!canEscapeWithGlobalBack(root)) return false
 
         when {
+            nodeFinder.isCommentBottomSheetOverFeed(root) -> {
+                val escaped = tryEscapeCommentBottomSheet(root)
+                consecutiveStuckCommentScreen = 0
+                return escaped
+            }
+
             nodeFinder.isFullScreenCommentScreen(root) -> {
                 logger.log(LogTag.STATE, "comment_screen", "DETECTED_BACK")
                 updateStatus("↩️ Phát hiện màn Bình luận — back về feed")
@@ -504,7 +587,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         return true
     }
 
-    /** Sau click like: comment / Zing / viewer (strict). */
+    /** Sau click like: viewer (strict) → sheet bình luận / full-screen bình luận / Zing ([detectAndEscapeWrongScreen]). */
     private suspend fun escapeWrongScreenAfterLikeClick(root: AccessibilityNodeInfo?): Boolean {
         if (escapeFullscreenImageViewerAfterLike(root)) return true
         return detectAndEscapeWrongScreen(root)
@@ -1384,24 +1467,45 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
             if (likeNodes.isEmpty()) {
                 updateDebugNodeHighlights(emptyList(), null)
-                if (nodeFinder.hasVisibleSelfAlreadyLikedLikeControl(scanRoot)) {
-                    markFeedUiConfirmed()
-                    updateStatus("⏩ Bạn đã thích các bài trên màn hình — cuộn tiếp...")
-                    logger.log(LogTag.SCAN, "feed", "EMPTY_BUT_SELF_ALREADY_LIKED_TREAT_AS_ALL_SKIPPED")
-                    return FeedScanResult.ALL_SKIPPED
-                }
-                updateStatus("🔍 Không thấy nút Thích trên màn hình này")
-                logger.log(LogTag.SCAN, "feed like buttons", "EMPTY_AFTER_RETRY")
-                when {
-                    debugHighlightPrefs.isVerboseUiTreeLoggingEnabled() ->
-                        nodeFinder.debugDump(scanRoot, maxNodes = 400)
-                    !noButtonsDiagnosticDumpDone -> {
-                        noButtonsDiagnosticDumpDone = true
-                        logger.log(LogTag.SCAN, "scan_fail", "ONE_SHOT_DIAGNOSTIC_DUMP")
-                        nodeFinder.debugDump(scanRoot, maxNodes = 220)
+                if (nodeFinder.isCommentBottomSheetOverFeed(scanRoot)) {
+                    logger.log(LogTag.SCAN, "feed", "EMPTY_COMMENT_BOTTOM_SHEET_ESCAPE")
+                    updateStatus("💬 Kẹt sheet bình luận — đóng rồi quét lại...")
+                    tryEscapeCommentBottomSheet(scanRoot)
+                    delayEco(450L..850L)
+                    val rescue = acquireRootOrNull(
+                        4,
+                        80L..240L,
+                        LogTag.SCAN,
+                        quietLog = true
+                    )
+                    if (rescue != null) {
+                        acquiredExtra?.recycle()
+                        acquiredExtra = rescue
+                        scanRoot = rescue
+                        likeNodes = nodeFinder.findLikeButtons(scanRoot)
                     }
                 }
-                return FeedScanResult.NO_BUTTONS
+                if (likeNodes.isEmpty()) {
+                    if (nodeFinder.hasVisibleSelfAlreadyLikedLikeControl(scanRoot)) {
+                        markFeedUiConfirmed()
+                        updateStatus("⏩ Bạn đã thích các bài trên màn hình — cuộn tiếp...")
+                        logger.log(LogTag.SCAN, "feed", "EMPTY_BUT_SELF_ALREADY_LIKED_TREAT_AS_ALL_SKIPPED")
+                        return FeedScanResult.ALL_SKIPPED
+                    }
+                    updateStatus("🔍 Không thấy nút Thích trên màn hình này")
+                    logger.log(LogTag.SCAN, "feed like buttons", "EMPTY_AFTER_RETRY")
+                    when {
+                        debugHighlightPrefs.isVerboseUiTreeLoggingEnabled() ->
+                            nodeFinder.debugDump(scanRoot, maxNodes = 400)
+                        !noButtonsDiagnosticDumpDone -> {
+                            noButtonsDiagnosticDumpDone = true
+                            logger.log(LogTag.SCAN, "scan_fail", "ONE_SHOT_DIAGNOSTIC_DUMP")
+                            nodeFinder.debugDump(scanRoot, maxNodes = 220)
+                        }
+                    }
+                    return FeedScanResult.NO_BUTTONS
+                }
+                markFeedUiConfirmed()
             }
 
             updateDebugNodeHighlights(likeNodes, null)
