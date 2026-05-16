@@ -1,7 +1,7 @@
 {
   "id": "visit_contacts_v1",
-  "version": 8,
-  "desc": "Visit v8 — backToContacts + tap bạn theo visitIndex",
+  "version": 9,
+  "desc": "Visit v9 — mở Danh bạ/Bạn bè bằng tab (openContactsFriends), không chuỗi BACK",
   "steps": [
     { "id": "s1", "action": "findContactItems" },
     { "id": "s2", "action": "tapContactAt" },
@@ -13,13 +13,13 @@
       { "action": "repeat", "count": "$visitCommentCount", "do": [
         { "action": "findCommentButton" },
         { "action": "tap" },
-        { "action": "ensureScreen", "screen": "comments", "timeoutMs": 2000 },
+        { "action": "ensureScreen", "screen": "comments", "timeoutMs": 4000 },
         { "action": "inputRandomComment" },
         { "action": "tapSend" },
         { "action": "back" }
       ]}
     ]},
-    { "id": "s8", "action": "backToContacts" },
+    { "id": "s8", "action": "openContactsFriends" },
     { "id": "s9", "action": "scrollContacts" },
     { "id": "s10", "action": "incrementVar", "var": "$visitIndex" },
     { "id": "s11", "action": "saveVar", "var": "$visitIndex" },

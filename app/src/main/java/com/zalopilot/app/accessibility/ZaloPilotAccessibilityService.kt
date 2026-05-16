@@ -33,7 +33,6 @@ import com.zalopilot.app.util.DebugHighlightPrefs
 import com.zalopilot.app.accessibility.engine.ZPScriptRunner
 import com.zalopilot.app.accessibility.engine.ZPScriptStore
 import com.zalopilot.app.util.FeedMode
-import com.zalopilot.app.util.InteractMode
 import com.zalopilot.app.util.LikeMode
 import com.zalopilot.app.util.AppVersion
 import com.zalopilot.app.util.LikeSettingsManager
@@ -217,19 +216,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         combinedStuckLevel() >= 1 -> GestureScrollProfile.NORMAL
         else -> GestureScrollProfile.SMALL
     }
-
-    /**
-     * Cuộn feed có nên ưu tiên **vuốt tay (gesture)** thay vì `ACTION_SCROLL_FORWARD` không.
-     *  - `humanLikeScroll = true` (toggle Cài đặt) → luôn vuốt tay.
-     *  - InteractMode TAP → vuốt tay (đồng nhất với "Touch" cho click like).
-     *  - MIX → random 50/50.
-     */
-    private fun preferGestureScroll(settings: LikeSettings, interactMode: InteractMode): Boolean =
-        settings.humanLikeScroll || when (interactMode) {
-            InteractMode.TAP -> true
-            InteractMode.SWIPE -> false
-            InteractMode.MIX -> (1..2).random() == 1
-        }
 
     private val dumpUiTreeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -430,7 +416,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         logger.log(LogTag.STATE, "comment_bottom_sheet", "DETECTED")
         updateStatus("↩️ Sheet bình luận — đóng về feed")
 
-        val wantAutoComment = settingsManager.getVisitCommentCount() > 0
+        val wantAutoComment =
+            settingsManager.getFeedCommentCount() > 0 || settingsManager.getVisitCommentCount() > 0
         if (!wantAutoComment) {
             performGlobalAction(GLOBAL_ACTION_BACK)
             lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
@@ -494,6 +481,111 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         delayEco(550L..950L)
         logger.log(LogTag.STATE, "comment_bottom_sheet", "ESCAPED_AFTER_SEND_OR_BACK")
         return true
+    }
+
+    /** Đóng full-screen / bottom sheet bình luận sau comment trên feed (tối đa 2 BACK). */
+    private suspend fun dismissFeedCommentSurfaceIfOpen() {
+        repeat(2) {
+            val r = acquireRootOrNull(3, 80L..200L, LogTag.CLICK, quietLog = true) ?: return
+            val needBack = try {
+                nodeFinder.isFullScreenCommentScreen(r) || nodeFinder.isCommentBottomSheetOverFeed(r)
+            } finally {
+                runCatching { r.recycle() }
+            }
+            if (!needBack) return
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+            delayEco(450L..800L)
+        }
+    }
+
+    /**
+     * Sau like thành công trên Nhật ký: mở bình luận → nhập ngẫu nhiên ([LikeSettings.visitCommentList]) → gửi → về feed.
+     */
+    private suspend fun runFeedCommentsAfterLike(
+        origRect: Rect,
+        origId: String?,
+        rounds: Int
+    ) {
+        if (rounds <= 0) return
+        repeat(rounds) { roundIdx ->
+            if (!isRunning) return
+            val text = nodeFinder.getRandomComment().trim()
+            if (text.isEmpty()) {
+                logger.log(LogTag.STATE, "feed_comment", "SKIP_EMPTY_LIST")
+                return
+            }
+            delayEco(380L..650L)
+            val root = acquireRootOrNull(5, 100L..280L, LogTag.CLICK, quietLog = true)
+            if (root == null) {
+                logger.log(LogTag.CLICK, "feed_comment", "ROOT_NULL")
+                return@repeat
+            }
+            try {
+                if (!nodeFinder.isLikelyTimelineFeedScreen(root) &&
+                    !nodeFinder.hasVisibleSelfAlreadyLikedLikeControl(root)
+                ) {
+                    logger.log(LogTag.SCAN, "feed_comment", "NOT_FEED_SKIP")
+                    return@repeat
+                }
+                val anchor = nodeFinder.findLikeAreaNodeAt(root, origRect, origId)
+                if (anchor == null) {
+                    logger.log(LogTag.CLICK, "feed_comment", "ANCHOR_MISS")
+                    return@repeat
+                }
+                val commentBtn = nodeFinder.findCommentButton(anchor)
+                if (commentBtn == null) {
+                    logger.log(LogTag.CLICK, "feed_comment", "NO_COMMENT_BTN")
+                    return@repeat
+                }
+                if (!performClickWithFallback(commentBtn)) {
+                    logger.log(LogTag.CLICK, "feed_comment", "TAP_COMMENT_FAIL")
+                    return@repeat
+                }
+            } finally {
+                runCatching { root.recycle() }
+            }
+            delayEco(750L..1_200L)
+            val r2 = acquireRootOrNull(5, 100L..260L, LogTag.CLICK, quietLog = true)
+            if (r2 == null) {
+                dismissFeedCommentSurfaceIfOpen()
+                return@repeat
+            }
+            try {
+                val input = nodeFinder.findCommentInput(r2)
+                if (input == null) {
+                    logger.log(LogTag.CLICK, "feed_comment", "NO_INPUT")
+                    dismissFeedCommentSurfaceIfOpen()
+                    return@repeat
+                }
+                if (!input.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
+                    input.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                }
+                delay(140)
+                val args = Bundle().apply {
+                    putCharSequence(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                        text
+                    )
+                }
+                if (!input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                    logger.log(LogTag.CLICK, "feed_comment", "SET_TEXT_FAIL")
+                    dismissFeedCommentSurfaceIfOpen()
+                    return@repeat
+                }
+                delayEco(450L..750L)
+                val send = nodeFinder.findCommentSendButton(r2)
+                if (send != null && performClickWithFallback(send)) {
+                    logger.log(LogTag.CLICK, "feed_comment", "SEND_OK round=${roundIdx + 1}")
+                } else {
+                    logger.log(LogTag.CLICK, "feed_comment", "SEND_FAIL")
+                }
+                delayEco(550L..900L)
+            } finally {
+                runCatching { r2.recycle() }
+            }
+            dismissFeedCommentSurfaceIfOpen()
+        }
     }
 
     /**
@@ -1053,46 +1145,125 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Mở Zalo và chuyển đúng tab theo chế độ (Nhật ký / Danh bạ → Bạn bè). */
+    /**
+     * Mở Zalo lên foreground, **chờ nav dưới vẽ xong**, rồi mới tìm tab và tap (Nhật ký / Danh bạ → Bạn bè).
+     * Tránh tap quá sớm khi cold start chỉ mới “mở Zalo” chưa có bottom bar.
+     */
     private suspend fun prepareZaloForCurrentMode(): Boolean {
-        if (!ensureZaloForegroundForBot(18_000L)) return false
+        if (!ensureZaloForegroundForBot(22_000L)) return false
+        if (!waitForZaloBottomNavigationReady(14_000L)) {
+            logger.log(LogTag.STATE, "prepareZaloForCurrentMode", "ZALO_NAV_WAIT_TIMEOUT")
+            return false
+        }
         val visit = settingsManager.getLikeMode() == LikeMode.VISIT
-        repeat(5) { attempt ->
+        repeat(8) { attempt ->
             val root = acquireRootOrNull(
-                maxAttempts = 4,
-                delayRangeMs = 120L..300L,
+                maxAttempts = 5,
+                delayRangeMs = 140L..360L,
                 logTag = LogTag.STATE,
                 quietLog = true
             )
-            if (root == null) return@repeat
+            if (root == null) {
+                delay(450)
+                return@repeat
+            }
             try {
                 if (visit) {
                     if (nodeFinder.isContactListScreen(root)) {
                         logger.log(LogTag.STATE, "attempt=$attempt", "ZALO_READY_CONTACTS")
                         return true
                     }
-                    nodeFinder.findContactMainTabTapTarget(root)?.let { tapNodeByCoordinate(it) }
-                    delay(750)
-                    nodeFinder.findFriendsSubTabTapTarget(root)?.let { tapNodeByCoordinate(it) }
-                    delay(750)
+                    nodeFinder.findContactMainTabTapTarget(root)?.let { tabNode ->
+                        if (prepareZaloTabClick(tabNode)) {
+                            logger.log(LogTag.CLICK, "attempt=$attempt", "PREPARE_TAB_CONTACTS")
+                        }
+                    }
+                    delay(900)
+                    val rootFriends = acquireRootOrNull(
+                        maxAttempts = 4,
+                        delayRangeMs = 80L..240L,
+                        logTag = LogTag.STATE,
+                        quietLog = true
+                    )
+                    try {
+                        rootFriends?.let { rf ->
+                            if (nodeFinder.isContactListScreen(rf)) {
+                                logger.log(LogTag.STATE, "attempt=$attempt", "ZALO_READY_CONTACTS_AFTER_MAIN")
+                                return true
+                            }
+                            nodeFinder.findFriendsSubTabTapTarget(rf)?.let { sub ->
+                                if (prepareZaloTabClick(sub)) {
+                                    logger.log(LogTag.CLICK, "attempt=$attempt", "PREPARE_TAB_FRIENDS")
+                                }
+                            }
+                        }
+                    } finally {
+                        runCatching { rootFriends?.recycle() }
+                    }
+                    delay(900)
                 } else {
                     if (nodeFinder.isLikelyTimelineFeedScreen(root)) {
                         logger.log(LogTag.STATE, "attempt=$attempt", "ZALO_READY_TIMELINE")
                         return true
                     }
-                    nodeFinder.findTimelineTabTapTarget(root)?.let { tapNodeByCoordinate(it) }
-                    delay(900)
+                    nodeFinder.findTimelineTabTapTarget(root)?.let { tabNode ->
+                        if (prepareZaloTabClick(tabNode)) {
+                            logger.log(LogTag.CLICK, "attempt=$attempt", "PREPARE_TAB_TIMELINE")
+                        }
+                    }
+                    delay(1_000)
                 }
             } finally {
                 runCatching { root.recycle() }
             }
         }
-        val root = acquireRootOrNull(3, quietLog = true) ?: return false
+        val finalRoot = acquireRootOrNull(4, 120L..280L, LogTag.STATE, quietLog = true) ?: return false
         return try {
-            if (visit) nodeFinder.isContactListScreen(root) else nodeFinder.isLikelyTimelineFeedScreen(root)
+            val ok = if (visit) {
+                nodeFinder.isContactListScreen(finalRoot)
+            } else {
+                nodeFinder.isLikelyTimelineFeedScreen(finalRoot)
+            }
+            if (!ok) logger.log(LogTag.STATE, "visit=$visit", "ZALO_PREPARE_FINAL_FAIL")
+            ok
         } finally {
-            runCatching { root.recycle() }
+            runCatching { finalRoot.recycle() }
         }
+    }
+
+    /** Chờ bottom navigation Zalo xuất hiện (sau launch / splash). */
+    private suspend fun waitForZaloBottomNavigationReady(timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var attempt = 0
+        while (System.currentTimeMillis() < deadline) {
+            val r = acquireRootOrNull(
+                maxAttempts = 4,
+                delayRangeMs = 80L..220L,
+                logTag = LogTag.STATE,
+                quietLog = true
+            )
+            if (r != null) {
+                try {
+                    if (nodeFinder.hasZaloBottomNavigationPresent(r)) {
+                        logger.log(LogTag.STATE, "afterAttempt=$attempt", "ZALO_BOTTOM_NAV_READY")
+                        return true
+                    }
+                } finally {
+                    runCatching { r.recycle() }
+                }
+            }
+            attempt++
+            delay(380)
+        }
+        return false
+    }
+
+    /** Tab chuẩn bị: ACTION_CLICK trước, gesture tọa độ fallback. */
+    private suspend fun prepareZaloTabClick(node: AccessibilityNodeInfo): Boolean {
+        if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            return true
+        }
+        return tapNodeByCoordinate(node)
     }
 
     suspend fun ensureZaloForegroundForBot(timeoutMs: Long = 15_000L): Boolean {
@@ -1323,8 +1494,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 val scrollProf = gestureProfileForStreak()
                 val scanResult = runFeedMode(liveRoot, settings)
                 val feedMode = settingsManager.getFeedMode()
-                val interactMode = settingsManager.getInteractMode()
-                val preferGesture = preferGestureScroll(settings, interactMode)
 
                 when (scanResult) {
                     FeedScanResult.LIKED -> {
@@ -1335,7 +1504,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         var didAutoScroll = false
                         when (feedMode) {
                             FeedMode.SCROLL -> {
-                                scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = preferGesture)
+                                scrollFeedWithVerification(liveRoot, scrollProf)
                                 didAutoScroll = true
                             }
                             FeedMode.MANUAL -> {
@@ -1344,7 +1513,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                             }
                             FeedMode.MIX -> {
                                 if ((1..10).random() <= 6) {
-                                    scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = preferGesture)
+                                    scrollFeedWithVerification(liveRoot, scrollProf)
                                     didAutoScroll = true
                                 } else {
                                     updateStatus("✋ Mix mode — chờ vuốt tay...")
@@ -1372,7 +1541,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         consecutiveEmptyLikeScanStreak = 0
                         logger.log(LogTag.SCROLL, "all skipped, fast scroll feedMode=$feedMode", "ALL_SKIPPED")
                         updateStatus("⏩ Bài đã like — cuộn tiếp...")
-                        val feedMoved = scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = preferGesture)
+                        val feedMoved = scrollFeedWithVerification(liveRoot, scrollProf)
                         processedPosts.clear()
                         if (!feedMoved) {
                             consecutiveScrollNoProgress++
@@ -1392,7 +1561,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     }
                     FeedScanResult.NO_BUTTONS -> {
                         updateStatus("🔍 Chưa thấy nút Thích — cuộn nhẹ, sẽ quét lại...")
-                        var feedMoved = scrollFeedWithVerification(liveRoot, scrollProf, preferGesture = preferGesture)
+                        var feedMoved = scrollFeedWithVerification(liveRoot, scrollProf)
                         if (!feedMoved) {
                             delayEco(240L..420L)
                             feedMoved = scrollDownByGesture(GestureScrollProfile.SMALL)
@@ -1673,6 +1842,12 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
                         logger.log(LogTag.CLICK, author ?: "unknown", "SUCCESS_CONFIRMED")
 
+                        val feedCommentRounds = settings.feedCommentCount
+                        if (feedCommentRounds > 0) {
+                            updateStatus("💬 Bình luận (${feedCommentRounds}×) — ${author ?: "..."}")
+                            runFeedCommentsAfterLike(origRectForVerify, origIdForVerify, feedCommentRounds)
+                        }
+
                         if (progressManager.isLimitReached()) {
                             logger.log(LogTag.STATE, "autoLike", "DAILY_LIMIT_REACHED")
                             stopAutoLike()
@@ -1898,34 +2073,24 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
      */
     private suspend fun scrollFeedWithVerification(
         rootBeforeScroll: AccessibilityNodeInfo,
-        gestureProfile: GestureScrollProfile = GestureScrollProfile.NORMAL,
-        preferGesture: Boolean = false
+        gestureProfile: GestureScrollProfile = GestureScrollProfile.NORMAL
     ): Boolean {
         var rootAfter: AccessibilityNodeInfo? = null
         var rootRetry: AccessibilityNodeInfo? = null
         return try {
             val beforeTop = measureFeedAnchorTop(rootBeforeScroll)
-            val (recyclerOk, gestureOk) = if (preferGesture) {
-                updateStatus("👆 Vuốt tay (touch) — profile=$gestureProfile")
-                val g = scrollDownByGesture(gestureProfile)
-                val r = if (!g) {
-                    updateStatus("🌀 Vuốt fail → fallback API SCROLL_FORWARD")
-                    tryScrollFeedRecycler(rootBeforeScroll)
-                } else false
-                r to g
+            updateStatus("👆 Vuốt tay (touch) — profile=$gestureProfile")
+            val gestureOk = scrollDownByGesture(gestureProfile)
+            val recyclerOk = if (!gestureOk) {
+                updateStatus("🌀 Vuốt fail → fallback API SCROLL_FORWARD")
+                tryScrollFeedRecycler(rootBeforeScroll)
             } else {
-                updateStatus("🌀 Cuộn API (SCROLL_FORWARD)")
-                val r = tryScrollFeedRecycler(rootBeforeScroll)
-                val g = if (!r) {
-                    updateStatus("👆 API fail → fallback vuốt tay (touch)")
-                    scrollDownByGesture(gestureProfile)
-                } else false
-                r to g
+                false
             }
             var scrollAttemptSucceeded = recyclerOk || gestureOk
             logger.log(
                 LogTag.SCROLL,
-                "beforeTop=$beforeTop preferGesture=$preferGesture recycler=$recyclerOk gesture=$gestureProfile gestureOk=$gestureOk",
+                "beforeTop=$beforeTop touchScrollFirst=true recycler=$recyclerOk gesture=$gestureProfile gestureOk=$gestureOk",
                 "DISPATCHED"
             )
             delay(ecoVerifyMs(1_200L))
@@ -1944,14 +2109,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 } else {
                     GestureScrollProfile.LARGE
                 }
-                val (retryRecycler, retryGesture) = if (preferGesture) {
-                    val g = scrollDownByGesture(retryProfile)
-                    val r = if (!g) (rootRetry?.let { tryScrollFeedRecycler(it) } ?: false) else false
-                    r to g
+                val retryGesture = scrollDownByGesture(retryProfile)
+                val retryRecycler = if (!retryGesture) {
+                    rootRetry?.let { tryScrollFeedRecycler(it) } ?: false
                 } else {
-                    val r = rootRetry?.let { tryScrollFeedRecycler(it) } ?: false
-                    val g = if (!r) scrollDownByGesture(retryProfile) else false
-                    r to g
+                    false
                 }
                 scrollAttemptSucceeded = scrollAttemptSucceeded || retryRecycler || retryGesture
                 logger.log(
@@ -2042,16 +2204,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         markLikeClickAttemptForBounds(node)
         logger.log(LogTag.CLICK, nodeSnapshotForLog(node), "CLICK_CANDIDATE")
 
-        val interactMode = settingsManager.getInteractMode()
-        logger.log(LogTag.CLICK, "interactMode=$interactMode", "INTERACT_MODE")
+        logger.log(LogTag.CLICK, "like=touch_first", "INTERACT_MODE")
 
         val clickable = node.isClickable || node.isLongClickable
-
-        val useGestureFirst = when (interactMode) {
-            InteractMode.TAP -> true // đúng như setting: ưu tiên touch (gesture tap) trước
-            InteractMode.SWIPE -> false
-            InteractMode.MIX -> (1..2).random() == 1
-        }
 
         fun actionClickIfPossible(): Boolean {
             if (!clickable) {
@@ -2077,22 +2232,13 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             return ok
         }
 
-        val ok = if (useGestureFirst) {
-            updateStatus("👆 Touch tap nút Thích...")
-            // Touch giống người trước; fail thì fallback ACTION_CLICK nếu có thể.
-            val g = gestureTap()
-            if (g) true else {
-                updateStatus("🖱 Touch fail → fallback ACTION_CLICK")
-                actionClickIfPossible()
-            }
+        updateStatus("👆 Touch tap nút Thích...")
+        val g = gestureTap()
+        val ok = if (g) {
+            true
         } else {
-            updateStatus("🖱 ACTION_CLICK nút Thích...")
-            // Click trước (ổn định hơn); fail thì fallback touch.
-            val c = actionClickIfPossible()
-            if (c) true else {
-                updateStatus("👆 Click fail → fallback touch tap")
-                gestureTap()
-            }
+            updateStatus("🖱 Touch fail → fallback ACTION_CLICK")
+            actionClickIfPossible()
         }
 
         if (ok) {

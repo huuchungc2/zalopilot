@@ -88,6 +88,41 @@ class ZaloIDStore @Inject constructor(
     fun clearAll() = prefs.edit().clear().apply()
 
     /**
+     * Hiển thị trong app (tab UI) — mọi slot học ID, kể cả chưa có giá trị.
+     */
+    fun listStoredIdsForDebug(): List<Pair<String, String>> {
+        val rows = listOf(
+            KEY_LIKE_BUTTON to "Nút like",
+            KEY_TAB_TIMELINE to "Tab Nhật ký",
+            KEY_FEED_RECYCLER to "Recycler feed",
+            KEY_AUTHOR_NAME to "Tên tác giả",
+            KEY_CONTACT_LIST to "Danh sách liên hệ",
+            KEY_CONTACT_ITEM to "Ô danh bạ"
+        )
+        return rows.map { (key, label) ->
+            val v = getID(key)
+            val display = if (v.isNullOrBlank()) "— (chưa học)" else v
+            label to display
+        }
+    }
+
+    fun getStoredIdsDebugTextWithKeys(): String {
+        val rows = listOf(
+            KEY_LIKE_BUTTON to "Nút like",
+            KEY_TAB_TIMELINE to "Tab Nhật ký",
+            KEY_FEED_RECYCLER to "Recycler feed",
+            KEY_AUTHOR_NAME to "Tên tác giả",
+            KEY_CONTACT_LIST to "Danh sách liên hệ",
+            KEY_CONTACT_ITEM to "Ô danh bạ"
+        )
+        return rows.joinToString("\n") { (key, label) ->
+            val v = getID(key)
+            val display = if (v.isNullOrBlank()) "— (chưa học)" else v
+            "$label [$key]\n  $display"
+        }
+    }
+
+    /**
      * Export mapping UI ids ra internal storage (`filesDir/ui_map.json`).
      * @return file nếu ghi thành công.
      */

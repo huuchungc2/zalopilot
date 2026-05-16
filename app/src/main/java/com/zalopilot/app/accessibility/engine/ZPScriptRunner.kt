@@ -167,7 +167,14 @@ class ZPScriptRunner @Inject constructor(
             "tapprofileentry" -> {
                 val root = engine.acquireRoot() ?: return false
                 try {
-                    val node = nodeFinder.findProfileEntryNode(root) ?: return false
+                    val node = nodeFinder.findProfileEntryNode(root)
+                    if (node == null) {
+                        if (nodeFinder.isProfileScreen(root)) {
+                            logger.log(LogTag.STATE, "tapProfileEntry", "SKIP_ALREADY_ON_PROFILE")
+                            return true
+                        }
+                        return false
+                    }
                     val target = ScriptTapTarget.fromNode(node) ?: return false
                     engine.tap(target)
                 } finally {
@@ -215,13 +222,25 @@ class ZPScriptRunner @Inject constructor(
                 }
             }
             "findcommentbutton" -> {
-                val likeTarget = engine.lastLikeTarget ?: return false
                 val root = engine.acquireRoot() ?: return false
                 try {
+                    var likeTarget = engine.lastLikeTarget
+                    if (likeTarget == null && engine.detectScreen(root, "profile")) {
+                        val anchor = nodeFinder.findProfileLikeButtons(root)
+                            .firstOrNull { nodeFinder.shouldLike(it) }
+                            ?: nodeFinder.findProfileLikeButtons(root).firstOrNull()
+                        if (anchor != null) {
+                            ScriptTapTarget.fromNode(anchor)?.let {
+                                engine.lastLikeTarget = it
+                                likeTarget = it
+                            }
+                        }
+                    }
+                    val lt = likeTarget ?: return false
                     val likeNode = nodeFinder.findLikeAreaNodeAt(
                         root,
-                        likeTarget.bounds,
-                        likeTarget.viewId
+                        lt.bounds,
+                        lt.viewId
                     ) ?: return false
                     val btn = nodeFinder.findCommentButton(likeNode) ?: return false
                     engine.lastTapTarget = ScriptTapTarget.fromNode(btn) ?: return false
@@ -252,6 +271,8 @@ class ZPScriptRunner @Inject constructor(
             }
             "back" -> engine.back()
             "backtocontacts" -> runBackToContactList(service, engine)
+            /** Về danh sách Bạn bè bằng tab Danh bạ + sub Bạn bè — tránh nhiều GLOBAL_BACK (kẹt launcher / chặn tay.) */
+            "opencontactsfriends" -> runOpenContactsFriends(service, engine)
             "wait" -> {
                 delay(step.ms ?: 500L)
                 true
@@ -393,6 +414,85 @@ class ZPScriptRunner @Inject constructor(
             return true
         }
         return false
+    }
+
+    /**
+     * Mở lại màn Danh bạ → Bạn bè (tap tab + sub-tab), không dùng chuỗi BACK như [runBackToContactList].
+     */
+    private suspend fun runOpenContactsFriends(
+        service: ZaloPilotAccessibilityService,
+        engine: ZPEngine
+    ): Boolean {
+        for (attempt in 0 until 6) {
+            val check0 = engine.acquireRoot() ?: return false
+            try {
+                if (nodeFinder.isContactListScreen(check0)) {
+                    logger.log(LogTag.STATE, "attempt=$attempt", "OPEN_CONTACTS_LIST_OK")
+                    return true
+                }
+            } finally {
+                runCatching { check0.recycle() }
+            }
+
+            val rMain = engine.acquireRoot() ?: return false
+            try {
+                nodeFinder.findContactMainTabTapTarget(rMain)?.let { tab ->
+                    ScriptTapTarget.fromNode(tab)?.let {
+                        engine.tap(it)
+                        logger.log(LogTag.CLICK, "attempt=$attempt", "OPEN_CONTACTS_MAIN_TAB")
+                    }
+                }
+            } finally {
+                runCatching { rMain.recycle() }
+            }
+            delay(750)
+
+            val rSub = engine.acquireRoot() ?: return false
+            try {
+                if (nodeFinder.isContactListScreen(rSub)) {
+                    logger.log(LogTag.STATE, "attempt=$attempt", "OPEN_CONTACTS_AFTER_MAIN")
+                    return true
+                }
+                nodeFinder.findFriendsSubTabTapTarget(rSub)?.let { sub ->
+                    ScriptTapTarget.fromNode(sub)?.let {
+                        engine.tap(it)
+                        logger.log(LogTag.CLICK, "attempt=$attempt", "OPEN_CONTACTS_FRIENDS_SUB")
+                    }
+                }
+            } finally {
+                runCatching { rSub.recycle() }
+            }
+            delay(650)
+
+            val check1 = engine.acquireRoot() ?: return false
+            try {
+                if (nodeFinder.isContactListScreen(check1)) {
+                    logger.log(LogTag.STATE, "attempt=$attempt", "OPEN_CONTACTS_AFTER_SUB")
+                    return true
+                }
+            } finally {
+                runCatching { check1.recycle() }
+            }
+
+            if (attempt >= 2) {
+                logger.log(LogTag.STATE, "attempt=$attempt", "OPEN_CONTACTS_BACK_ONCE")
+                engine.back()
+                delay(700)
+            }
+        }
+
+        if (!service.ensureZaloForegroundForBot(8_000L)) {
+            logger.log(LogTag.SCAN, "openContactsFriends", "NO_ZALO")
+            return false
+        }
+        val last = engine.acquireRoot() ?: return false
+        return try {
+            val ok = nodeFinder.isContactListScreen(last)
+            if (!ok) logger.log(LogTag.SCAN, "openContactsFriends", "FINAL_FAIL")
+            ok
+        } finally {
+            runCatching { last.recycle() }
+        }
     }
 
     /** Back từ profile/chat tới Danh bạ — tránh back thừa ra launcher. */

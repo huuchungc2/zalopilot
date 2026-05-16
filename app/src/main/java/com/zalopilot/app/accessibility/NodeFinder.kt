@@ -449,6 +449,17 @@ class NodeFinder @Inject constructor(
     }
 
     /**
+     * Nav dưới Zalo đã vẽ (sau cold start / splash) — có tab quen thuộc.
+     * Dùng trước khi tap Nhật ký / Danh bạ để tránh tap khi cây chỉ mới “mở app”.
+     */
+    fun hasZaloBottomNavigationPresent(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        if (hasZaloMainBottomTabs(root)) return true
+        if (hasViewId(root, "maintab_timeline")) return true
+        return false
+    }
+
+    /**
      * Bottom sheet bình luận nửa màn đè lên feed nhật ký (tap nhầm icon comment).
      * Khác [isFullScreenCommentScreen] (không có action_bar_title + ô dedicated theo heuristic cũ).
      * Cần `bottom_sheet_container` + `main_comment_view` và vẫn thấy Neo feed/tab để tránh false positive.
@@ -1014,7 +1025,14 @@ class NodeFinder @Inject constructor(
             .sortedBy { Rect().also { r -> it.getBoundsInScreen(r) }.top }
     }
 
-    /** Chat → profile: tap action bar giữa (actionbar_txtTitle / zds_action_bar). */
+    /**
+     * Chat → profile: tap vùng action bar giữa (actionbar_txtTitle / zds_action_bar / …).
+     *
+     * Trả về **null** khi:
+     * - Không có target kiểu chat **và** không phải profile → caller coi **lỗi** (cần màn khác).
+     * - Đã **đang ở profile** (mở thẳng từ danh bạ, `zalo_action_bar`… không có bar chat) → **không cần tap**;
+     *   [isProfileScreen] = true — script `tapProfileEntry` coi step thành công.
+     */
     fun findProfileEntryNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         findByViewId(root, "zds_action_bar").firstOrNull { it.isClickable }?.let { return it }
         findByViewId(root, "actionbar_middle_container").firstOrNull()?.let { middle ->
@@ -1028,6 +1046,9 @@ class NodeFinder @Inject constructor(
         }
         findByViewId(root, "actionbar_txtTitle").firstOrNull()?.let { title ->
             return findClickableAncestor(title) ?: title
+        }
+        if (isProfileScreen(root)) {
+            logger.log(LogTag.SCAN, "findProfileEntryNode", "ALREADY_ON_PROFILE_NO_CHAT_BAR")
         }
         return null
     }

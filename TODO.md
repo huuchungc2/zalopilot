@@ -39,7 +39,7 @@
 ### Debug & Test
 - [x] `NodeFinder.debugDump(root)` — in toàn bộ node tree ra log để debug
 - [x] Dump feed item UI tree (liked/unliked) ra filesDir + export Downloads trong tab Nhật ký
-- [ ] Màn hình debug trong app — hiện ID đã học được từ ZaloIDStore
+- [x] Màn hình debug trong app — hiện ID đã học được từ ZaloIDStore (tab **UI** · card «ID đã học» + copy)
 - [ ] Test thực tế trên máy Samsung — xác nhận tìm được nút Thích
 - [ ] Xử lý trường hợp Zalo đang ở sai tab → tự navigate sang tab Nhật ký
 
@@ -55,7 +55,7 @@
 - [x] Không pause/stop nhầm khi có heads-up notification/SystemUI overlay nổi lên khi bot đang chạy
 - [x] Vào nhầm full-screen "Bình luận" → tự `GLOBAL_ACTION_BACK` 1–2 lượt + skip bài; dừng bot nếu kẹt 3 lần liên tục
 - [x] Kẹt **bottom sheet** bình luận trên feed (không phải full-screen) → detect + BACK hoặc gửi comment tùy `visitCommentCount`
-- [x] InteractMode (TAP/MIX) chi phối cả cuộn feed (TAP ⇒ vuốt tay, MIX ⇒ random); thêm toggle "VUỐT TAY KHI CUỘN" override
+- [x] Tương tác & cuộn feed **luôn touch** (vuốt + chạm like trước); prefs `interactMode` / `humanLikeScroll` giữ tương thích, UI tùy chọn đã gỡ
 - [x] Counter "Đã like" tự update ở UI/floating menu (Android 13+ — `RECEIVER_NOT_EXPORTED` + `setPackage` cho broadcast nội bộ)
 - [x] Tiết kiệm pin: toggle "Chỉ chạy khi cắm sạc" + "Pause khi pin thấp" (ngưỡng tùy chỉnh) + "Tiết kiệm khi rời Zalo" (pause-không-stop, slow poll 10–20s, tự resume khi mở Zalo lại)
 - [x] Fix overlay KEEP_SCREEN_ON: khi pause-rời-Zalo phải gỡ flag để màn tự tắt (đỡ hao pin); resume khi quay lại Zalo

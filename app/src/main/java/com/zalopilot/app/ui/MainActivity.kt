@@ -634,22 +634,17 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun SettingsScreen(settings: LikeSettings, onSave: (LikeSettings) -> Unit) {
         var dailyLimit by remember { mutableIntStateOf(settings.dailyLimit) }
-        var interactMode by remember { mutableStateOf(
-            try { InteractMode.valueOf(settings.interactModeStr) } catch (e: Exception) { InteractMode.MIX }
-        ) }
-        // UI gọn: SWIPE không còn hiển thị, coi như TAP (touch).
-        if (interactMode == InteractMode.SWIPE) interactMode = InteractMode.TAP
         var feedMode by remember { mutableStateOf(settingsManager.getFeedMode()) }
         var delayMin by remember { mutableStateOf((settings.delayMinMs / 1000).toString()) }
         var delayMax by remember { mutableStateOf((settings.delayMaxMs / 1000).toString()) }
         var ecoMode by remember { mutableStateOf(settings.ecoMode) }
-        var humanLikeScroll by remember { mutableStateOf(settings.humanLikeScroll) }
         var requireCharging by remember { mutableStateOf(settings.requireCharging) }
         var lowBatteryPauseEnabled by remember { mutableStateOf(settings.lowBatteryPauseEnabled) }
         var lowBatteryThreshold by remember { mutableIntStateOf(settings.lowBatteryThreshold) }
         var pauseWhenZaloAway by remember { mutableStateOf(settings.pauseWhenZaloAway) }
         var visitLikeCount by remember { mutableIntStateOf(settings.visitLikeCount) }
         var visitCommentCount by remember { mutableIntStateOf(settings.visitCommentCount) }
+        var feedCommentCount by remember { mutableIntStateOf(settings.feedCommentCount) }
         var visitMaxProfiles by remember { mutableIntStateOf(settings.visitMaxProfiles) }
         var visitActionMode by remember {
             mutableStateOf(
@@ -726,30 +721,6 @@ class MainActivity : ComponentActivity() {
                         Switch(
                             checked = ecoMode,
                             onCheckedChange = { ecoMode = it },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
-                        )
-                    }
-                }
-            }
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("VUỐT TAY KHI CUỘN", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "Bot luôn vuốt màn hình thay vì gọi cuộn API — nhìn giống người hơn, đỡ kẹt khi RecyclerView không phản hồi. Tắt thì theo Chế độ tương tác (Touch ⇒ vuốt, Mix ⇒ random).",
-                                fontSize = 12.sp,
-                                color = Color.Gray
-                            )
-                        }
-                        Switch(
-                            checked = humanLikeScroll,
-                            onCheckedChange = { humanLikeScroll = it },
                             colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
                         )
                     }
@@ -921,36 +892,20 @@ class MainActivity : ComponentActivity() {
                                 Text(label, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp))
                             }
                         }
-                    }
-                }
-            }
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("CHẾ ĐỘ TƯƠNG TÁC", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                        Spacer(Modifier.height(8.dp))
-                        Text("Cách bot chạm màn hình khi like", fontSize = 12.sp, color = Color.Gray)
-                        Spacer(Modifier.height(10.dp))
-                        listOf(
-                            InteractMode.TAP   to "👆 Touch — chạm tọa độ thật (giống người hơn)",
-                            InteractMode.MIX   to "🎲 Mix — lúc touch lúc click (tự nhiên, ổn định)"
-                        ).forEach { (mode, label) ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (interactMode == mode) zaloBlue.copy(alpha = 0.1f) else Color.Transparent)
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = interactMode == mode,
-                                    onClick = { interactMode = mode },
-                                    colors = RadioButtonDefaults.colors(selectedColor = zaloBlue)
-                                )
-                                Text(label, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp))
-                            }
-                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "Comment sau mỗi lần like (0 = chỉ like). Dùng danh sách câu ở mục Like danh bạ.",
+                            fontSize = 11.sp,
+                            color = Color.Gray
+                        )
+                        Text("Comment / bài (Nhật ký): $feedCommentCount", fontSize = 13.sp)
+                        Slider(
+                            value = feedCommentCount.toFloat(),
+                            onValueChange = { feedCommentCount = it.toInt() },
+                            valueRange = 0f..5f,
+                            steps = 5,
+                            colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue)
+                        )
                     }
                 }
             }
@@ -973,9 +928,9 @@ class MainActivity : ComponentActivity() {
                         dailyLimit = dailyLimit,
                         delayMinMs = (delayMin.toLongOrNull() ?: 1L) * 1000L,
                         delayMaxMs = (delayMax.toLongOrNull() ?: 3L) * 1000L,
-                        interactModeStr = interactMode.name,
+                        interactModeStr = InteractMode.TAP.name,
+                        humanLikeScroll = true,
                         ecoMode = ecoMode,
-                        humanLikeScroll = humanLikeScroll,
                         requireCharging = requireCharging,
                         lowBatteryPauseEnabled = lowBatteryPauseEnabled,
                         lowBatteryThreshold = lowBatteryThreshold,
@@ -983,6 +938,7 @@ class MainActivity : ComponentActivity() {
                         likeModeStr = settingsManager.getLikeMode().name,
                         visitLikeCount = visitLikeCount,
                         visitCommentCount = visitCommentCount,
+                        feedCommentCount = feedCommentCount,
                         visitMaxProfiles = visitMaxProfiles,
                         visitActionMode = visitActionMode.name,
                         visitCommentList = if (comments.isEmpty()) settings.visitCommentList else comments
@@ -1017,6 +973,17 @@ class MainActivity : ComponentActivity() {
                 val matchId = !showOnlyWithId || node.resourceId.isNotEmpty()
                 matchText && matchClickable && matchId
             }
+        }
+
+        var storedIds by remember { mutableStateOf(zaloIdStore.listStoredIdsForDebug()) }
+        fun refreshStoredIds() {
+            storedIds = zaloIdStore.listStoredIdsForDebug()
+        }
+        LaunchedEffect(Unit) {
+            refreshStoredIds()
+        }
+        LaunchedEffect(treeResult?.scannedAt) {
+            refreshStoredIds()
         }
 
         Column(Modifier.fillMaxSize().background(Color(0xFFF5F5F5))) {
@@ -1059,6 +1026,7 @@ class MainActivity : ComponentActivity() {
                                     runCatching {
                                         uiScanner.forceScan(root)
                                         val f = zaloIdStore.exportToJson()
+                                        refreshStoredIds()
                                         Toast.makeText(this@MainActivity, "✅ Đã quét UI & lưu ${f.name}", Toast.LENGTH_SHORT).show()
                                     }.onFailure { e ->
                                         Toast.makeText(this@MainActivity, "❌ ${e.message}", Toast.LENGTH_SHORT).show()
@@ -1093,6 +1061,58 @@ class MainActivity : ComponentActivity() {
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                         ) { Text("📋 Copy JSON", color = Color.White, fontSize = 13.sp) }
+                    }
+                }
+            }
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("ID đã học", fontSize = 14.sp, fontWeight = FontWeight.W600)
+                            Text("ZaloIDStore · bấm Quét UI trên Zalo để cập nhật", fontSize = 11.sp, color = Color.Gray)
+                        }
+                        TextButton(
+                            onClick = {
+                                refreshStoredIds()
+                                Toast.makeText(this@MainActivity, "Đã làm mới", Toast.LENGTH_SHORT).show()
+                            }
+                        ) {
+                            Text("Làm mới", fontSize = 12.sp)
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    storedIds.forEach { (label, value) ->
+                        Text(label, fontSize = 10.sp, color = Color.Gray)
+                        Text(
+                            value,
+                            fontSize = 12.sp,
+                            color = if (value.startsWith("—")) Color.Gray else Color(0xFF111111),
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(
+                                ClipData.newPlainText("ZaloPilot IDs", zaloIdStore.getStoredIdsDebugTextWithKeys())
+                            )
+                            Toast.makeText(this@MainActivity, "Đã copy (nhãn + key)", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("📋 Copy chi tiết", fontSize = 13.sp)
                     }
                 }
             }

@@ -9,10 +9,7 @@ import javax.inject.Singleton
 enum class LikeMode { FEED, VISIT }
 
 /**
- * Chế độ tương tác khi like:
- * TAP    — chỉ tap vào nút Thích (ACTION_CLICK), scroll bằng API
- * SWIPE  — vuốt màn hình lên + tap tọa độ thật như ngón tay thật
- * MIX    — random giữa TAP và SWIPE mỗi lần (tự nhiên nhất)
+ * Giữ enum tương thích Gson / script; hành vi UI **luôn** touch (gesture + vuốt cuộn — xem [LikeSettingsManager.getInteractMode]).
  */
 enum class InteractMode { TAP, SWIPE, MIX }
 
@@ -29,11 +26,12 @@ data class LikeSettings(
     val quietHourEnd: Int = 6,
     val autoStart: Boolean = false,
     val likeModeStr: String = "FEED",
-    val interactModeStr: String = "MIX",  // Mặc định MIX
+    /** Giữ field cho prefs cũ; [getInteractMode] luôn TAP (touch like trước). */
+    val interactModeStr: String = "TAP",
+    /** Giữ field cho prefs cũ; [isHumanLikeScroll] luôn true (vuốt tay khi cuộn). */
+    val humanLikeScroll: Boolean = true,
     /** Giảm tần suất poll/scan và tăng delay — ít nóng, ít hao pin hơn (hơi chậm hơn). */
     val ecoMode: Boolean = false,
-    /** Ưu tiên vuốt gesture để cuộn feed (trông giống người hơn); fallback API nếu gesture fail. */
-    val humanLikeScroll: Boolean = false,
     /** Chỉ chạy khi cắm sạc — rút sạc thì pause, cắm lại tự chạy tiếp (không stop hẳn). */
     val requireCharging: Boolean = false,
     /** Pause khi pin xuống dưới [lowBatteryThreshold]; pin sạc lại lên trên ngưỡng → tự chạy tiếp. */
@@ -44,6 +42,8 @@ data class LikeSettings(
     val pauseWhenZaloAway: Boolean = true,
     val visitLikeCount: Int = 3,
     val visitCommentCount: Int = 0,
+    /** Số comment gửi trên mỗi bài sau khi like thành công ở chế độ Nhật ký (0 = chỉ like). Dùng chung [visitCommentList]. */
+    val feedCommentCount: Int = 0,
     val visitActionMode: String = "LIKE_ONLY",
     val visitMaxProfiles: Int = 50,
     val visitCommentList: List<String> = listOf("👍", "❤️", "Hay quá!", "Tuyệt vời!")
@@ -72,8 +72,11 @@ class LikeSettingsManager @Inject constructor(
         return s.copy(
             visitLikeCount = s.visitLikeCount.coerceIn(0, 10),
             visitCommentCount = s.visitCommentCount.coerceIn(0, 5),
+            feedCommentCount = s.feedCommentCount.coerceIn(0, 5),
             visitMaxProfiles = s.visitMaxProfiles.coerceIn(1, 500),
-            visitCommentList = comments
+            visitCommentList = comments,
+            interactModeStr = InteractMode.TAP.name,
+            humanLikeScroll = true
         )
     }
 
@@ -120,13 +123,11 @@ class LikeSettingsManager @Inject constructor(
         save(load().copy(autoStart = value))
     }
 
-    fun getInteractMode(): InteractMode {
-        return try {
-            InteractMode.valueOf(load().interactModeStr)
-        } catch (e: Exception) {
-            InteractMode.MIX
-        }
-    }
+    /** Luôn TAP — chạm tọa độ (gesture) trước, `ACTION_CLICK` chỉ fallback khi touch fail. */
+    fun getInteractMode(): InteractMode = InteractMode.TAP
+
+    /** Luôn true — cuộn feed ưu tiên vuốt tay (gesture), không theo API scroll trước. */
+    fun isHumanLikeScroll(): Boolean = true
 
     fun getFeedMode(): FeedMode {
         val name = prefs.getString("feed_mode", FeedMode.SCROLL.name) ?: FeedMode.SCROLL.name
@@ -143,8 +144,6 @@ class LikeSettingsManager @Inject constructor(
 
     fun isEcoMode(): Boolean = load().ecoMode
 
-    fun isHumanLikeScroll(): Boolean = load().humanLikeScroll
-
     fun isRequireCharging(): Boolean = load().requireCharging
     fun isLowBatteryPauseEnabled(): Boolean = load().lowBatteryPauseEnabled
     fun getLowBatteryThreshold(): Int = load().lowBatteryThreshold
@@ -152,6 +151,7 @@ class LikeSettingsManager @Inject constructor(
 
     fun getVisitLikeCount(): Int = load().visitLikeCount
     fun getVisitCommentCount(): Int = load().visitCommentCount
+    fun getFeedCommentCount(): Int = load().feedCommentCount
     fun getVisitMaxProfiles(): Int = load().visitMaxProfiles
     fun getVisitCommentList(): List<String> = load().visitCommentList
 

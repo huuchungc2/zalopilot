@@ -2,9 +2,9 @@
   "scripts": [
     {
       "id": "visit_contacts_v1",
-      "version": 8,
+      "version": 9,
       "file": "visit_contacts_v1.json",
-      "desc": "Visit v8 — sang bạn tiếp theo (backToContacts + visitIndex)"
+      "desc": "Visit v9 — sang bạn tiếp (tab Danh bạ/Bạn bè, không chuỗi BACK)"
     }
   ]
 }

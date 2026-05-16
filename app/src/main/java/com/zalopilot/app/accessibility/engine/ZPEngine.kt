@@ -174,7 +174,7 @@ class ZPEngine(
                         continue
                     }
                     emptyScanStreak++
-                    if (emptyScanStreak <= 6) {
+                    if (emptyScanStreak <= 9) {
                         logger.log(LogTag.SCAN, "streak=$emptyScanStreak", "PROFILE_SCROLL_FIND_POSTS")
                         tapProfilePostsTabIfNeeded(root)
                         scrollProfileTimeline()
@@ -254,7 +254,7 @@ class ZPEngine(
 
     private suspend fun tapProfilePostsTabIfNeeded(root: AccessibilityNodeInfo) {
         val tab = nodeFinder.findProfilePostsTabTapTarget(root) ?: return
-        if (tab.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+        if (tap(tab)) {
             logger.log(LogTag.CLICK, "profile_tab", "POSTS_TAB")
             randomDelay(650L, 1000L)
         }
