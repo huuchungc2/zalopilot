@@ -436,45 +436,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             return true
         }
 
-        val input = nodeFinder.findCommentInput(root)
-        if (input == null) {
+        if (!fillCommentInputAndSend(root, text, likeAnchor = null, logTag = "comment_bottom_sheet")) {
             logger.log(LogTag.STATE, "comment_bottom_sheet", "NO_CMT_INPUT_BACK")
-            performGlobalAction(GLOBAL_ACTION_BACK)
-            lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
-            delayEco(550L..950L)
-            return true
-        }
-
-        if (!input.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
-            input.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        }
-        delay(120)
-        val args = Bundle().apply {
-            putCharSequence(
-                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                text
-            )
-        }
-        if (!input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
-            logger.log(LogTag.STATE, "comment_bottom_sheet", "SET_TEXT_FAIL_BACK")
-            performGlobalAction(GLOBAL_ACTION_BACK)
-            lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
-            delayEco(550L..950L)
-            return true
-        }
-        logger.log(LogTag.STATE, "len=${text.length}", "COMMENT_BOTTOM_SHEET_FILLED")
-        delayEco(320L..550L)
-
-        val send = nodeFinder.findCommentSendButton(root)
-        if (send != null) {
-            if (performClickWithFallback(send)) {
-                logger.log(LogTag.CLICK, "comment_bottom_sheet", "SEND_OK")
-            } else {
-                logger.log(LogTag.CLICK, "comment_bottom_sheet", "SEND_FAIL")
-            }
-            delayEco(400L..750L)
-        } else {
-            logger.log(LogTag.CLICK, "comment_bottom_sheet", "SEND_NOT_FOUND")
         }
 
         performGlobalAction(GLOBAL_ACTION_BACK)
@@ -501,6 +464,77 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Tìm ô nhập (inline / sheet), tap placeholder nếu cần, SET_TEXT + Gửi.
+     * @return true nếu đã gửi hoặc đã nhập text thành công.
+     */
+    private suspend fun fillCommentInputAndSend(
+        root: AccessibilityNodeInfo,
+        text: String,
+        likeAnchor: AccessibilityNodeInfo?,
+        logTag: String
+    ): Boolean {
+        var workRoot = root
+        var recycleWorkRoot = false
+        var input = likeAnchor?.let { nodeFinder.findCommentInputNearLike(it) }
+        input = input ?: nodeFinder.findCommentInput(workRoot)
+        if (input == null) {
+            val placeholder = nodeFinder.findCommentInputPlaceholder(workRoot)
+            if (placeholder != null && performClickWithFallback(placeholder)) {
+                logger.log(LogTag.CLICK, logTag, "TAP_PLACEHOLDER")
+                delayEco(500L..900L)
+                val fresh = acquireRootOrNull(5, 100L..260L, LogTag.CLICK, quietLog = true)
+                if (fresh != null) {
+                    if (recycleWorkRoot) runCatching { workRoot.recycle() }
+                    workRoot = fresh
+                    recycleWorkRoot = true
+                    input = nodeFinder.findCommentInput(workRoot)
+                    if (input == null && likeAnchor != null) {
+                        val reAnchor = nodeFinder.findLikeAreaNodeAt(
+                            workRoot,
+                            Rect().also { likeAnchor.getBoundsInScreen(it) },
+                            likeAnchor.viewIdResourceName
+                        )
+                        input = reAnchor?.let { nodeFinder.findCommentInputNearLike(it) }
+                    }
+                }
+            }
+        }
+        if (input == null) {
+            if (recycleWorkRoot) runCatching { workRoot.recycle() }
+            return false
+        }
+        return try {
+            if (!input.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
+                input.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            }
+            delay(160)
+            val args = Bundle().apply {
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    text
+                )
+            }
+            if (!input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                logger.log(LogTag.CLICK, logTag, "SET_TEXT_FAIL")
+                return false
+            }
+            logger.log(LogTag.STATE, "len=${text.length}", "${logTag}_FILLED")
+            delayEco(400L..700L)
+            val send = nodeFinder.findCommentSendButton(workRoot)
+            if (send != null && performClickWithFallback(send)) {
+                logger.log(LogTag.CLICK, logTag, "SEND_OK")
+                delayEco(400L..750L)
+                true
+            } else {
+                logger.log(LogTag.CLICK, logTag, "SEND_FAIL")
+                false
+            }
+        } finally {
+            if (recycleWorkRoot) runCatching { workRoot.recycle() }
+        }
+    }
+
+    /**
      * Sau like thành công trên Nhật ký: mở bình luận → nhập ngẫu nhiên ([LikeSettings.visitCommentList]) → gửi → về feed.
      */
     private suspend fun runFeedCommentsAfterLike(
@@ -522,19 +556,33 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 logger.log(LogTag.CLICK, "feed_comment", "ROOT_NULL")
                 return@repeat
             }
+            var anchor: AccessibilityNodeInfo? = null
             try {
                 if (!nodeFinder.isLikelyTimelineFeedScreen(root) &&
-                    !nodeFinder.hasVisibleSelfAlreadyLikedLikeControl(root)
+                    !nodeFinder.hasVisibleSelfAlreadyLikedLikeControl(root) &&
+                    !nodeFinder.isCommentBottomSheetOverFeed(root)
                 ) {
                     logger.log(LogTag.SCAN, "feed_comment", "NOT_FEED_SKIP")
                     return@repeat
                 }
-                val anchor = nodeFinder.findLikeAreaNodeAt(root, origRect, origId)
-                if (anchor == null) {
+                anchor = nodeFinder.findLikeAreaNodeAt(root, origRect, origId)
+                if (anchor == null && !nodeFinder.isCommentBottomSheetOverFeed(root)) {
                     logger.log(LogTag.CLICK, "feed_comment", "ANCHOR_MISS")
                     return@repeat
                 }
-                val commentBtn = nodeFinder.findCommentButton(anchor)
+                if (fillCommentInputAndSend(root, text, anchor, "feed_comment_inline")) {
+                    logger.log(LogTag.CLICK, "feed_comment", "INLINE_OK round=${roundIdx + 1}")
+                    dismissFeedCommentSurfaceIfOpen()
+                    return@repeat
+                }
+                if (nodeFinder.isCommentBottomSheetOverFeed(root)) {
+                    if (fillCommentInputAndSend(root, text, anchor, "feed_comment_sheet")) {
+                        logger.log(LogTag.CLICK, "feed_comment", "SHEET_OK round=${roundIdx + 1}")
+                    }
+                    dismissFeedCommentSurfaceIfOpen()
+                    return@repeat
+                }
+                val commentBtn = anchor?.let { nodeFinder.findCommentButton(it) }
                 if (commentBtn == null) {
                     logger.log(LogTag.CLICK, "feed_comment", "NO_COMMENT_BTN")
                     return@repeat
@@ -546,42 +594,16 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             } finally {
                 runCatching { root.recycle() }
             }
-            delayEco(750L..1_200L)
-            val r2 = acquireRootOrNull(5, 100L..260L, LogTag.CLICK, quietLog = true)
+            delayEco(1_000L..1_600L)
+            val r2 = acquireRootOrNull(6, 120L..300L, LogTag.CLICK, quietLog = true)
             if (r2 == null) {
                 dismissFeedCommentSurfaceIfOpen()
                 return@repeat
             }
             try {
-                val input = nodeFinder.findCommentInput(r2)
-                if (input == null) {
-                    logger.log(LogTag.CLICK, "feed_comment", "NO_INPUT")
-                    dismissFeedCommentSurfaceIfOpen()
-                    return@repeat
+                if (fillCommentInputAndSend(r2, text, anchor, "feed_comment_sheet")) {
+                    logger.log(LogTag.CLICK, "feed_comment", "SHEET_OK round=${roundIdx + 1}")
                 }
-                if (!input.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
-                    input.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                }
-                delay(140)
-                val args = Bundle().apply {
-                    putCharSequence(
-                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                        text
-                    )
-                }
-                if (!input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
-                    logger.log(LogTag.CLICK, "feed_comment", "SET_TEXT_FAIL")
-                    dismissFeedCommentSurfaceIfOpen()
-                    return@repeat
-                }
-                delayEco(450L..750L)
-                val send = nodeFinder.findCommentSendButton(r2)
-                if (send != null && performClickWithFallback(send)) {
-                    logger.log(LogTag.CLICK, "feed_comment", "SEND_OK round=${roundIdx + 1}")
-                } else {
-                    logger.log(LogTag.CLICK, "feed_comment", "SEND_FAIL")
-                }
-                delayEco(550L..900L)
             } finally {
                 runCatching { r2.recycle() }
             }
@@ -1300,13 +1322,13 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
     suspend fun scriptTapNode(node: AccessibilityNodeInfo): Boolean = tapNodeByCoordinate(node)
 
-    /** Visit chat→profile: ACTION_CLICK (+ parent) trước — gesture hay miss trên OEM / ViewGroup. */
+    /** Visit chat→profile: chỉ ACTION_CLICK lên chính node nếu clickable; KHÔNG leo parent (hay dừng ở zds_action_bar full ngang → không mở profile). Fallback: gesture tại bounds node (actionbar_middle_container thường clickable=false). */
     suspend fun scriptTapProfileEntryNode(node: AccessibilityNodeInfo): Boolean {
-        if (performClickWithFallback(node)) {
+        if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
             logger.log(LogTag.CLICK, "profileEntry", "ACTION_CLICK_OK")
             return true
         }
-        logger.log(LogTag.CLICK, "profileEntry", "ACTION_CLICK_FAIL_USE_GESTURE")
+        logger.log(LogTag.CLICK, "profileEntry", "GESTURE_ON_BOUNDS")
         return tapNodeByCoordinate(node)
     }
 

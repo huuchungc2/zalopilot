@@ -1094,8 +1094,9 @@ class NodeFinder @Inject constructor(
                     !txt.equals("tìm kiếm", ignoreCase = true) &&
                     !txt.equals("search", ignoreCase = true)
                 ) {
-                    findClickableAncestor(t)?.let { return it }
+                    findClickableAncestorForProfileTitleBar(t)?.let { return it }
                     if (t.isClickable && t.hasValidScreenBounds()) return t
+                    if (t.hasValidScreenBounds()) return t
                 }
             }
             findByViewId(root, "action_bar_title").firstOrNull()?.let { t ->
@@ -1104,8 +1105,9 @@ class NodeFinder @Inject constructor(
                     !txt.equals("tìm kiếm", ignoreCase = true) &&
                     !txt.equals("search", ignoreCase = true)
                 ) {
-                    findClickableAncestor(t)?.let { return it }
+                    findClickableAncestorForProfileTitleBar(t)?.let { return it }
                     if (t.isClickable && t.hasValidScreenBounds()) return t
+                    if (t.hasValidScreenBounds()) return t
                 }
             }
             findByViewId(root, "zalo_action_bar").firstOrNull()?.let { bar ->
@@ -1117,15 +1119,20 @@ class NodeFinder @Inject constructor(
         findByViewId(root, "zds_action_bar").firstOrNull { it.isClickable }?.let { return it }
         findByViewId(root, "actionbar_middle_container").firstOrNull()?.let { middle ->
             var p: AccessibilityNodeInfo? = middle
-            repeat(6) {
+            repeat(8) {
                 if (p == null) return@repeat
+                val pid = p.viewIdResourceName?.lowercase().orEmpty()
+                if (pid.contains("zds_action_bar")) {
+                    p = p.parent
+                    return@repeat
+                }
                 if (p.isClickable && p.hasValidScreenBounds()) return p
                 p = p.parent
             }
             return middle
         }
         findByViewId(root, "actionbar_txtTitle").firstOrNull()?.let { title ->
-            return findClickableAncestor(title) ?: title
+            return findClickableAncestorForProfileTitleBar(title) ?: title
         }
         if (isProfileScreen(root)) {
             logger.log(LogTag.SCAN, "findProfileEntryNode", "ALREADY_ON_PROFILE_NO_CHAT_BAR")
@@ -1212,14 +1219,202 @@ class NodeFinder @Inject constructor(
         return null
     }
 
-    fun findCommentInput(root: AccessibilityNodeInfo): AccessibilityNodeInfo? =
-        findByViewId(root, "cmtinput_text").firstOrNull()
-            ?: findNodeWithHint(root, "Nhập bình luận", 2000)
-            ?: findNodeWithHint(root, "Write a comment", 2000)
+    /** Ô nhập bình luận — sheet feed (`bottom_sheet_container`) hoặc inline dưới bài. */
+    fun findCommentInput(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        findByViewId(root, "cmtinput_text").firstOrNull { isLikelyCommentInputNode(it) }?.let { return it }
+        commentInputSheetScopes(root).forEach { scope ->
+            findCommentInputInScope(scope)?.let { return it }
+        }
+        for (phrase in inlineCommentPhrases) {
+            findNodeWithHint(root, phrase, 2500)?.let { node ->
+                if (isLikelyCommentInputNode(node) || isCommentPlaceholderNode(node)) return node
+            }
+        }
+        return findEditableCommentField(root, maxNodes = 2800, preferBottomHalf = true)
+    }
 
-    fun findCommentSendButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? =
-        findByViewId(root, "cmtinput_send").firstOrNull { it.isClickable }
-            ?: findByViewId(root, "cmtinput_send").firstOrNull()
+    /** Ô nhập gần nút Thích (inline trên feed) — tránh mở sheet khi đã có composer dưới bài. */
+    fun findCommentInputNearLike(likeNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var scope: AccessibilityNodeInfo? = null
+        var walk: AccessibilityNodeInfo? = likeNode
+        repeat(12) {
+            val w = walk ?: return@repeat
+            val id = w.viewIdResourceName.orEmpty().lowercase()
+            if (id.contains("feeditemfooterbarmodule") ||
+                id.contains("feed_item") ||
+                id.contains("lv_media_store")
+            ) {
+                scope = w
+                break
+            }
+            walk = w.parent
+        }
+        val host = scope ?: likeNode.parent ?: likeNode
+        findCommentInputInScope(host)?.let { return it }
+        for (phrase in inlineCommentPhrases) {
+            findNodeWithHint(host, phrase, 900)?.let { node ->
+                if (isLikelyCommentInputNode(node) || isCommentPlaceholderNode(node)) return node
+            }
+        }
+        return findEditableCommentField(host, maxNodes = 900, preferBottomHalf = false)
+    }
+
+    /** Placeholder "Nhập bình luận" (clickable) — tap để hiện `cmtinput_text` / bàn phím. */
+    fun findCommentInputPlaceholder(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val scopes = commentInputSheetScopes(root).ifEmpty { listOf(root) }
+        for (scope in scopes) {
+            val stack = ArrayDeque<AccessibilityNodeInfo>()
+            stack.addLast(scope)
+            var visited = 0
+            while (stack.isNotEmpty() && visited < 1400) {
+                val n = stack.removeLast()
+                visited++
+                if (isCommentPlaceholderNode(n)) {
+                    resolveClickableTapTarget(n)?.let { return it }
+                    if (n.isClickable && n.hasValidScreenBounds()) return n
+                }
+                for (i in 0 until n.childCount) {
+                    n.getChild(i)?.let { stack.addLast(it) }
+                }
+            }
+        }
+        return null
+    }
+
+    fun findCommentSendButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        findByViewId(root, "cmtinput_send").firstOrNull { it.isClickable && it.isEnabled }?.let { return it }
+        findByViewId(root, "cmtinput_send").firstOrNull()?.let { return it }
+        findByViewId(root, "btn_send_comment").firstOrNull { it.isClickable }?.let { return it }
+        val scopes = commentInputSheetScopes(root).ifEmpty { listOf(root) }
+        for (scope in scopes) {
+            findNodeWithTextOrDesc(scope, "Gửi", maxNodes = 900)?.let { node ->
+                resolveClickableTapTarget(node)?.let { return it }
+            }
+            findNodeWithTextOrDesc(scope, "Send", maxNodes = 600)?.let { node ->
+                resolveClickableTapTarget(node)?.let { return it }
+            }
+        }
+        return findBottomRightSendIcon(root)
+    }
+
+    private fun commentInputSheetScopes(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+        val out = LinkedHashSet<AccessibilityNodeInfo>()
+        for (suffix in listOf(
+            "bottom_sheet_container",
+            "fl_bottom_container",
+            "keyboard_frame_layout"
+        )) {
+            findByViewId(root, suffix).forEach { out.add(it) }
+        }
+        findByViewId(root, "main_comment_view").forEach { mc ->
+            val r = Rect().also { mc.getBoundsInScreen(it) }
+            val rootR = Rect().also { root.getBoundsInScreen(it) }
+            if (r.top > rootR.top + rootR.height() / 4) out.add(mc)
+        }
+        return out.toList()
+    }
+
+    private fun findCommentInputInScope(scope: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        findByViewId(scope, "cmtinput_text").firstOrNull { isLikelyCommentInputNode(it) }?.let { return it }
+        for (suffix in listOf("cmtinput_text", "edt_comment", "comment_input_text", "input_comment")) {
+            findByViewId(scope, suffix).firstOrNull { isLikelyCommentInputNode(it) }?.let { return it }
+        }
+        for (phrase in inlineCommentPhrases) {
+            findNodeWithHint(scope, phrase, 1000)?.let { node ->
+                if (isLikelyCommentInputNode(node)) return node
+            }
+        }
+        return findEditableCommentField(scope, maxNodes = 1200, preferBottomHalf = true)
+    }
+
+    private fun isLikelyCommentInputNode(node: AccessibilityNodeInfo): Boolean {
+        if (!node.isEnabled || !node.hasValidScreenBounds()) return false
+        val cls = node.className?.toString()?.lowercase().orEmpty()
+        if (cls.contains("edittext")) return true
+        if (Build.VERSION.SDK_INT >= 18 && node.isEditable) return true
+        val id = node.viewIdResourceName?.lowercase().orEmpty()
+        if (id.contains("cmtinput") && !id.contains("send")) return true
+        if (id.contains("comment") && id.contains("input") && !id.contains("send")) return true
+        return false
+    }
+
+    private fun isCommentPlaceholderNode(node: AccessibilityNodeInfo): Boolean {
+        if (!node.isEnabled || !node.hasValidScreenBounds()) return false
+        if (isLikelyCommentInputNode(node)) return true
+        val fields = listOf(
+            node.hintText?.toString(),
+            node.text?.toString(),
+            node.contentDescription?.toString()
+        )
+        for (raw in fields) {
+            val low = raw?.trim()?.lowercase().orEmpty()
+            if (low.isEmpty()) continue
+            if (inlineCommentPhrases.any { low == it || low.startsWith(it) }) {
+                if (!node.viewIdResourceName.orEmpty().lowercase().contains("chatinput")) return true
+            }
+        }
+        return false
+    }
+
+    private fun findEditableCommentField(
+        root: AccessibilityNodeInfo,
+        maxNodes: Int,
+        preferBottomHalf: Boolean
+    ): AccessibilityNodeInfo? {
+        val rootRect = Rect().also { root.getBoundsInScreen(it) }
+        val minTop = if (preferBottomHalf) rootRect.top + rootRect.height() / 3 else rootRect.top
+        var best: AccessibilityNodeInfo? = null
+        var bestBottom = Int.MIN_VALUE
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < maxNodes) {
+            val n = stack.removeLast()
+            visited++
+            if (isLikelyCommentInputNode(n)) {
+                val r = Rect().also { n.getBoundsInScreen(it) }
+                if (r.top >= minTop && r.bottom > bestBottom) {
+                    bestBottom = r.bottom
+                    best = n
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return best
+    }
+
+    private fun findBottomRightSendIcon(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val rootRect = Rect().also { root.getBoundsInScreen(it) }
+        val minY = rootRect.top + (rootRect.height() * 0.55f).toInt()
+        var best: AccessibilityNodeInfo? = null
+        var bestRight = Int.MIN_VALUE
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 1600) {
+            val n = stack.removeLast()
+            visited++
+            if (n.isClickable && n.isEnabled && n.hasValidScreenBounds()) {
+                val r = Rect().also { n.getBoundsInScreen(it) }
+                if (r.bottom >= minY && r.right > bestRight && r.width() in 36..220 && r.height() in 36..220) {
+                    val id = n.viewIdResourceName?.lowercase().orEmpty()
+                    val label = listOf(n.text, n.contentDescription)
+                        .mapNotNull { it?.toString()?.trim()?.lowercase() }
+                        .joinToString(" ")
+                    if (id.contains("send") || label == "gửi" || label == "send") {
+                        bestRight = r.right
+                        best = n
+                    }
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return best
+    }
 
     fun getRandomComment(): String {
         val list = settingsManager.getVisitCommentList()
@@ -1366,6 +1561,24 @@ class NodeFinder @Inject constructor(
         var p: AccessibilityNodeInfo? = node.parent
         repeat(6) {
             if (p == null) return null
+            if (p.isClickable && p.hasValidScreenBounds()) return p
+            p = p.parent
+        }
+        return null
+    }
+
+    /**
+     * Tương tự [findClickableAncestor] nhưng bỏ qua `zds_action_bar` — tap đó không mở profile (full width).
+     */
+    private fun findClickableAncestorForProfileTitleBar(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var p: AccessibilityNodeInfo? = node.parent
+        repeat(8) {
+            if (p == null) return null
+            val id = p.viewIdResourceName?.lowercase().orEmpty()
+            if (id.contains("zds_action_bar")) {
+                p = p.parent
+                return@repeat
+            }
             if (p.isClickable && p.hasValidScreenBounds()) return p
             p = p.parent
         }
