@@ -125,6 +125,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     /** Visit script đang chạy — cho phép tự mở lại Zalo khi lộ launcher. */
     @Volatile
     private var visitScriptRunning = false
+    /** Đang gửi bình luận feed — không BACK sheet trong [detectAndEscapeWrongScreen]. */
+    @Volatile
+    private var feedCommentFlowInProgress = false
     /** Vừa quét thấy feed Nhật ký — không BACK viewer trong cửa sổ này. */
     private var lastFeedUiConfirmedAtElapsedMs: Long = 0L
 
@@ -514,7 +517,14 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     text
                 )
             }
-            if (!input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+            var setOk = input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            if (!setOk) {
+                delay(280)
+                input.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                delay(120)
+                setOk = input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            }
+            if (!setOk) {
                 logger.log(LogTag.CLICK, logTag, "SET_TEXT_FAIL")
                 return false
             }
@@ -543,6 +553,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         rounds: Int
     ) {
         if (rounds <= 0) return
+        feedCommentFlowInProgress = true
+        try {
         repeat(rounds) { roundIdx ->
             if (!isRunning) return
             val text = nodeFinder.getRandomComment().trim()
@@ -609,6 +621,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             }
             dismissFeedCommentSurfaceIfOpen()
         }
+        } finally {
+            feedCommentFlowInProgress = false
+        }
     }
 
     /**
@@ -618,6 +633,18 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private suspend fun detectAndEscapeWrongScreen(root: AccessibilityNodeInfo?): Boolean {
         if (root == null) return false
         if (!canEscapeWithGlobalBack(root)) return false
+
+        if (feedCommentFlowInProgress) {
+            if (nodeFinder.isZingMusicBottomSheet(root)) {
+                logger.log(LogTag.STATE, "zing_mp3_sheet", "DETECTED_BACK_DURING_COMMENT")
+                updateStatus("↩️ Zing MP3 — back về feed")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+                delay(ecoVerifyMs(500L))
+                return true
+            }
+            return false
+        }
 
         when {
             nodeFinder.isCommentBottomSheetOverFeed(root) -> {
@@ -702,10 +729,31 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         return true
     }
 
-    /** Sau click like: viewer (strict) → sheet bình luận / full-screen bình luận / Zing ([detectAndEscapeWrongScreen]). */
+  /**
+     * Sau click like: chỉ thoát viewer ảnh / Zing — không BACK sheet bình luận khi sắp hoặc đang comment feed.
+     */
     private suspend fun escapeWrongScreenAfterLikeClick(root: AccessibilityNodeInfo?): Boolean {
         if (escapeFullscreenImageViewerAfterLike(root)) return true
-        return detectAndEscapeWrongScreen(root)
+        if (root == null || !canEscapeWithGlobalBack(root)) return false
+        if (feedCommentFlowInProgress) return false
+        val willCommentFeed = settingsManager.getFeedCommentCount() > 0 &&
+            try {
+                VisitActionMode.valueOf(settingsManager.load().visitActionMode)
+            } catch (e: Exception) {
+                VisitActionMode.LIKE_ONLY
+            } != VisitActionMode.LIKE_ONLY
+        if (willCommentFeed &&
+            (nodeFinder.isCommentBottomSheetOverFeed(root) || nodeFinder.isFullScreenCommentScreen(root))
+        ) {
+            return false
+        }
+        if (nodeFinder.isZingMusicBottomSheet(root)) {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+            delayEco(500L..900L)
+            return true
+        }
+        return false
     }
 
     /**
@@ -1322,14 +1370,59 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
     suspend fun scriptTapNode(node: AccessibilityNodeInfo): Boolean = tapNodeByCoordinate(node)
 
-    /** Visit chat→profile: chỉ ACTION_CLICK lên chính node nếu clickable; KHÔNG leo parent (hay dừng ở zds_action_bar full ngang → không mở profile). Fallback: gesture tại bounds node (actionbar_middle_container thường clickable=false). */
+    /** Visit chat→profile: gesture tại bounds trước (middle_container thường clickable=false; click parent = zds_action_bar → không mở profile). */
     suspend fun scriptTapProfileEntryNode(node: AccessibilityNodeInfo): Boolean {
+        if (tapNodeByCoordinate(node)) {
+            logger.log(LogTag.CLICK, "profileEntry", "GESTURE_OK")
+            return true
+        }
         if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
             logger.log(LogTag.CLICK, "profileEntry", "ACTION_CLICK_OK")
             return true
         }
-        logger.log(LogTag.CLICK, "profileEntry", "GESTURE_ON_BOUNDS")
-        return tapNodeByCoordinate(node)
+        logger.log(LogTag.CLICK, "profileEntry", "TAP_FAIL")
+        return false
+    }
+
+    suspend fun waitForProfileScreen(timeoutMs: Long = 5_500L): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (isRunning && System.currentTimeMillis() < deadline) {
+            val r = acquireRootOrNull(3, 80L..200L, LogTag.STATE, quietLog = true)
+            if (r != null) {
+                try {
+                    if (nodeFinder.isProfileScreen(r)) return true
+                } finally {
+                    runCatching { r.recycle() }
+                }
+            }
+            delay(380)
+        }
+        return false
+    }
+
+    /** Feed đang nhầm tab (vd. Tin nhắn) → chuyển Nhật ký trước khi quét Thích. */
+    private suspend fun ensureTimelineTabForFeed(): Boolean {
+        if (settingsManager.getLikeMode() == LikeMode.VISIT) return true
+        val root = acquireRootOrNull(4, 100L..260L, LogTag.STATE, quietLog = true) ?: return false
+        return try {
+            if (nodeFinder.isLikelyTimelineFeedScreen(root)) return true
+            logger.log(LogTag.STATE, "feed", "SWITCH_TO_TIMELINE_TAB")
+            updateStatus("↩ Chuyển sang tab Nhật ký…")
+            nodeFinder.findTimelineTabTapTarget(root)?.let { prepareZaloTabClick(it) }
+            delay(1_100)
+            val check = acquireRootOrNull(4, 100L..240L, LogTag.STATE, quietLog = true)
+            if (check != null) {
+                try {
+                    nodeFinder.isLikelyTimelineFeedScreen(check)
+                } finally {
+                    runCatching { check.recycle() }
+                }
+            } else {
+                false
+            }
+        } finally {
+            runCatching { root.recycle() }
+        }
     }
 
     suspend fun scriptTapCenter(rect: Rect): Boolean {
@@ -1506,6 +1599,12 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     }
                     root = refreshed
                     initialFeedSettled = true
+                }
+
+                if (!ensureTimelineTabForFeed()) {
+                    updateStatus("⚠️ Mở tab Nhật ký (đang ở Tin nhắn?)")
+                    delayEco(1_200L..2_000L)
+                    continue@mainLoop
                 }
 
                 root = awaitFeedLikeScanRoot(root!!)

@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- fix(stability): feed comment — cờ `feedCommentFlowInProgress` tránh BACK sheet khi đang gõ; sau like không BACK sheet nếu bật comment feed; tự chuyển tab Nhật ký khi đang Tin nhắn; Visit recovery (back + retry) thay dừng hẳn; profile entry gesture trước + chờ `waitForProfileScreen`.
 - fix(feed/comment): bình luận Nhật ký / bottom sheet — tìm ô nhập trong `bottom_sheet_container`, EditText/placeholder, tap «Nhập bình luận» rồi `cmtinput_text`; inline gần nút Thích trước khi mở sheet; nút Gửi rộng hơn. `actionbar_middle_container` thường `clickable=false`; `performClickWithFallback` leo lên `zds_action_bar` (log ACTION_CLICK_OK nhưng không mở profile). `scriptTapProfileEntryNode` chỉ click self nếu clickable, không thì gesture trên bounds; `findClickableAncestorForProfileTitleBar` bỏ qua `zds_action_bar`.
 - fix(ci): `ZPScriptRunner` — import `AccessibilityNodeInfo`; `tryTapProfileTitleBar` là `suspend` ở cấp class (local function không gọi được `scriptTapProfileEntryNode`).
 - fix(visit/chat): `tapProfileEntry`/slim log — retry/verify; `isProfileScreen`/`isChatScreen` với profile chồng chat cho `likeProfilePosts`.

@@ -28,6 +28,7 @@ class ZPScriptRunner @Inject constructor(
     private var visitRoundSuccess = true
     /** Chọn hàng contact theo thứ tự trong list hiện tại — reset khi [runFindContactItems]. */
     private var sessionContactTapOrdinal = 0
+    private var visitRecoveryStreak = 0
 
     suspend fun run(
         service: ZaloPilotAccessibilityService,
@@ -39,6 +40,7 @@ class ZPScriptRunner @Inject constructor(
         gotoCount = 0
         visitRoundSuccess = true
         sessionContactTapOrdinal = 0
+        visitRecoveryStreak = 0
         val profilesLimit = maxProfiles ?: settingsManager.getVisitMaxProfiles()
         var profilesDone = 0
         var index = 0
@@ -89,6 +91,18 @@ class ZPScriptRunner @Inject constructor(
             }
 
             if (!ok && step.action.lowercase() !in SKIP_ON_FAIL_ACTIONS) {
+                if (visitRecoveryStreak < MAX_VISIT_RECOVERY &&
+                    runVisitStepRecovery(service, engine, step)
+                ) {
+                    visitRecoveryStreak++
+                    logger.log(
+                        LogTag.STATE,
+                        "action=${step.action} streak=$visitRecoveryStreak",
+                        "VISIT_STEP_RECOVERY_RETRY"
+                    )
+                    continue
+                }
+                visitRecoveryStreak = 0
                 if (step.action.lowercase() == "ensurescreen" && ensureScreenStreak < 10) {
                     ensureScreenStreak++
                     val screen = step.screen.orEmpty()
@@ -112,7 +126,10 @@ class ZPScriptRunner @Inject constructor(
                 logger.log(LogTag.ERROR, step.action, "SCRIPT_STEP_FAIL_STOP")
                 return false
             }
-            if (ok) ensureScreenStreak = 0
+            if (ok) {
+                ensureScreenStreak = 0
+                visitRecoveryStreak = 0
+            }
 
             index++
         }
@@ -167,60 +184,7 @@ class ZPScriptRunner @Inject constructor(
                 true
             }
             "tapcontactat" -> runTapContactAt(engine, step)
-            "tapprofileentry" -> {
-                val root = engine.acquireRoot() ?: return false
-                try {
-                    if (nodeFinder.isProfileScreen(root)) {
-                        logger.log(LogTag.STATE, "tapProfileEntry", "SKIP_ALREADY_ON_PROFILE")
-                        return true
-                    }
-                    val node = nodeFinder.findProfileEntryNode(root) ?: return false
-                    var ok = service.scriptTapProfileEntryNode(node)
-                    if (ok) delay(750)
-                    if (!ok) return false
-                    val r2 = engine.acquireRoot()
-                    if (r2 != null) {
-                        try {
-                            if (nodeFinder.isProfileScreen(r2)) return true
-                            if (nodeFinder.isChatScreen(r2)) {
-                                ok = tryTapProfileTitleBar(service, r2, "RETRY_STILL_CHAT") && ok
-                                if (ok) delay(750)
-                            }
-                        } finally {
-                            runCatching { r2.recycle() }
-                        }
-                    }
-                    val r3 = engine.acquireRoot() ?: return ok
-                    return try {
-                        when {
-                            nodeFinder.isProfileScreen(r3) -> true
-                            nodeFinder.isChatScreen(r3) -> {
-                                val last = tryTapProfileTitleBar(service, r3, "THIRD_CHAT")
-                                if (last) delay(800)
-                                val r4 = engine.acquireRoot()
-                                if (r4 != null) {
-                                    try {
-                                        if (nodeFinder.isProfileScreen(r4)) true
-                                        else if (nodeFinder.isChatScreen(r4)) {
-                                            logger.log(LogTag.ERROR, "tapProfileEntry", "STILL_CHAT_AFTER_TAPS")
-                                            false
-                                        } else {
-                                            true
-                                        }
-                                    } finally {
-                                        runCatching { r4.recycle() }
-                                    }
-                                } else last && ok
-                            }
-                            else -> true
-                        }
-                    } finally {
-                        runCatching { r3.recycle() }
-                    }
-                } finally {
-                    runCatching { root.recycle() }
-                }
-            }
+            "tapprofileentry" -> runTapProfileEntry(service, engine)
             "likeprofileposts" -> {
                 val mode = settingsManager.getVisitActionMode()
                 val requested = engine.resolveVarInt(step.count ?: "\$visitLikeCount")
@@ -583,6 +547,77 @@ class ZPScriptRunner @Inject constructor(
     private fun normalizeVar(raw: String?): String =
         raw?.trim()?.removePrefix("$")?.lowercase().orEmpty()
 
+    private suspend fun runTapProfileEntry(
+        service: ZaloPilotAccessibilityService,
+        engine: ZPEngine
+    ): Boolean {
+        val root = engine.acquireRoot() ?: return false
+        try {
+            if (nodeFinder.isProfileScreen(root)) {
+                logger.log(LogTag.STATE, "tapProfileEntry", "SKIP_ALREADY_ON_PROFILE")
+                return true
+            }
+            val node = nodeFinder.findProfileEntryNode(root) ?: return false
+            if (!service.scriptTapProfileEntryNode(node)) return false
+            delay(900)
+            if (service.waitForProfileScreen(6_000L)) return true
+            val r2 = engine.acquireRoot() ?: return false
+            try {
+                if (nodeFinder.isProfileScreen(r2)) return true
+                if (nodeFinder.isChatScreen(r2)) {
+                    tryTapProfileTitleBar(service, r2, "RETRY_CHAT")
+                    delay(1_000)
+                }
+            } finally {
+                runCatching { r2.recycle() }
+            }
+            if (service.waitForProfileScreen(4_000L)) return true
+            val r3 = engine.acquireRoot()
+            if (r3 != null) {
+                try {
+                    if (nodeFinder.isProfileScreen(r3)) return true
+                    if (nodeFinder.isChatScreen(r3)) {
+                        logger.log(LogTag.ERROR, "tapProfileEntry", "STILL_CHAT_AFTER_TAPS")
+                        return false
+                    }
+                    return true
+                } finally {
+                    runCatching { r3.recycle() }
+                }
+            }
+            return false
+        } finally {
+            runCatching { root.recycle() }
+        }
+    }
+
+    private suspend fun runVisitStepRecovery(
+        service: ZaloPilotAccessibilityService,
+        engine: ZPEngine,
+        step: ZPStep
+    ): Boolean {
+        return when (step.action.lowercase()) {
+            "tapprofileentry" -> {
+                engine.back()
+                delay(650)
+                engine.back()
+                delay(900)
+                true
+            }
+            "tapcontactat" -> {
+                engine.scrollContacts()
+                delay(750)
+                true
+            }
+            "opencontactsfriends" -> {
+                service.ensureZaloForegroundForBot(12_000L)
+                delay(500)
+                true
+            }
+            else -> false
+        }
+    }
+
     private suspend fun tryTapProfileTitleBar(
         service: ZaloPilotAccessibilityService,
         r: AccessibilityNodeInfo,
@@ -606,6 +641,7 @@ class ZPScriptRunner @Inject constructor(
 
     companion object {
         private const val MAX_GOTO = 10_000
+        private const val MAX_VISIT_RECOVERY = 5
         private val SKIP_ON_FAIL_ACTIONS = setOf("goto", "savevar", "incrementvar")
     }
 }
