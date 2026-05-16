@@ -40,6 +40,7 @@ import com.zalopilot.app.accessibility.engine.ZPScriptMeta
 import com.zalopilot.app.accessibility.engine.ZPScriptStore
 import com.zalopilot.app.util.AccessibilityHelper
 import com.zalopilot.app.util.AppVersion
+import com.zalopilot.app.util.LikeMode
 import kotlinx.coroutines.launch
 
 @Composable
@@ -215,7 +216,7 @@ fun ScriptScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = {
-                                AccessibilityHelper.requestStartAutoLike(context)
+                                AccessibilityHelper.requestStartAutoLike(context, LikeMode.VISIT)
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF27AE60))

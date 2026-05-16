@@ -83,6 +83,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private var foregroundPollJob: Job? = null
 
     var isRunning = false
+    /** Mode khóa khi bot đang chạy — không đổi khi user đổi radio / prefs giữa phiên. */
+    @Volatile
+    private var sessionLikeMode: LikeMode? = null
     private var likeJob: Job? = null
     private var sessionLikeCount = 0
     private var wakeLock: PowerManager.WakeLock? = null
@@ -128,8 +131,13 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     /** Đang gửi bình luận feed — không BACK sheet trong [detectAndEscapeWrongScreen]. */
     @Volatile
     private var feedCommentFlowInProgress = false
+    /** Vùng nút Thích vừa like — phase comment không tap vào đây (tránh unlike). */
+    private var feedLikeGuardRect: Rect? = null
+    private var feedLikeGuardUntilMs: Long = 0L
     /** Vừa quét thấy feed Nhật ký — không BACK viewer trong cửa sổ này. */
     private var lastFeedUiConfirmedAtElapsedMs: Long = 0L
+    /** Bài tap Thích nhưng cứ mở bình luận — bỏ qua cả phiên (không clear khi cuộn). */
+    private val feedPostsAbandonedLikeTrap = mutableSetOf<String>()
 
     private var windowManager: WindowManager? = null
     private var statusView: LinearLayout? = null
@@ -186,6 +194,34 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         private const val NO_BUTTONS_END_STOP_STREAK = 24
         /** Kẹt màn "Bình luận" — sau N lần BACK liên tục không thoát thì dừng bot, nhờ user xử lý. */
         private const val STUCK_COMMENT_SCREEN_STOP_STREAK = 3
+    }
+
+    private fun isFeedCommentTrapUi(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        return nodeFinder.isCommentBottomSheetOverFeed(root) ||
+            nodeFinder.isFullScreenCommentScreen(root)
+    }
+
+    /**
+     * Tap Thích nhưng mở bình luận / sheet — đánh dấu bài, đóng UI, trả ALL_SKIPPED để cuộn qua.
+     */
+    private suspend fun abandonFeedPostLikeTrap(
+        postKey: String,
+        author: String?
+    ): FeedScanResult {
+        feedPostsAbandonedLikeTrap.add(postKey)
+        processedPosts.add(postKey)
+        lastClickedPostKey = postKey
+        lastClickedPostAt = System.currentTimeMillis()
+        dismissFeedCommentSurfaceIfOpen()
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
+        delayEco(400L..750L)
+        progressManager.incrementPostsHandledAndSave()
+        sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
+        logger.log(LogTag.STATE, "postKey=$postKey", "FEED_LIKE_TRAP_ABANDON_SCROLL")
+        updateStatus("⏭ Bỏ qua — tap Thích mở bình luận (${author ?: "bài"})")
+        return FeedScanResult.ALL_SKIPPED
     }
 
     private enum class GestureScrollProfile {
@@ -410,44 +446,59 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         return true
     }
 
-    /**
-     * Bottom sheet bình luận trên feed — đóng về nhật ký.
-     * [LikeSettingsManager.getVisitCommentCount] > 0: gửi comment ngẫu nhiên rồi BACK; không thì BACK ngay.
-     */
-    private suspend fun tryEscapeCommentBottomSheet(root: AccessibilityNodeInfo): Boolean {
-        if (!nodeFinder.isCommentBottomSheetOverFeed(root)) return false
+    /** Feed MIX/COMMENT_ONLY + `feedCommentCount` > 0 — được gửi bình luận sau like / trên sheet mở sẵn. */
+    private fun feedAutoCommentEnabled(): Boolean {
+        if (settingsManager.getFeedCommentCount() <= 0) return false
+        return settingsManager.getVisitActionMode() != VisitActionMode.LIKE_ONLY
+    }
 
-        logger.log(LogTag.STATE, "comment_bottom_sheet", "DETECTED")
-        updateStatus("↩️ Sheet bình luận — đóng về feed")
-
-        val wantAutoComment =
-            settingsManager.getFeedCommentCount() > 0 || settingsManager.getVisitCommentCount() > 0
-        if (!wantAutoComment) {
-            performGlobalAction(GLOBAL_ACTION_BACK)
-            lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
-            delayEco(550L..950L)
-            logger.log(LogTag.STATE, "comment_bottom_sheet", "BACK_NO_COMMENT_MODE")
-            return true
-        }
-
-        val text = nodeFinder.getRandomComment().trim()
-        if (text.isEmpty()) {
-            logger.log(LogTag.STATE, "comment_bottom_sheet", "EMPTY_COMMENT_LIST_BACK")
-            performGlobalAction(GLOBAL_ACTION_BACK)
-            lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
-            delayEco(550L..950L)
-            return true
-        }
-
-        if (!fillCommentInputAndSend(root, text, likeAnchor = null, logTag = "comment_bottom_sheet")) {
-            logger.log(LogTag.STATE, "comment_bottom_sheet", "NO_CMT_INPUT_BACK")
-        }
-
+    private suspend fun backFromCommentSurface(reason: String) {
         performGlobalAction(GLOBAL_ACTION_BACK)
         lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
         delayEco(550L..950L)
-        logger.log(LogTag.STATE, "comment_bottom_sheet", "ESCAPED_AFTER_SEND_OR_BACK")
+        logger.log(LogTag.STATE, "comment_surface", reason)
+    }
+
+    /**
+     * Sheet / full-screen bình luận đang mở: gửi (nếu bật) rồi BACK — dùng chung escape + sau like.
+     */
+    private suspend fun tryCommentThenBackFromOpenSurface(
+        root: AccessibilityNodeInfo,
+        likeAnchor: AccessibilityNodeInfo?,
+        logTag: String
+    ): Boolean {
+        val onSheet = nodeFinder.isCommentBottomSheetOverFeed(root)
+        val onFull = nodeFinder.isFullScreenCommentScreen(root)
+        if (!onSheet && !onFull) return false
+
+        logger.log(LogTag.STATE, logTag, if (onSheet) "DETECTED_SHEET" else "DETECTED_FULLSCREEN")
+        if (!feedAutoCommentEnabled()) {
+            updateStatus("↩️ Đóng bình luận — về feed")
+            backFromCommentSurface("BACK_NO_COMMENT_MODE")
+            return true
+        }
+        val text = nodeFinder.getRandomComment().trim()
+        if (text.isEmpty()) {
+            updateStatus("↩️ Chưa có câu comment — đóng sheet")
+            backFromCommentSurface("EMPTY_COMMENT_LIST_BACK")
+            return true
+        }
+        updateStatus("💬 Đang gửi bình luận…")
+        val sent = fillCommentInputAndSend(root, text, likeAnchor, logTag)
+        if (!sent) {
+            logger.log(LogTag.STATE, logTag, "SUBMIT_FAIL_BACK")
+        }
+        dismissFeedCommentSurfaceIfOpen()
+        backFromCommentSurface(if (sent) "ESCAPED_AFTER_SEND" else "ESCAPED_AFTER_FAIL")
         return true
+    }
+
+    /**
+     * Bottom sheet bình luận trên feed — đóng về nhật ký.
+     */
+    private suspend fun tryEscapeCommentBottomSheet(root: AccessibilityNodeInfo): Boolean {
+        if (!nodeFinder.isCommentBottomSheetOverFeed(root)) return false
+        return tryCommentThenBackFromOpenSurface(root, null, "comment_bottom_sheet")
     }
 
     /** Đóng full-screen / bottom sheet bình luận sau comment trên feed (tối đa 2 BACK). */
@@ -466,6 +517,31 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun armFeedLikeGuard(likeRect: Rect) {
+        feedLikeGuardRect = Rect(likeRect)
+        feedLikeGuardUntilMs = System.currentTimeMillis() + 30_000L
+    }
+
+    private fun clearFeedLikeGuard() {
+        feedLikeGuardRect = null
+        feedLikeGuardUntilMs = 0L
+    }
+
+    private fun nodeInFeedLikeGuard(node: AccessibilityNodeInfo): Boolean {
+        val zone = feedLikeGuardRect ?: return false
+        if (System.currentTimeMillis() > feedLikeGuardUntilMs) return false
+        return nodeFinder.nodeOverlapsRect(node, zone, 18)
+    }
+
+    /** Tap phase comment — gesture only, không leo parent (tránh hit nút Thích → unlike). */
+    private suspend fun safeCommentPhaseTap(node: AccessibilityNodeInfo, logTag: String): Boolean {
+        if (nodeFinder.isLikeControlNode(node) || nodeInFeedLikeGuard(node)) {
+            logger.log(LogTag.CLICK, logTag, "SKIP_TAP_LIKE_ZONE")
+            return false
+        }
+        return tapNodeByCoordinate(node)
+    }
+
     /**
      * Tìm ô nhập (inline / sheet), tap placeholder nếu cần, SET_TEXT + Gửi.
      * @return true nếu đã gửi hoặc đã nhập text thành công.
@@ -479,10 +555,14 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         var workRoot = root
         var recycleWorkRoot = false
         var input = likeAnchor?.let { nodeFinder.findCommentInputNearLike(it) }
+        if (input == null && likeAnchor != null) {
+            input = nodeFinder.findCommentInputPlaceholderNearLike(likeAnchor)
+        }
         input = input ?: nodeFinder.findCommentInput(workRoot)
         if (input == null) {
-            val placeholder = nodeFinder.findCommentInputPlaceholder(workRoot)
-            if (placeholder != null && performClickWithFallback(placeholder)) {
+            val placeholder = likeAnchor?.let { nodeFinder.findCommentInputPlaceholderNearLike(it) }
+                ?: nodeFinder.findCommentInputPlaceholder(workRoot)
+            if (placeholder != null && safeCommentPhaseTap(placeholder, logTag)) {
                 logger.log(LogTag.CLICK, logTag, "TAP_PLACEHOLDER")
                 delayEco(500L..900L)
                 val fresh = acquireRootOrNull(5, 100L..260L, LogTag.CLICK, quietLog = true)
@@ -502,38 +582,63 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 }
             }
         }
+        if (input == null && nodeFinder.isCommentBottomSheetOverFeed(workRoot)) {
+            val sheetTarget = nodeFinder.findCommentComposerFocusTargetInSheet(workRoot)
+            if (sheetTarget != null && safeCommentPhaseTap(sheetTarget, logTag)) {
+                logger.log(LogTag.CLICK, logTag, "TAP_SHEET_COMPOSER_TARGET")
+                delayEco(650L..1_000L)
+            } else {
+                nodeFinder.getCommentSheetComposerTapRect(workRoot)?.let { tapRect ->
+                    if (scriptTapCenter(tapRect)) {
+                        logger.log(LogTag.CLICK, logTag, "TAP_SHEET_COMPOSER_RECT")
+                        delayEco(750L..1_100L)
+                    }
+                }
+            }
+            val freshSheet = acquireRootOrNull(6, 120L..300L, LogTag.CLICK, quietLog = true)
+            if (freshSheet != null) {
+                if (recycleWorkRoot) runCatching { workRoot.recycle() }
+                workRoot = freshSheet
+                recycleWorkRoot = true
+                input = nodeFinder.findCommentInput(workRoot)
+            }
+        }
         if (input == null) {
             if (recycleWorkRoot) runCatching { workRoot.recycle() }
             return false
         }
         return try {
-            if (!input.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
-                input.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            if (!input.isFocused) {
+                if (!safeCommentPhaseTap(input, logTag)) {
+                    tapNodeByCoordinate(input)
+                }
+                delayEco(350L..550L)
             }
-            delay(160)
             val args = Bundle().apply {
                 putCharSequence(
                     AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
                     text
                 )
             }
-            var setOk = input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            var setOk = input.performAction(AccessibilityNodeInfo.ACTION_FOCUS) &&
+                input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
             if (!setOk) {
-                delay(280)
-                input.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                delay(120)
-                setOk = input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                tapNodeByCoordinate(input)
+                delayEco(400L..650L)
+                val freshInput = nodeFinder.findCommentInput(workRoot)
+                    ?: likeAnchor?.let { nodeFinder.findCommentInputNearLike(it) }
+                val target = freshInput ?: input
+                setOk = target.performAction(AccessibilityNodeInfo.ACTION_FOCUS) &&
+                    target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
             }
             if (!setOk) {
                 logger.log(LogTag.CLICK, logTag, "SET_TEXT_FAIL")
                 return false
             }
             logger.log(LogTag.STATE, "len=${text.length}", "${logTag}_FILLED")
-            delayEco(400L..700L)
-            val send = nodeFinder.findCommentSendButton(workRoot)
-            if (send != null && performClickWithFallback(send)) {
-                logger.log(LogTag.CLICK, logTag, "SEND_OK")
-                delayEco(400L..750L)
+            delayEco(450L..800L)
+            if (tapCommentSendButton(workRoot, logTag)) {
+                delayEco(450L..850L)
                 true
             } else {
                 logger.log(LogTag.CLICK, logTag, "SEND_FAIL")
@@ -542,6 +647,21 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         } finally {
             if (recycleWorkRoot) runCatching { workRoot.recycle() }
         }
+    }
+
+    private suspend fun tapCommentSendButton(workRoot: AccessibilityNodeInfo, logTag: String): Boolean {
+        val send = nodeFinder.findCommentSendButton(workRoot) ?: return false
+        if (nodeInFeedLikeGuard(send)) {
+            logger.log(LogTag.CLICK, logTag, "SEND_IN_LIKE_GUARD")
+            return false
+        }
+        if (send.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            logger.log(LogTag.CLICK, logTag, "SEND_ACTION_CLICK_OK")
+            return true
+        }
+        val ok = tapNodeByCoordinate(send)
+        logger.log(LogTag.CLICK, logTag, if (ok) "SEND_GESTURE_OK" else "SEND_GESTURE_FAIL")
+        return ok
     }
 
     /**
@@ -555,74 +675,106 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         if (rounds <= 0) return
         feedCommentFlowInProgress = true
         try {
-        repeat(rounds) { roundIdx ->
-            if (!isRunning) return
-            val text = nodeFinder.getRandomComment().trim()
-            if (text.isEmpty()) {
-                logger.log(LogTag.STATE, "feed_comment", "SKIP_EMPTY_LIST")
-                return
-            }
-            delayEco(380L..650L)
-            val root = acquireRootOrNull(5, 100L..280L, LogTag.CLICK, quietLog = true)
-            if (root == null) {
-                logger.log(LogTag.CLICK, "feed_comment", "ROOT_NULL")
-                return@repeat
-            }
-            var anchor: AccessibilityNodeInfo? = null
-            try {
-                if (!nodeFinder.isLikelyTimelineFeedScreen(root) &&
-                    !nodeFinder.hasVisibleSelfAlreadyLikedLikeControl(root) &&
-                    !nodeFinder.isCommentBottomSheetOverFeed(root)
-                ) {
-                    logger.log(LogTag.SCAN, "feed_comment", "NOT_FEED_SKIP")
+            repeat(rounds) { roundIdx ->
+                if (!isRunning) return
+                val text = nodeFinder.getRandomComment().trim()
+                if (text.isEmpty()) {
+                    logger.log(LogTag.STATE, "feed_comment", "SKIP_EMPTY_LIST")
+                    showToast("⚠️ Thêm câu comment trong Cài đặt")
+                    return
+                }
+                delayEco(1_200L..1_800L)
+                val root = acquireRootOrNull(6, 120L..320L, LogTag.CLICK, quietLog = true)
+                if (root == null) {
+                    logger.log(LogTag.CLICK, "feed_comment", "ROOT_NULL")
                     return@repeat
                 }
-                anchor = nodeFinder.findLikeAreaNodeAt(root, origRect, origId)
-                if (anchor == null && !nodeFinder.isCommentBottomSheetOverFeed(root)) {
-                    logger.log(LogTag.CLICK, "feed_comment", "ANCHOR_MISS")
-                    return@repeat
-                }
-                if (fillCommentInputAndSend(root, text, anchor, "feed_comment_inline")) {
-                    logger.log(LogTag.CLICK, "feed_comment", "INLINE_OK round=${roundIdx + 1}")
-                    dismissFeedCommentSurfaceIfOpen()
-                    return@repeat
-                }
-                if (nodeFinder.isCommentBottomSheetOverFeed(root)) {
-                    if (fillCommentInputAndSend(root, text, anchor, "feed_comment_sheet")) {
-                        logger.log(LogTag.CLICK, "feed_comment", "SHEET_OK round=${roundIdx + 1}")
+                try {
+                    val onCommentSurface = nodeFinder.isCommentBottomSheetOverFeed(root) ||
+                        nodeFinder.isFullScreenCommentScreen(root)
+                    if (!nodeFinder.isLikelyTimelineFeedScreen(root) &&
+                        !nodeFinder.hasVisibleSelfAlreadyLikedLikeControl(root) &&
+                        !onCommentSurface
+                    ) {
+                        logger.log(LogTag.SCAN, "feed_comment", "NOT_FEED_SKIP")
+                        return@repeat
                     }
+                    val anchor = nodeFinder.findLikeAreaNodeAt(root, origRect, origId)
+                    if (anchor == null && !onCommentSurface) {
+                        logger.log(LogTag.CLICK, "feed_comment", "ANCHOR_MISS")
+                        return@repeat
+                    }
+
+                    // 1) Sheet / full-screen đã mở (sau like hay tap nhầm) — gửi rồi BACK
+                    if (onCommentSurface) {
+                        updateStatus("💬 Sheet bình luận — đang gửi…")
+                        val sent = fillCommentInputAndSend(root, text, anchor, "feed_comment_sheet_open")
+                        logger.log(
+                            LogTag.CLICK,
+                            "feed_comment",
+                            if (sent) "SHEET_OPEN_OK round=${roundIdx + 1}" else "SHEET_OPEN_FAIL"
+                        )
+                        dismissFeedCommentSurfaceIfOpen()
+                        return@repeat
+                    }
+
+                    // 2) Composer inline thật sự mở (không nhầm placeholder thu gọn)
+                    if (anchor != null &&
+                        nodeFinder.hasExpandedInlineCommentComposerNearLike(anchor)
+                    ) {
+                        if (fillCommentInputAndSend(root, text, anchor, "feed_comment_inline")) {
+                            logger.log(LogTag.CLICK, "feed_comment", "INLINE_OK round=${roundIdx + 1}")
+                            dismissFeedCommentSurfaceIfOpen()
+                            return@repeat
+                        }
+                    }
+
+                    // 3) Thử inline / placeholder chưa mở sheet
+                    if (fillCommentInputAndSend(root, text, anchor, "feed_comment_try_inline")) {
+                        logger.log(LogTag.CLICK, "feed_comment", "INLINE_TRY_OK round=${roundIdx + 1}")
+                        dismissFeedCommentSurfaceIfOpen()
+                        return@repeat
+                    }
+
+                    // 4) Mở bằng icon Bình luận → chờ sheet → gửi
+                    val commentBtn = anchor?.let { nodeFinder.findCommentButton(it) }
+                    if (commentBtn == null) {
+                        logger.log(LogTag.CLICK, "feed_comment", "NO_COMMENT_BTN")
+                        return@repeat
+                    }
+                    if (!safeCommentPhaseTap(commentBtn, "feed_comment_icon")) {
+                        logger.log(LogTag.CLICK, "feed_comment", "TAP_COMMENT_FAIL")
+                        return@repeat
+                    }
+                } finally {
+                    runCatching { root.recycle() }
+                }
+                delayEco(1_100L..1_700L)
+                val r2 = acquireRootOrNull(6, 140L..340L, LogTag.CLICK, quietLog = true)
+                if (r2 == null) {
                     dismissFeedCommentSurfaceIfOpen()
                     return@repeat
                 }
-                val commentBtn = anchor?.let { nodeFinder.findCommentButton(it) }
-                if (commentBtn == null) {
-                    logger.log(LogTag.CLICK, "feed_comment", "NO_COMMENT_BTN")
-                    return@repeat
+                try {
+                    val anchor2 = nodeFinder.findLikeAreaNodeAt(r2, origRect, origId)
+                    if (nodeFinder.isCommentBottomSheetOverFeed(r2) ||
+                        nodeFinder.isFullScreenCommentScreen(r2)
+                    ) {
+                        val sent = fillCommentInputAndSend(r2, text, anchor2, "feed_comment_after_icon")
+                        logger.log(
+                            LogTag.CLICK,
+                            "feed_comment",
+                            if (sent) "SHEET_AFTER_ICON_OK round=${roundIdx + 1}" else "SHEET_AFTER_ICON_FAIL"
+                        )
+                    }
+                } finally {
+                    runCatching { r2.recycle() }
                 }
-                if (!performClickWithFallback(commentBtn)) {
-                    logger.log(LogTag.CLICK, "feed_comment", "TAP_COMMENT_FAIL")
-                    return@repeat
-                }
-            } finally {
-                runCatching { root.recycle() }
-            }
-            delayEco(1_000L..1_600L)
-            val r2 = acquireRootOrNull(6, 120L..300L, LogTag.CLICK, quietLog = true)
-            if (r2 == null) {
                 dismissFeedCommentSurfaceIfOpen()
-                return@repeat
             }
-            try {
-                if (fillCommentInputAndSend(r2, text, anchor, "feed_comment_sheet")) {
-                    logger.log(LogTag.CLICK, "feed_comment", "SHEET_OK round=${roundIdx + 1}")
-                }
-            } finally {
-                runCatching { r2.recycle() }
-            }
-            dismissFeedCommentSurfaceIfOpen()
-        }
         } finally {
             feedCommentFlowInProgress = false
+            clearFeedLikeGuard()
         }
     }
 
@@ -654,6 +806,23 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             }
 
             nodeFinder.isFullScreenCommentScreen(root) -> {
+                if (feedAutoCommentEnabled()) {
+                    val text = nodeFinder.getRandomComment().trim()
+                    if (text.isNotEmpty()) {
+                        feedCommentFlowInProgress = true
+                        try {
+                            updateStatus("💬 Màn bình luận — đang gửi…")
+                            if (fillCommentInputAndSend(root, text, null, "escape_fullscreen_comment")) {
+                                dismissFeedCommentSurfaceIfOpen()
+                                consecutiveStuckCommentScreen = 0
+                                logger.log(LogTag.STATE, "comment_screen", "COMMENTED_THEN_DISMISS")
+                                return true
+                            }
+                        } finally {
+                            feedCommentFlowInProgress = false
+                        }
+                    }
+                }
                 logger.log(LogTag.STATE, "comment_screen", "DETECTED_BACK")
                 updateStatus("↩️ Phát hiện màn Bình luận — back về feed")
 
@@ -736,17 +905,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         if (escapeFullscreenImageViewerAfterLike(root)) return true
         if (root == null || !canEscapeWithGlobalBack(root)) return false
         if (feedCommentFlowInProgress) return false
-        val willCommentFeed = settingsManager.getFeedCommentCount() > 0 &&
-            try {
-                VisitActionMode.valueOf(settingsManager.load().visitActionMode)
-            } catch (e: Exception) {
-                VisitActionMode.LIKE_ONLY
-            } != VisitActionMode.LIKE_ONLY
-        if (willCommentFeed &&
-            (nodeFinder.isCommentBottomSheetOverFeed(root) || nodeFinder.isFullScreenCommentScreen(root))
-        ) {
-            return false
-        }
         if (nodeFinder.isZingMusicBottomSheet(root)) {
             performGlobalAction(GLOBAL_ACTION_BACK)
             lastGlobalBackAtElapsedMs = SystemClock.elapsedRealtime()
@@ -836,7 +994,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 if (settingsManager.isAutoStart() && !isRunning
                     && !progressManager.isLimitReached()
                     && !settingsManager.isQuietHour()) {
-                    mainHandler.post { startAutoLike() }
+                    val mode = settingsManager.getLikeMode()
+                    mainHandler.post { startAutoLike(mode) }
                 }
             }
             // Bot đang chạy: vòng autoLikeLoop tự scan + settle sau cuộn — tránh scan sớm khi lazy-load.
@@ -1043,11 +1202,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         startAutoLikeInProgress = true
         scope.launch {
             try {
-                preferredMode?.let { settingsManager.setLikeMode(it) }
-                val visitMode = (preferredMode ?: settingsManager.getLikeMode()) == LikeMode.VISIT
+                val sessionMode = resolveStartLikeMode(preferredMode)
+                val visitMode = sessionMode == LikeMode.VISIT
                 val modeLabel = if (visitMode) "Visit danh bạ" else "Nhật ký"
                 updateStatus("↩ Mở Zalo — $modeLabel…")
-                if (!prepareZaloForCurrentMode()) {
+                if (!prepareZaloForCurrentMode(sessionMode)) {
                     logger.log(LogTag.STATE, "mode=$modeLabel", "PREPARE_ZALO_TAB_FAIL")
                     showToast(
                         if (visitMode) "⚠️ Không vào được Danh bạ — mở Zalo → Danh bạ → Bạn bè"
@@ -1086,6 +1245,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 logger.log(LogTag.STATE, "pkg=$pkg", "START_CLICKED")
                 uiScanner.forceScan(root)
 
+                sessionLikeMode = sessionMode
                 isRunning = true
                 sessionLikeCount = 0
                 consecutiveNullCount = 0
@@ -1093,6 +1253,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 likedAuthorsThisSession.clear()
                 clickedPositionsThisSession.clear()
                 processedPosts.clear()
+                feedPostsAbandonedLikeTrap.clear()
                 lastClickedPostKey = ""
                 lastClickedPostAt = 0L
                 consecutiveScrollNoProgress = 0
@@ -1112,10 +1273,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 likeJob?.cancel()
                 likeJob = scope.launch {
                     try {
-                        if (settingsManager.getLikeMode() == LikeMode.VISIT) {
-                            visitScriptLoop()
-                        } else {
-                            autoLikeLoop()
+                        when (sessionLikeMode) {
+                            LikeMode.VISIT -> visitScriptLoop()
+                            else -> autoLikeLoop()
                         }
                     } catch (e: Exception) {
                         logger.logError("autoLikeJob", e)
@@ -1216,17 +1376,55 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** Mode đang chạy (khóa phiên) hoặc prefs nếu chưa start. */
+    private fun activeLikeMode(): LikeMode =
+        sessionLikeMode ?: settingsManager.getLikeMode()
+
+    /**
+     * Khi không truyền mode: ưu tiên màn Zalo hiện tại (Nhật ký / Danh bạ) rồi mới prefs —
+     * tránh đang xem feed nhưng setting Visit → tự nhảy Danh bạ.
+     */
+    private suspend fun resolveStartLikeMode(preferredMode: LikeMode?): LikeMode {
+        if (preferredMode != null) {
+            settingsManager.setLikeMode(preferredMode)
+            return preferredMode
+        }
+        val root = acquireRootOrNull(
+            maxAttempts = 3,
+            delayRangeMs = 100L..250L,
+            logTag = LogTag.STATE,
+            quietLog = true
+        )
+        if (root != null) {
+            try {
+                when {
+                    nodeFinder.isLikelyTimelineFeedScreen(root) -> {
+                        logger.log(LogTag.STATE, "ui", "INFER_MODE_FEED")
+                        return LikeMode.FEED
+                    }
+                    nodeFinder.isContactListScreen(root) -> {
+                        logger.log(LogTag.STATE, "ui", "INFER_MODE_VISIT")
+                        return LikeMode.VISIT
+                    }
+                }
+            } finally {
+                runCatching { root.recycle() }
+            }
+        }
+        return settingsManager.getLikeMode()
+    }
+
     /**
      * Mở Zalo lên foreground, **chờ nav dưới vẽ xong**, rồi mới tìm tab và tap (Nhật ký / Danh bạ → Bạn bè).
      * Tránh tap quá sớm khi cold start chỉ mới “mở Zalo” chưa có bottom bar.
      */
-    private suspend fun prepareZaloForCurrentMode(): Boolean {
+    private suspend fun prepareZaloForCurrentMode(mode: LikeMode): Boolean {
         if (!ensureZaloForegroundForBot(22_000L)) return false
         if (!waitForZaloBottomNavigationReady(14_000L)) {
             logger.log(LogTag.STATE, "prepareZaloForCurrentMode", "ZALO_NAV_WAIT_TIMEOUT")
             return false
         }
-        val visit = settingsManager.getLikeMode() == LikeMode.VISIT
+        val visit = mode == LikeMode.VISIT
         repeat(8) { attempt ->
             val root = acquireRootOrNull(
                 maxAttempts = 5,
@@ -1402,7 +1600,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
     /** Feed đang nhầm tab (vd. Tin nhắn) → chuyển Nhật ký trước khi quét Thích. */
     private suspend fun ensureTimelineTabForFeed(): Boolean {
-        if (settingsManager.getLikeMode() == LikeMode.VISIT) return true
+        if (activeLikeMode() == LikeMode.VISIT) return true
         val root = acquireRootOrNull(4, 100L..260L, LogTag.STATE, quietLog = true) ?: return false
         return try {
             if (nodeFinder.isLikelyTimelineFeedScreen(root)) return true
@@ -1493,6 +1691,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     fun stopAutoLike(reason: String = "") {
         if (!isRunning) return
         isRunning = false
+        sessionLikeMode = null
         likeJob?.cancel()
         likeJob = null
         wakeLock?.let { if (it.isHeld) it.release() }
@@ -1526,7 +1725,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
         if (!isZaloForeground) {
                 if (settingsManager.isPauseWhenZaloAway()) {
-                    if (settingsManager.getLikeMode() == LikeMode.VISIT || visitScriptRunning) {
+                    if (activeLikeMode() == LikeMode.VISIT || visitScriptRunning) {
                         updateStatus("↩ Mở lại Zalo…")
                         ensureZaloForegroundForBot(15_000L)
                         continue@mainLoop
@@ -1823,14 +2022,23 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             var skippedShouldLike = 0
             for (node in likeNodes) {
                 if (!isRunning) break
+                val authorEarly = nodeFinder.getAuthorName(node)
                 if (!nodeFinder.shouldLike(node)) {
+                    if (nodeFinder.hasExpandedInlineCommentComposerNearLike(node)) {
+                        logger.log(
+                            LogTag.STATE,
+                            authorEarly ?: "unknown",
+                            "SKIP_EXPANDED_COMMENT_COMPOSER"
+                        )
+                        updateStatus("⏭ Bỏ qua — ô bình luận đang mở (${authorEarly ?: "bài"})")
+                    }
                     skippedShouldLike++
                     progressManager.incrementPostsHandledAndSave()
                     sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                     continue
                 }
 
-                val author = nodeFinder.getAuthorName(node)
+                val author = authorEarly
                 if (author != null && likedAuthorsThisSession.contains(author)) {
                     logger.log(LogTag.STATE, author, "SKIP_AUTHOR_ALREADY_LIKED")
                     progressManager.incrementPostsHandledAndSave()
@@ -1844,6 +2052,10 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
                 if (postKey in processedPosts) {
                     logger.log(LogTag.STATE, postKey, "SKIP_ALREADY_PROCESSED")
+                    continue
+                }
+                if (postKey in feedPostsAbandonedLikeTrap) {
+                    logger.log(LogTag.STATE, postKey, "SKIP_LIKE_TRAP_ABANDONED")
                     continue
                 }
 
@@ -1878,6 +2090,10 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 if (nodeForClick !== node) {
                     logger.log(LogTag.STATE, boundsSummary(nodeForClick), "RE_RESOLVED_BEFORE_CLICK")
                 }
+                if (nodeFinder.isLikeTapLikelyToOpenComment(nodeForClick)) {
+                    logger.log(LogTag.STATE, postKey, "SKIP_LIKE_NEAR_COMMENT_ICON")
+                    return abandonFeedPostLikeTrap(postKey, author)
+                }
                 try {
                     if (visitActionMode == VisitActionMode.COMMENT_ONLY) {
                         updateDebugNodeHighlights(likeNodes, node)
@@ -1886,6 +2102,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         val rounds = settings.feedCommentCount.coerceAtLeast(1)
                         logger.log(LogTag.STATE, "mode=COMMENT_ONLY rounds=$rounds", "FEED_ACTION")
                         updateStatus("💬 Mở bình luận (${rounds}×) — ${author ?: "..."}")
+                        armFeedLikeGuard(origRect)
                         runFeedCommentsAfterLike(origRect, origId, rounds)
                         progressManager.incrementPostsHandledAndSave()
                         sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
@@ -1906,28 +2123,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
                     if (clicked) {
                         delayEco(240L..420L)
-                        val peekRoot = acquireRootOrNull(3, 60L..180L, LogTag.CLICK, quietLog = true)
-                        if (peekRoot != null) {
-                            try {
-                                if (escapeWrongScreenAfterLikeClick(peekRoot)) {
-                                    logger.log(
-                                        LogTag.CLICK,
-                                        author ?: "unknown",
-                                        "WRONG_SCREEN_AFTER_CLICK_SKIP"
-                                    )
-                                    updateStatus("↩️ Sau click mở màn khác — đã back & bỏ qua bài")
-                                    progressManager.incrementPostsHandledAndSave()
-                                    sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
-                                    delayEco(400L..800L)
-                                    continue
-                                }
-                            } finally {
-                                runCatching { peekRoot.recycle() }
-                            }
-                        }
-
-                        delay(ecoVerifyMs(1200L))
-
                         val origRectForVerify = Rect().apply { nodeForClick.getBoundsInScreen(this) }
                         val origIdForVerify = nodeForClick.viewIdResourceName
 
@@ -1944,6 +2139,37 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                             }
                         }
 
+                        val peekRoot = acquireRootOrNull(3, 60L..180L, LogTag.CLICK, quietLog = true)
+                        if (peekRoot != null) {
+                            try {
+                                if (isFeedCommentTrapUi(peekRoot) && !verifyLikedOnFreshRoot()) {
+                                    logger.log(
+                                        LogTag.CLICK,
+                                        author ?: "unknown",
+                                        "LIKE_OPENED_COMMENT_TRAP"
+                                    )
+                                    return abandonFeedPostLikeTrap(postKey, author)
+                                }
+                                if (escapeWrongScreenAfterLikeClick(peekRoot)) {
+                                    logger.log(
+                                        LogTag.CLICK,
+                                        author ?: "unknown",
+                                        "WRONG_SCREEN_AFTER_CLICK_SKIP"
+                                    )
+                                    updateStatus("↩️ Sau click mở màn khác — đã back & bỏ qua bài")
+                                    progressManager.incrementPostsHandledAndSave()
+                                    sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
+                                    processedPosts.add(postKey)
+                                    delayEco(400L..800L)
+                                    continue
+                                }
+                            } finally {
+                                runCatching { peekRoot.recycle() }
+                            }
+                        }
+
+                        delay(ecoVerifyMs(1200L))
+
                         var confirmedLiked = verifyLikedOnFreshRoot()
                         if (!confirmedLiked) {
                             delay(ecoVerifyMs(800L))
@@ -1956,8 +2182,24 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         )
 
                         if (!confirmedLiked) {
+                            val trapRoot = acquireRootOrNull(3, 80L..200L, LogTag.CLICK, quietLog = true)
+                            if (trapRoot != null) {
+                                try {
+                                    if (isFeedCommentTrapUi(trapRoot)) {
+                                        logger.log(
+                                            LogTag.CLICK,
+                                            author ?: "unknown",
+                                            "UNCONFIRMED_COMMENT_TRAP"
+                                        )
+                                        return abandonFeedPostLikeTrap(postKey, author)
+                                    }
+                                } finally {
+                                    runCatching { trapRoot.recycle() }
+                                }
+                            }
                             logger.log(LogTag.CLICK, author ?: "unknown", "WARNING_CLICK_UNCONFIRMED")
                             updateStatus("❓ Chưa xác nhận được like — bỏ qua bài này, thử bài khác")
+                            processedPosts.add(postKey)
                             progressManager.incrementPostsHandledAndSave()
                             sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
                             continue
@@ -2012,6 +2254,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                             if (visitActionMode == VisitActionMode.LIKE_ONLY) 0 else settings.feedCommentCount
                         if (feedCommentRounds > 0) {
                             updateStatus("💬 Bình luận (${feedCommentRounds}×) — ${author ?: "..."}")
+                            armFeedLikeGuard(origRectForVerify)
                             runFeedCommentsAfterLike(origRectForVerify, origIdForVerify, feedCommentRounds)
                         }
 
@@ -2362,6 +2605,10 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun performLikeClickWithFallbacks(node: AccessibilityNodeInfo): Boolean {
+        if (nodeFinder.hasExpandedInlineCommentComposerNearLike(node)) {
+            logger.log(LogTag.CLICK, boundsSummary(node), "SKIP_EXPANDED_COMPOSER_BEFORE_CLICK")
+            return false
+        }
         if (shouldSuppressDuplicateBoundsClick(node)) return false
         if (!node.isVisibleToUser) {
             logger.log(LogTag.CLICK, boundsSummary(node), "SKIP_NOT_VISIBLE")

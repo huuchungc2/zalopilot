@@ -871,11 +871,60 @@ class NodeFinder @Inject constructor(
         return null
     }
 
+    /**
+     * Ô bình luận **đã mở** dưới bài (EditText/cmtinput, focus, bàn phím) — không chỉ placeholder "Nhập bình luận".
+     * Tap Thích lúc này dễ unlike / trượt vùng comment.
+     */
+    fun hasExpandedInlineCommentComposerNearLike(likeNode: AccessibilityNodeInfo): Boolean {
+        val host = findFeedFooterHostNearLike(likeNode)
+        findByViewId(host, "cmtinput_text").forEach { n ->
+            if (n.isVisibleToUser && n.hasValidScreenBounds() && isExpandedCommentField(n)) return true
+        }
+        findByViewId(host, "keyboard_frame_layout").forEach { frame ->
+            if (!frame.isVisibleToUser || !frame.hasValidScreenBounds()) return@forEach
+            val fr = Rect().also { frame.getBoundsInScreen(it) }
+            if (fr.height() >= 48) return true
+        }
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(host)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 900) {
+            val n = stack.removeLast()
+            visited++
+            if (n.isVisibleToUser && n.hasValidScreenBounds()) {
+                if (n.isFocused &&
+                    (isLikelyCommentInputNode(n) || isCommentPlaceholderNode(n))
+                ) {
+                    return true
+                }
+                if (isExpandedCommentField(n)) return true
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return false
+    }
+
+    private fun isExpandedCommentField(node: AccessibilityNodeInfo): Boolean {
+        if (!isLikelyCommentInputNode(node)) return false
+        if (node.isFocused) return true
+        val id = node.viewIdResourceName?.lowercase().orEmpty()
+        if (id.contains("cmtinput_text")) return true
+        val typed = node.text?.toString()?.trim().orEmpty()
+        if (typed.isNotEmpty()) {
+            val low = typed.lowercase()
+            if (!inlineCommentPhrases.any { low == it || low.startsWith(it) }) return true
+        }
+        val r = Rect().also { node.getBoundsInScreen(it) }
+        return r.height() >= 80
+    }
+
     fun shouldLike(node: AccessibilityNodeInfo): Boolean {
         // Tập trung logic phân biệt đã like ở isAlreadyLiked() — không duplicate ở đây.
         if (isAlreadyLiked(node)) return false
 
-        // Không skip vì "Nhập bình luận" gần like — mọi bài trên feed đều có ô comment inline.
+        if (hasExpandedInlineCommentComposerNearLike(node)) return false
 
         // Lọc thêm: node là nút "Bình luận", "Chia sẻ", "Nhập" — không phải nút Like
         fun ownTextIsAction(node: AccessibilityNodeInfo): Boolean {
@@ -1184,30 +1233,64 @@ class NodeFinder @Inject constructor(
         return findLikeButtonsWithoutLearnedId(root)
     }
 
-    fun findCommentButton(likeNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        var footer: AccessibilityNodeInfo? = null
+    fun isLikeControlNode(node: AccessibilityNodeInfo): Boolean {
+        if (LikeViewIdRules.isWhitelistedLikeResourceId(node.viewIdResourceName)) return true
+        val t = node.text?.toString()?.trim().orEmpty()
+        if (t == ZaloIDStore.TEXT_LIKE || t == ZaloIDStore.TEXT_LIKED) return true
+        return false
+    }
+
+    fun nodeOverlapsRect(node: AccessibilityNodeInfo, zone: Rect, marginPx: Int = 16): Boolean {
+        val r = Rect().also { node.getBoundsInScreen(it) }
+        if (r.isEmpty) return false
+        val z = Rect(zone).apply { inset(-marginPx, -marginPx) }
+        return Rect.intersects(z, r)
+    }
+
+    private fun findFeedFooterHostNearLike(likeNode: AccessibilityNodeInfo): AccessibilityNodeInfo {
         var walk: AccessibilityNodeInfo? = likeNode
-        var steps = 0
-        while (walk != null && steps < 10) {
-            val id = walk.viewIdResourceName.orEmpty()
-            if (id.contains("feedItemFooterBarModule")) {
-                footer = walk
-                break
-            }
-            walk = walk.parent
-            steps++
+        repeat(14) {
+            val w = walk ?: return@repeat
+            val id = w.viewIdResourceName.orEmpty().lowercase()
+            if (id.contains("feeditemfooterbarmodule")) return w
+            walk = w.parent
         }
-        footer?.let { bar ->
-            findClickableWithPhrase(bar, "bình luận")?.let { return it }
-            findClickableWithPhrase(bar, "comment")?.let { return it }
+        return likeNode.parent ?: likeNode
+    }
+
+    /**
+     * Nút Thích và icon Bình luận quá sát — gesture/click dễ mở comment thay vì like.
+     */
+    fun isLikeTapLikelyToOpenComment(likeNode: AccessibilityNodeInfo): Boolean {
+        val likeRect = Rect().also { likeNode.getBoundsInScreen(it) }
+        if (likeRect.isEmpty) return false
+        val commentBtn = findCommentButton(likeNode) ?: return false
+        val cRect = Rect().also { commentBtn.getBoundsInScreen(it) }
+        if (cRect.isEmpty) return false
+        val gap = cRect.left - likeRect.right
+        if (gap in -28..36) return true
+        val expanded = Rect(likeRect).apply { inset(-20, -24) }
+        return Rect.intersects(expanded, cRect)
+    }
+
+    fun findCommentButton(likeNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val likeRect = Rect().also { likeNode.getBoundsInScreen(it) }
+        val footer = findFeedFooterHostNearLike(likeNode)
+        footer.let { bar ->
+            findClickableWithPhrase(bar, "bình luận")?.let { btn ->
+                if (!isLikeControlNode(btn) && !nodeOverlapsRect(btn, likeRect, 24)) return btn
+            }
+            findClickableWithPhrase(bar, "comment")?.let { btn ->
+                if (!isLikeControlNode(btn) && !nodeOverlapsRect(btn, likeRect, 24)) return btn
+            }
         }
 
-        val likeRect = Rect().also { likeNode.getBoundsInScreen(it) }
         val parent = likeNode.parent ?: return null
         for (i in 0 until parent.childCount) {
             val sib = parent.getChild(i) ?: continue
             if (sib == likeNode) continue
             if (!sib.isClickable) continue
+            if (isLikeControlNode(sib) || nodeOverlapsRect(sib, likeRect, 20)) continue
             val r = Rect().also { sib.getBoundsInScreen(it) }
             if (r.left < likeRect.right - 8) continue
             val cls = sib.className?.toString()?.lowercase().orEmpty()
@@ -1230,33 +1313,113 @@ class NodeFinder @Inject constructor(
                 if (isLikelyCommentInputNode(node) || isCommentPlaceholderNode(node)) return node
             }
         }
-        return findEditableCommentField(root, maxNodes = 2800, preferBottomHalf = true)
+        findEditableCommentField(root, maxNodes = 2800, preferBottomHalf = true)?.let { return it }
+        if (isCommentBottomSheetOverFeed(root)) {
+            findCommentComposerFocusTargetInSheet(root)?.let { return it }
+        }
+        return null
+    }
+
+    /**
+     * Sheet bình luận feed (dump: `keyboard_frame_layout` + `main_comment_view` nhưng không có `cmtinput_text`
+     * trong cây cho đến khi tap vùng composer).
+     */
+    fun findCommentComposerFocusTargetInSheet(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        for (scopeId in listOf("keyboard_frame_layout", "bottom_sheet_container", "main_comment_view")) {
+            for (scope in findByViewId(root, scopeId)) {
+                findCommentInputInScope(scope)?.let { return it }
+                findEditableCommentField(scope, maxNodes = 2400, preferBottomHalf = false)?.let { return it }
+                findBottomComposerTapTarget(scope)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /** Vùng tap dưới sheet khi không thấy node nhập — theo dump Zalo (h≈10% đáy `keyboard_frame_layout`). */
+    fun getCommentSheetComposerTapRect(root: AccessibilityNodeInfo): Rect? {
+        val frame = findByViewId(root, "keyboard_frame_layout").firstOrNull()
+            ?: findByViewId(root, "bottom_sheet_container").firstOrNull()
+            ?: return null
+        val r = Rect().also { frame.getBoundsInScreen(it) }
+        if (r.isEmpty || r.width() <= 0 || r.height() <= 0) return null
+        val tapY = (r.bottom - r.height() * 0.10f).toInt().coerceIn(r.top, r.bottom)
+        val marginX = (r.width() * 0.18f).toInt().coerceAtLeast(48)
+        return Rect(
+            r.left + marginX,
+            (tapY - 48).coerceAtLeast(r.top),
+            r.right - marginX,
+            (tapY + 48).coerceAtMost(r.bottom)
+        )
+    }
+
+    private fun findBottomComposerTapTarget(scope: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val scopeRect = Rect().also { scope.getBoundsInScreen(it) }
+        if (scopeRect.isEmpty) return null
+        val barTop = scopeRect.top + (scopeRect.height() * 0.68f).toInt()
+        var best: AccessibilityNodeInfo? = null
+        var bestBottom = Int.MIN_VALUE
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(scope)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 1800) {
+            val n = stack.removeLast()
+            visited++
+            if (n.hasValidScreenBounds() && (n.isClickable || n.isFocusable || isLikelyCommentInputNode(n))) {
+                val r = Rect().also { n.getBoundsInScreen(it) }
+                if (r.bottom >= barTop && !isLikeControlNode(n)) {
+                    if (r.bottom > bestBottom) {
+                        bestBottom = r.bottom
+                        best = n
+                    }
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return best
     }
 
     /** Ô nhập gần nút Thích (inline trên feed) — tránh mở sheet khi đã có composer dưới bài. */
     fun findCommentInputNearLike(likeNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        var scope: AccessibilityNodeInfo? = null
-        var walk: AccessibilityNodeInfo? = likeNode
-        repeat(12) {
-            val w = walk ?: return@repeat
-            val id = w.viewIdResourceName.orEmpty().lowercase()
-            if (id.contains("feeditemfooterbarmodule") ||
-                id.contains("feed_item") ||
-                id.contains("lv_media_store")
-            ) {
-                scope = w
-                break
-            }
-            walk = w.parent
-        }
-        val host = scope ?: likeNode.parent ?: likeNode
+        val host = findFeedFooterHostNearLike(likeNode)
         findCommentInputInScope(host)?.let { return it }
         for (phrase in inlineCommentPhrases) {
-            findNodeWithHint(host, phrase, 900)?.let { node ->
+            findNodeWithHint(host, phrase, 1200)?.let { node ->
                 if (isLikelyCommentInputNode(node) || isCommentPlaceholderNode(node)) return node
             }
         }
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(host)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 1100) {
+            val n = stack.removeLast()
+            visited++
+            if (isCommentPlaceholderNode(n) || isLikelyCommentInputNode(n)) return n
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
         return findEditableCommentField(host, maxNodes = 900, preferBottomHalf = false)
+    }
+
+    fun findCommentInputPlaceholderNearLike(likeNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val host = findFeedFooterHostNearLike(likeNode)
+        val likeRect = Rect().also { likeNode.getBoundsInScreen(it) }
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(host)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 1100) {
+            val n = stack.removeLast()
+            visited++
+            if (isCommentPlaceholderNode(n) && !isLikeControlNode(n) && !nodeOverlapsRect(n, likeRect, 20)) {
+                return n
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return null
     }
 
     /** Placeholder "Nhập bình luận" (clickable) — tap để hiện `cmtinput_text` / bàn phím. */
@@ -1340,6 +1503,7 @@ class NodeFinder @Inject constructor(
 
     private fun isCommentPlaceholderNode(node: AccessibilityNodeInfo): Boolean {
         if (!node.isEnabled || !node.hasValidScreenBounds()) return false
+        if (isLikeControlNode(node)) return false
         if (isLikelyCommentInputNode(node)) return true
         val fields = listOf(
             node.hintText?.toString(),
@@ -1705,28 +1869,27 @@ class NodeFinder @Inject constructor(
     }
 
     fun hasInlineCommentComposerNearLikeAnchor(likeNode: AccessibilityNodeInfo): Boolean {
+        if (findCommentInputNearLike(likeNode) != null) return true
+        if (findCommentInputPlaceholderNearLike(likeNode) != null) return true
         fun matchesPhrase(s: String?): Boolean {
             val t = s?.trim()?.lowercase().orEmpty()
             if (t.isEmpty()) return false
             return inlineCommentPhrases.any { t.contains(it) }
         }
-
-        // Lấy một container gần like (leo tối đa 6 cấp) rồi duyệt subtree tìm placeholder comment.
-        var container: AccessibilityNodeInfo? = likeNode
-        repeat(6) {
-            val p = container?.parent ?: return@repeat
-            container = p
-        }
-        val root = container ?: likeNode
-
+        val host = findFeedFooterHostNearLike(likeNode)
         val stack = ArrayDeque<AccessibilityNodeInfo>()
-        stack.addLast(root)
+        stack.addLast(host)
         var visited = 0
-        val cap = 900
-        while (stack.isNotEmpty() && visited < cap) {
+        while (stack.isNotEmpty() && visited < 900) {
             val n = stack.removeLast()
             visited++
-            if (matchesPhrase(n.text?.toString()) || matchesPhrase(n.contentDescription?.toString())) return true
+            if (matchesPhrase(n.hintText?.toString()) ||
+                matchesPhrase(n.text?.toString()) ||
+                matchesPhrase(n.contentDescription?.toString())
+            ) {
+                return true
+            }
+            if (Build.VERSION.SDK_INT >= 18 && n.isEditable) return true
             for (i in 0 until n.childCount) {
                 n.getChild(i)?.let { stack.addLast(it) }
             }

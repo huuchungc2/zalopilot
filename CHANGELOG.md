@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- fix(feed): bỏ qua bài có ô bình luận **đã mở** (cmtinput/focus/bàn phím) — không like hết feed; placeholder «Nhập bình luận» thu gọn vẫn like bình thường.
+- fix(feed/comment): MIX — ưu tiên sheet/full-screen sau like (gửi rồi đóng); không nhầm placeholder inline; màn Bình luận full cũng gửi trước BACK; cải thiện focus/SET_TEXT/nút Gửi.
+- fix(start): khóa `sessionLikeMode` suốt phiên bot — không nhảy Feed→Visit khi đổi prefs giữa chừng; suy mode từ màn Zalo (Nhật ký/Danh bạ) khi bấm nổi không chọn mode; tab Script **▶ Chạy** luôn `VISIT`.
+- fix(feed): unlike sau like + ô bình luận kéo lên — không tap icon comment cạnh Thích khi đã có composer inline; `safeCommentPhaseTap` (gesture, vùng like guard); tìm ô nhập trong footer bài.
 - fix(stability): feed comment — cờ `feedCommentFlowInProgress` tránh BACK sheet khi đang gõ; sau like không BACK sheet nếu bật comment feed; tự chuyển tab Nhật ký khi đang Tin nhắn; Visit recovery (back + retry) thay dừng hẳn; profile entry gesture trước + chờ `waitForProfileScreen`.
 - fix(feed/comment): bình luận Nhật ký / bottom sheet — tìm ô nhập trong `bottom_sheet_container`, EditText/placeholder, tap «Nhập bình luận» rồi `cmtinput_text`; inline gần nút Thích trước khi mở sheet; nút Gửi rộng hơn. `actionbar_middle_container` thường `clickable=false`; `performClickWithFallback` leo lên `zds_action_bar` (log ACTION_CLICK_OK nhưng không mở profile). `scriptTapProfileEntryNode` chỉ click self nếu clickable, không thì gesture trên bounds; `findClickableAncestorForProfileTitleBar` bỏ qua `zds_action_bar`.
 - fix(ci): `ZPScriptRunner` — import `AccessibilityNodeInfo`; `tryTapProfileTitleBar` là `suspend` ở cấp class (local function không gọi được `scriptTapProfileEntryNode`).
