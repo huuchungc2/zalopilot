@@ -893,21 +893,47 @@ class NodeFinder @Inject constructor(
     }
 
     /**
+     * RecyclerView danh sách **tin nhắn / hội thoại** — không dùng cho Visit (tránh tap nhầm vào chat).
+     */
+    fun isMessageThreadRecycler(node: AccessibilityNodeInfo): Boolean {
+        val id = node.viewIdResourceName?.lowercase().orEmpty()
+        if (id.contains("msglist") || id.contains("msg_list")) return true
+        if (id.contains("conversation") && id.contains("list")) return true
+        return false
+    }
+
+    /**
      * Đang ở danh sách bạn bè (tab Bạn bè trong Danh bạ / Contacts) — sau [backToContacts] để xác nhận đã về đúng màn.
      * Không nhầm với chat hay profile (loại trừ qua marker).
      */
     fun isContactListScreen(root: AccessibilityNodeInfo): Boolean {
         if (hasChatScreenMarkers(root) || hasProfileScreenMarkers(root)) return false
         if (hasViewId(root, "main_chat_view")) return false
+        val onDanhBa = findByViewId(root, "maintab_contact").isNotEmpty() ||
+            screenContainsTextOrDesc(root, "Danh bạ", 1200) ||
+            screenContainsTextOrDesc(root, "Contacts", 1200)
+        // Danh bạ + list tin nhắn (recycler_view_msgList) khi chưa chọn "Bạn bè" — không phải danh sách visit.
+        if (hasViewId(root, "recycler_view_msgList") && onDanhBa) {
+            val tvFriends = findByViewId(root, "tv_friends")
+            if (tvFriends.isNotEmpty()) {
+                if (!tvFriends.any { it.isSelected || it.isChecked }) return false
+            } else {
+                val fst = findByViewId(root, "first_tab_item").firstOrNull()
+                val sec = findByViewId(root, "second_tab_item").firstOrNull()
+                if (fst != null && sec != null) {
+                    if (fst.isSelected || fst.isChecked) return false
+                    if (!(sec.isSelected || sec.isChecked)) return false
+                } else {
+                    return false
+                }
+            }
+        }
         val friendsTabSelected = findByViewId(root, "tv_friends").any { node ->
             val label = node.text?.toString().orEmpty()
             (label.contains("Bạn bè", ignoreCase = true) || label.contains("Friends", ignoreCase = true)) &&
                 (node.isSelected || node.isChecked)
         }
         if (friendsTabSelected) return true
-        val onDanhBa = findByViewId(root, "maintab_contact").isNotEmpty() ||
-            screenContainsTextOrDesc(root, "Danh bạ", 1200) ||
-            screenContainsTextOrDesc(root, "Contacts", 1200)
         val hasFriendsSubTab = screenContainsTextOrDesc(root, "Bạn bè", 1200) ||
             screenContainsTextOrDesc(root, "Friends", 1200)
         if (onDanhBa && hasFriendsSubTab) return true
@@ -918,6 +944,15 @@ class NodeFinder @Inject constructor(
         hasViewId(root, "main_chat_view") &&
             (hasViewId(root, "chatinput_text") || hasViewId(root, "chat_drawer_layout"))
 
+    /** Khối profile đầy đủ — Zalo có thể vẫn giữ node chat trong cây khi mở profile/sheet. */
+    private fun hasStrongProfileUi(root: AccessibilityNodeInfo): Boolean =
+        hasViewId(root, "rl_profile_bio_container") ||
+            hasViewId(root, "profile_bottom_functions_layout")
+
+    /** Footer bài trên timeline profile (không phải ô nhập chat). */
+    private fun hasProfileFeedFooter(root: AccessibilityNodeInfo): Boolean =
+        hasViewId(root, "feedItemFooterBarModule")
+
     private fun hasProfileScreenMarkers(root: AccessibilityNodeInfo): Boolean =
         hasViewId(root, "rl_profile_bio_container") ||
             hasViewId(root, "profile_avatar") ||
@@ -925,12 +960,21 @@ class NodeFinder @Inject constructor(
             (hasViewId(root, "feedItemFooterBarModule") && hasViewId(root, "layoutSendMessage"))
 
     fun isChatScreen(root: AccessibilityNodeInfo): Boolean {
+        if (hasStrongProfileUi(root)) return false
+        if (hasChatScreenMarkers(root) && hasProfileFeedFooter(root)) return false
         if (hasProfileScreenMarkers(root)) return false
-        return hasChatScreenMarkers(root)
+        if (hasChatScreenMarkers(root)) return true
+        if (!hasViewId(root, "chatinput_text")) return false
+        if (isContactListScreen(root)) return false
+        return hasViewId(root, "zalo_action_bar")
     }
 
     fun isProfileScreen(root: AccessibilityNodeInfo): Boolean {
-        if (hasChatScreenMarkers(root)) return false
+        if (hasStrongProfileUi(root)) return true
+        if (hasChatScreenMarkers(root)) {
+            if (hasProfileFeedFooter(root)) return true
+            return false
+        }
         if (hasProfileScreenMarkers(root)) return true
         // Samsung/Zalo đổi id — vẫn là profile nếu có avatar, không còn ô chat
         return hasViewId(root, "profile_avatar") && !hasViewId(root, "chatinput_text")
@@ -1034,6 +1078,42 @@ class NodeFinder @Inject constructor(
      *   [isProfileScreen] = true — script `tapProfileEntry` coi step thành công.
      */
     fun findProfileEntryNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val likelyChat = hasViewId(root, "chatinput_text") || hasViewId(root, "main_chat_view")
+
+        if (likelyChat) {
+            // Chat 1–1: KHÔNG tap tây cả zds_action_bar (0–209) — tâm Y hay rơi phía trên hàng tiêu đề → không mở profile (kẹt An Mit…).
+            findByViewId(root, "actionbar_middle_container").firstOrNull()?.let { mid ->
+                if (mid.hasValidScreenBounds()) {
+                    logger.log(LogTag.SCAN, "findProfileEntryNode", "CHAT_TAP_MIDDLE_CONTAINER")
+                    return mid
+                }
+            }
+            findByViewId(root, "actionbar_txtTitle").firstOrNull()?.let { t ->
+                val txt = t.text?.toString()?.trim().orEmpty()
+                if (txt.isNotEmpty() && txt.length <= 96 &&
+                    !txt.equals("tìm kiếm", ignoreCase = true) &&
+                    !txt.equals("search", ignoreCase = true)
+                ) {
+                    findClickableAncestor(t)?.let { return it }
+                    if (t.isClickable && t.hasValidScreenBounds()) return t
+                }
+            }
+            findByViewId(root, "action_bar_title").firstOrNull()?.let { t ->
+                val txt = t.text?.toString()?.trim().orEmpty()
+                if (txt.isNotEmpty() && txt.length <= 96 &&
+                    !txt.equals("tìm kiếm", ignoreCase = true) &&
+                    !txt.equals("search", ignoreCase = true)
+                ) {
+                    findClickableAncestor(t)?.let { return it }
+                    if (t.isClickable && t.hasValidScreenBounds()) return t
+                }
+            }
+            findByViewId(root, "zalo_action_bar").firstOrNull()?.let { bar ->
+                findWideClickableInActionBarForProfileEntry(bar)?.let { return it }
+            }
+            findByViewId(root, "zds_action_bar").firstOrNull { it.isClickable }?.let { return it }
+        }
+
         findByViewId(root, "zds_action_bar").firstOrNull { it.isClickable }?.let { return it }
         findByViewId(root, "actionbar_middle_container").firstOrNull()?.let { middle ->
             var p: AccessibilityNodeInfo? = middle
@@ -1051,6 +1131,41 @@ class NodeFinder @Inject constructor(
             logger.log(LogTag.SCAN, "findProfileEntryNode", "ALREADY_ON_PROFILE_NO_CHAT_BAR")
         }
         return null
+    }
+
+    /** Vùng giữa action bar (đầu chat) — tránh nút tìm kiếm / back. */
+    private fun findWideClickableInActionBarForProfileEntry(bar: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val skipSuffixes = listOf(
+            "action_bar_search_btn",
+            "action_back",
+            "btn_back",
+            "navigation_icon",
+            "chat_menu",
+            "menu_button"
+        )
+        var best: AccessibilityNodeInfo? = null
+        var bestW = 0
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.addLast(bar)
+        var visited = 0
+        while (q.isNotEmpty() && visited < 80) {
+            val n = q.removeFirst()
+            visited++
+            val id = n.viewIdResourceName?.lowercase().orEmpty()
+            if (skipSuffixes.any { id.endsWith(it) }) {
+                for (i in 0 until n.childCount) n.getChild(i)?.let { q.addLast(it) }
+                continue
+            }
+            if (n.isClickable && n.hasValidScreenBounds()) {
+                val r = Rect().also { n.getBoundsInScreen(it) }
+                if (r.width() in 180..950 && r.height() in 36..220 && r.width() > bestW) {
+                    bestW = r.width()
+                    best = n
+                }
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.addLast(it) }
+        }
+        return best
     }
 
     /** Like trên timeline profile — quét trong feedItemFooterBarModule trước; không dùng ID học từ feed. */
@@ -1126,7 +1241,11 @@ class NodeFinder @Inject constructor(
         navTop: Int,
         skipPhrases: List<String>
     ): List<AccessibilityNodeInfo>? {
-        val listId = idStore.getContactListID()
+        var listId = idStore.getContactListID()
+        if (!listId.isNullOrBlank() && isBadLearnedContactListId(listId)) {
+            idStore.clearContactListID()
+            listId = null
+        }
         if (!listId.isNullOrBlank()) {
             val recyclers = root.findAccessibilityNodeInfosByViewId(listId) ?: emptyList()
             if (recyclers.isEmpty()) {
@@ -1155,6 +1274,11 @@ class NodeFinder @Inject constructor(
         return null
     }
 
+    private fun isBadLearnedContactListId(fullId: String): Boolean {
+        val low = fullId.lowercase()
+        return low.contains("msglist") || low.contains("msg_list")
+    }
+
     private fun contactSkipPhrases(): List<String> = listOf(
         "friend request", "lời mời kết bạn",
         "birthday", "sinh nhật", "contacts", "danh bạ", "tất cả", "all",
@@ -1168,6 +1292,7 @@ class NodeFinder @Inject constructor(
         skipPhrases: List<String>,
         out: MutableList<AccessibilityNodeInfo>
     ) {
+        if (isMessageThreadRecycler(recycler)) return
         for (i in 0 until recycler.childCount) {
             val child = recycler.getChild(i) ?: continue
             if (isContactRowCandidate(child, tabBottom, navTop, skipPhrases)) {
@@ -1191,7 +1316,9 @@ class NodeFinder @Inject constructor(
             visited++
             val cls = n.className?.toString().orEmpty()
             if (cls.contains("RecyclerView", ignoreCase = true)) {
-                collectContactRowsFromRecycler(n, tabBottom, navTop, skipPhrases, out)
+                if (!isMessageThreadRecycler(n)) {
+                    collectContactRowsFromRecycler(n, tabBottom, navTop, skipPhrases, out)
+                }
             }
             for (i in 0 until n.childCount) {
                 n.getChild(i)?.let { stack.addLast(it) }
@@ -1226,10 +1353,12 @@ class NodeFinder @Inject constructor(
 
     private fun looksLikeConversationPreview(label: String): Boolean {
         val low = label.lowercase()
-        if (low.contains("bạn:")) return true
+        if (low.contains("bạn:") || low.contains("ban:")) return true
         if (low.contains("[file]") || low.contains("[ảnh]") || low.contains("[photo]")) return true
         if (Regex("""\d+\s*(phút|giây|giờ|min|mins|hour|hours)\b""").containsMatchIn(low)) return true
         if (low.contains("hôm qua") || low.contains("yesterday")) return true
+        if (Regex("""(^|\n)\s*T[2-7]\b""").containsMatchIn(low)) return true
+        if (low.contains("[sticker]")) return true
         return false
     }
 
@@ -1451,6 +1580,15 @@ class NodeFinder @Inject constructor(
 
     /** Sub-tab Bạn bè trên màn Danh bạ. */
     fun findFriendsSubTabTapTarget(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val fst = findByViewId(root, "first_tab_item").firstOrNull()
+        val sec = findByViewId(root, "second_tab_item").firstOrNull()
+        if (fst != null && sec != null) {
+            if (fst.isSelected || fst.isChecked) {
+                resolveClickableTapTarget(sec)?.let { return it }
+            } else if (!sec.isSelected && !sec.isChecked && !fst.isSelected && !fst.isChecked) {
+                resolveClickableTapTarget(sec)?.let { return it }
+            }
+        }
         val tabs = findByViewId(root, "tv_friends")
         val pick = tabs.filter { !it.isSelected && !it.isChecked }.ifEmpty { tabs }
         for (node in pick) {

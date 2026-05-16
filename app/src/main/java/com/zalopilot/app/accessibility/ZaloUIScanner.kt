@@ -126,6 +126,14 @@ class ZaloUIScanner @Inject constructor(
         return false
     }
 
+    /** Tránh học RecyclerView tin nhắn làm danh sách bạn bè. */
+    private fun isLikelyMessageListRecyclerForContacts(n: AccessibilityNodeInfo): Boolean {
+        val id = n.viewIdResourceName?.lowercase().orEmpty()
+        if (id.contains("msglist") || id.contains("msg_list")) return true
+        if (id.contains("conversation") && id.contains("list")) return true
+        return false
+    }
+
     private fun scanLikeButton(root: AccessibilityNodeInfo): Boolean {
         val env = scanEnvFromRoot(root)
         val byThich = root.findAccessibilityNodeInfosByText(ZaloIDStore.TEXT_LIKE)
@@ -433,7 +441,7 @@ class ZaloUIScanner @Inject constructor(
             visited++
             val cls = n.className?.toString().orEmpty()
             if (cls.contains("RecyclerView", ignoreCase = true)) {
-                if (!shouldRejectScanNode(n, env)) {
+                if (!shouldRejectScanNode(n, env) && !isLikelyMessageListRecyclerForContacts(n)) {
                     val r = Rect().also { n.getBoundsInScreen(it) }
                     val cy = r.centerY()
                     val area = (r.width().coerceAtLeast(0) * r.height().coerceAtLeast(0))

@@ -898,6 +898,11 @@ class MainActivity : ComponentActivity() {
                             fontSize = 11.sp,
                             color = Color.Gray
                         )
+                        Text(
+                            "Chỉ comment / Mix / Chỉ like — chọn ở mục «Like danh bạ» phía trên; «Chỉ comment» trên Nhật ký sẽ không bấm Thích, chỉ gửi comment (slider số câu ngay dưới).",
+                            fontSize = 11.sp,
+                            color = Color.Gray
+                        )
                         Text("Comment / bài (Nhật ký): $feedCommentCount", fontSize = 13.sp)
                         Slider(
                             value = feedCommentCount.toFloat(),

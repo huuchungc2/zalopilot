@@ -38,6 +38,7 @@ import com.zalopilot.app.util.AppVersion
 import com.zalopilot.app.util.LikeSettingsManager
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
+import com.zalopilot.app.util.VisitActionMode
 import com.zalopilot.app.util.isZaloMainAppPackage
 import com.zalopilot.app.util.isZaloRelatedPackage
 import com.zalopilot.app.util.hasValidScreenBounds
@@ -1299,6 +1300,16 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
     suspend fun scriptTapNode(node: AccessibilityNodeInfo): Boolean = tapNodeByCoordinate(node)
 
+    /** Visit chat→profile: ACTION_CLICK (+ parent) trước — gesture hay miss trên OEM / ViewGroup. */
+    suspend fun scriptTapProfileEntryNode(node: AccessibilityNodeInfo): Boolean {
+        if (performClickWithFallback(node)) {
+            logger.log(LogTag.CLICK, "profileEntry", "ACTION_CLICK_OK")
+            return true
+        }
+        logger.log(LogTag.CLICK, "profileEntry", "ACTION_CLICK_FAIL_USE_GESTURE")
+        return tapNodeByCoordinate(node)
+    }
+
     suspend fun scriptTapCenter(rect: Rect): Boolean {
         if (rect.isEmpty) return false
         val x = rect.centerX().toFloat()
@@ -1607,6 +1618,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         @Suppress("UNUSED_PARAMETER") settings: LikeSettings
     ): FeedScanResult {
         markFeedUiConfirmed()
+        val visitActionMode = try {
+            VisitActionMode.valueOf(settings.visitActionMode)
+        } catch (e: Exception) {
+            VisitActionMode.LIKE_ONLY
+        }
         var scanRoot = root
         var acquiredExtra: AccessibilityNodeInfo? = null
         try {
@@ -1724,7 +1740,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 logAutoBeforeClick(postKey, node, rect, reactionsBefore)
 
                 val reactionHint = if (reactionsBefore > 0) " · $reactionsBefore thích" else ""
-                updateStatus("👍 Đang like bài của ${author ?: "..."}$reactionHint")
+                if (visitActionMode == VisitActionMode.COMMENT_ONLY) {
+                    updateStatus("💬 Chỉ bình luận — ${author ?: "..."}$reactionHint")
+                } else {
+                    updateStatus("👍 Đang like bài của ${author ?: "..."}$reactionHint")
+                }
                 delayEco(200L..500L)
 
                 updateDebugNodeHighlights(likeNodes, node)
@@ -1738,6 +1758,27 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     logger.log(LogTag.STATE, boundsSummary(nodeForClick), "RE_RESOLVED_BEFORE_CLICK")
                 }
                 try {
+                    if (visitActionMode == VisitActionMode.COMMENT_ONLY) {
+                        updateDebugNodeHighlights(likeNodes, node)
+                        val origRect = Rect().apply { nodeForClick.getBoundsInScreen(this) }
+                        val origId = nodeForClick.viewIdResourceName
+                        val rounds = settings.feedCommentCount.coerceAtLeast(1)
+                        logger.log(LogTag.STATE, "mode=COMMENT_ONLY rounds=$rounds", "FEED_ACTION")
+                        updateStatus("💬 Mở bình luận (${rounds}×) — ${author ?: "..."}")
+                        runFeedCommentsAfterLike(origRect, origId, rounds)
+                        progressManager.incrementPostsHandledAndSave()
+                        sendInternalBroadcast(Intent("com.zalopilot.PROGRESS_UPDATE"))
+                        processedPosts.add(postKey)
+                        clickedPositionsThisSession.add("${rect.left}_${rect.top}")
+                        lastClickedPostKey = postKey
+                        lastClickedPostAt = System.currentTimeMillis()
+                        if (author != null) likedAuthorsThisSession.add(author)
+                        logger.log(LogTag.CLICK, author ?: "unknown", "COMMENT_ONLY_DONE")
+                        updateDebugNodeHighlights(likeNodes, null)
+                        updateStatus("✅ Comment xong — ${author ?: "unknown"}")
+                        return FeedScanResult.LIKED
+                    }
+
                     val clicked = performLikeClickWithFallbacks(nodeForClick)
 
                     updateDebugNodeHighlights(likeNodes, null)
@@ -1846,7 +1887,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
                         logger.log(LogTag.CLICK, author ?: "unknown", "SUCCESS_CONFIRMED")
 
-                        val feedCommentRounds = settings.feedCommentCount
+                        val feedCommentRounds =
+                            if (visitActionMode == VisitActionMode.LIKE_ONLY) 0 else settings.feedCommentCount
                         if (feedCommentRounds > 0) {
                             updateStatus("💬 Bình luận (${feedCommentRounds}×) — ${author ?: "..."}")
                             runFeedCommentsAfterLike(origRectForVerify, origIdForVerify, feedCommentRounds)

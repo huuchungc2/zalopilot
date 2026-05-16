@@ -7,6 +7,8 @@ import com.zalopilot.app.util.LikeProgressManager
 import com.zalopilot.app.util.LikeSettingsManager
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
+import com.zalopilot.app.util.VisitActionMode
+import com.zalopilot.app.util.hasValidScreenBounds
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.delay
@@ -167,22 +169,83 @@ class ZPScriptRunner @Inject constructor(
             "tapprofileentry" -> {
                 val root = engine.acquireRoot() ?: return false
                 try {
-                    val node = nodeFinder.findProfileEntryNode(root)
-                    if (node == null) {
-                        if (nodeFinder.isProfileScreen(root)) {
-                            logger.log(LogTag.STATE, "tapProfileEntry", "SKIP_ALREADY_ON_PROFILE")
-                            return true
+                    if (nodeFinder.isProfileScreen(root)) {
+                        logger.log(LogTag.STATE, "tapProfileEntry", "SKIP_ALREADY_ON_PROFILE")
+                        return true
+                    }
+                    val node = nodeFinder.findProfileEntryNode(root) ?: return false
+                    fun tryTapTitleBar(r: AccessibilityNodeInfo, label: String): Boolean {
+                        val mid = nodeFinder.findByViewId(r, "actionbar_middle_container")
+                            .firstOrNull()
+                            ?.takeIf { it.hasValidScreenBounds() }
+                        if (mid != null) {
+                            logger.log(LogTag.CLICK, "tapProfileEntry", label + "_MIDDLE")
+                            return service.scriptTapProfileEntryNode(mid)
+                        }
+                        val title = nodeFinder.findByViewId(r, "actionbar_txtTitle").firstOrNull()
+                            ?: nodeFinder.findByViewId(r, "action_bar_title").firstOrNull()
+                        if (title != null && title.hasValidScreenBounds()) {
+                            logger.log(LogTag.CLICK, "tapProfileEntry", label + "_TITLE")
+                            return service.scriptTapProfileEntryNode(title)
                         }
                         return false
                     }
-                    val target = ScriptTapTarget.fromNode(node) ?: return false
-                    engine.tap(target)
+                    var ok = service.scriptTapProfileEntryNode(node)
+                    if (ok) delay(750)
+                    if (!ok) return false
+                    val r2 = engine.acquireRoot()
+                    if (r2 != null) {
+                        try {
+                            if (nodeFinder.isProfileScreen(r2)) return true
+                            if (nodeFinder.isChatScreen(r2)) {
+                                ok = tryTapTitleBar(r2, "RETRY_STILL_CHAT") && ok
+                                if (ok) delay(750)
+                            }
+                        } finally {
+                            runCatching { r2.recycle() }
+                        }
+                    }
+                    val r3 = engine.acquireRoot() ?: return ok
+                    return try {
+                        when {
+                            nodeFinder.isProfileScreen(r3) -> true
+                            nodeFinder.isChatScreen(r3) -> {
+                                val last = tryTapTitleBar(r3, "THIRD_CHAT")
+                                if (last) delay(800)
+                                val r4 = engine.acquireRoot()
+                                if (r4 != null) {
+                                    try {
+                                        if (nodeFinder.isProfileScreen(r4)) true
+                                        else if (nodeFinder.isChatScreen(r4)) {
+                                            logger.log(LogTag.ERROR, "tapProfileEntry", "STILL_CHAT_AFTER_TAPS")
+                                            false
+                                        } else {
+                                            true
+                                        }
+                                    } finally {
+                                        runCatching { r4.recycle() }
+                                    }
+                                } else last && ok
+                            }
+                            else -> true
+                        }
+                    } finally {
+                        runCatching { r3.recycle() }
+                    }
                 } finally {
                     runCatching { root.recycle() }
                 }
             }
             "likeprofileposts" -> {
-                val max = engine.resolveVarInt(step.count ?: "\$visitLikeCount")
+                val mode = settingsManager.getVisitActionMode()
+                val requested = engine.resolveVarInt(step.count ?: "\$visitLikeCount")
+                val max = when (mode) {
+                    VisitActionMode.COMMENT_ONLY -> 0
+                    VisitActionMode.LIKE_ONLY, VisitActionMode.MIX -> requested
+                }
+                if (mode == VisitActionMode.COMMENT_ONLY) {
+                    logger.log(LogTag.STATE, "skip likes (COMMENT_ONLY)", "PROFILE_LIKE_MODE")
+                }
                 val result = engine.runProfileLikeLoop(max)
                 logger.log(
                     LogTag.STATE,
@@ -348,6 +411,9 @@ class ZPScriptRunner @Inject constructor(
 
     private fun evaluateIfSetting(step: ZPStep): Boolean {
         val key = step.key ?: return false
+        if (key == "visitCommentCount" && settingsManager.getVisitActionMode() == VisitActionMode.LIKE_ONLY) {
+            return false
+        }
         val value = when (key) {
             "visitCommentCount" -> settingsManager.getVisitCommentCount()
             "visitLikeCount" -> settingsManager.getVisitLikeCount()

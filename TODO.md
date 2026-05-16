@@ -61,9 +61,8 @@
 - [x] Fix overlay KEEP_SCREEN_ON: khi pause-rời-Zalo phải gỡ flag để màn tự tắt (đỡ hao pin); resume khi quay lại Zalo
 - [x] Fix slow-poll grace 5s: tránh resume chậm khi user vô tình rời Zalo trong vài giây
 - [x] Fix Bug like→unlike + count không update: tách finder verify (`findLikeAreaNodeAt`) khỏi `findLikeButtons` (vốn lọc isAlreadyLiked), tăng verify 3-pass, không re-click khi không có evidence
+- [x] Visit: chat→profile — click chain + nhận diện profile chồng chat (`feedItemFooter` / strong profile)
 - [ ] Handle trường hợp Zalo hiện popup quảng cáo / dialog → tự đóng
-
----
 
 ## 🟡 ƯU TIÊN TRUNG BÌNH
 

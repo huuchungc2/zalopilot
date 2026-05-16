@@ -2,9 +2,9 @@
   "scripts": [
     {
       "id": "visit_contacts_v1",
-      "version": 9,
+      "version": 10,
       "file": "visit_contacts_v1.json",
-      "desc": "Visit v9 — sang bạn tiếp (tab Danh bạ/Bạn bè, không chuỗi BACK)"
+      "desc": "Visit v10 — danh bạ thật (không msgList); pill Bạn bè; tap profile từ chat"
     }
   ]
 }

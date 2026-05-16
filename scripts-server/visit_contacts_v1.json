@@ -1,7 +1,7 @@
 {
   "id": "visit_contacts_v1",
-  "version": 9,
-  "desc": "Visit v9 — mở Danh bạ/Bạn bè bằng tab (openContactsFriends), không chuỗi BACK",
+  "version": 10,
+  "desc": "Visit v10 — bỏ nhầm list tin nhắn; tab pill Bạn bè; chat→profile action bar",
   "steps": [
     { "id": "s1", "action": "findContactItems" },
     { "id": "s2", "action": "tapContactAt" },

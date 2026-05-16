@@ -381,7 +381,11 @@ class ZPEngine(
             "contacts" -> nodeFinder.isContactListScreen(root)
             "chat" -> nodeFinder.isChatScreen(root)
             "profile" -> nodeFinder.isProfileScreen(root)
-            "comments" -> nodeFinder.isFullScreenCommentScreen(root)
+            "comments" -> {
+                nodeFinder.isFullScreenCommentScreen(root) ||
+                    nodeFinder.isCommentBottomSheetOverFeed(root) ||
+                    nodeFinder.findCommentInput(root) != null
+            }
             else -> false
         }
     }
