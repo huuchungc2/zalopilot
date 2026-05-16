@@ -29,6 +29,8 @@
 - [x] Visit Mode — engine JSON (`ZPScriptRunner`, `ZPEngine`, `visit_contacts_v1.json`) + UI Cài đặt Feed/Visit
 - [x] Fix crash Visit — `ScriptTapTarget`, không giữ node sau recycle; tap contact hàng đầu + scroll fallback
 - [x] Trợ năng sau crash — `PermissionGate` + `AccessibilityHelper` + hướng dẫn Samsung (App info ≠ Trợ năng)
+- [x] BUGS.md (2026-05) — profile like không lookup ID feed; tab Bài viết `ACTION_CLICK`; `goto` / `profilesDone` / tap contact ordinal / `profilePostKey` / KDoc `isContactListScreen`
+- [x] Feed — thoát **bottom sheet bình luận** (tap nhầm icon comment) trong `detectAndEscapeWrongScreen` + `runFeedMode`, tránh kẹt không thấy nút Thích
 
 ---
 
@@ -52,6 +54,7 @@
 - [x] Chống unlike nhầm: sau click verify + delta composer (xuất hiện/biến mất) → confirmed hoặc re-click; rule cũ "no composer → re-click" giữ làm fallback
 - [x] Không pause/stop nhầm khi có heads-up notification/SystemUI overlay nổi lên khi bot đang chạy
 - [x] Vào nhầm full-screen "Bình luận" → tự `GLOBAL_ACTION_BACK` 1–2 lượt + skip bài; dừng bot nếu kẹt 3 lần liên tục
+- [x] Kẹt **bottom sheet** bình luận trên feed (không phải full-screen) → detect + BACK hoặc gửi comment tùy `visitCommentCount`
 - [x] InteractMode (TAP/MIX) chi phối cả cuộn feed (TAP ⇒ vuốt tay, MIX ⇒ random); thêm toggle "VUỐT TAY KHI CUỘN" override
 - [x] Counter "Đã like" tự update ở UI/floating menu (Android 13+ — `RECEIVER_NOT_EXPORTED` + `setPackage` cho broadcast nội bộ)
 - [x] Tiết kiệm pin: toggle "Chỉ chạy khi cắm sạc" + "Pause khi pin thấp" (ngưỡng tùy chỉnh) + "Tiết kiệm khi rời Zalo" (pause-không-stop, slow poll 10–20s, tự resume khi mở Zalo lại)
@@ -92,7 +95,7 @@
 - [ ] Test ổn định Visit trên máy thật (Samsung) — không crash, không mất Trợ năng
 - [x] ZaloIDStore học `contact_list_id` / `contact_item_id` + NodeFinder/script vars
 - [ ] Visit: cuộn danh bạ có chủ đích sau mỗi profile (hiện chủ yếu tap hàng đầu + scroll khi fail)
-- [ ] `$visitIndex` = số profile đã xử lý (prefs), không phải index RecyclerView — cần verify flow 2700+ bạn
+- [ ] `$visitIndex` chỉ lưu tiến độ prefs; index hàng danh bạ dùng ordinal session (sau `findContactItems`) — cần verify flow 2700+ bạn
 
 ---
 

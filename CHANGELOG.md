@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- fix(visit/profile): like timeline profile **không dùng** `idStore.getLikeButtonID()` (ID học từ feed làm miss trên profile) — `findLikeButtonsWithoutLearnedId` / `findProfileLikeButtons`; tab **Bài viết** dùng `ACTION_CLICK` thay gesture (tránh tap nhầm SystemUI); `profilePostKey` thêm snippet + bucket thô hơn.
+- fix(visit/script): `goto` chỉ tăng `profilesDone` khi vòng visit **thành công** (`visitRoundSuccess`; profile không có bài + 0 like → không đếm); `tapContactAt` dùng **ordinal trong session** (reset sau `findContactItems`), không `visitIndex % size`.
+- fix(feed): **bottom sheet bình luận** trên nhật ký (`bottom_sheet_container` + `main_comment_view` + feed vẫn hiện) — `isCommentBottomSheetOverFeed`, `tryEscapeCommentBottomSheet` (BACK hoặc nhập comment + send nếu `visitCommentCount` > 0), gọi trong `detectAndEscapeWrongScreen` + `runFeedMode` khi scan rỗng — tránh kẹt `EMPTY_AFTER_RETRY` lâu.
+- fix(docs): KDoc `isContactListScreen` đúng chức năng; chuyển KDoc full-screen comment sang `isFullScreenCommentScreen`.
+- chore: thêm `BUGS.md` — checklist bug đã xử (profile / visit / feed sheet).
+
 - feat(ui): Trang chủ 2 nút **Like Nhật ký** / **Like danh bạ** — bỏ chọn Feed/Visit trong Cài đặt; bấm chạy tự mở Zalo đúng tab (`prepareZaloForCurrentMode`).
 - fix(start): `requestStartAutoLike(mode)` dùng đúng mode ngay khi mở Zalo (`preferredMode` thay vì đọc settings cũ).
 - fix(ci): bỏ `modeLabel` trùng; `continue`/`break` trong `repeat` → `for` / `return@repeat` (Kotlin FIR).
