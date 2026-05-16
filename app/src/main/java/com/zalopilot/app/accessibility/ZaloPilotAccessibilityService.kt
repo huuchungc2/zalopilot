@@ -32,6 +32,7 @@ import com.zalopilot.app.util.LikeSettings
 import com.zalopilot.app.util.DebugHighlightPrefs
 import com.zalopilot.app.accessibility.engine.ZPScriptRunner
 import com.zalopilot.app.accessibility.engine.ZPScriptStore
+import com.zalopilot.app.util.BotStartEntry
 import com.zalopilot.app.util.FeedMode
 import com.zalopilot.app.util.LikeMode
 import com.zalopilot.app.util.AppVersion
@@ -167,6 +168,12 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         /** Nút ZP / Script / app — start bot khi [instance] tạm null. */
         const val ACTION_START_AUTO_LIKE = "com.zalopilot.START_AUTO_LIKE"
         const val EXTRA_LIKE_MODE = "like_mode"
+        const val EXTRA_START_ENTRY = "start_entry"
+
+        /** Sau launch / bring Zalo lên (nút Trang chủ) — chờ trước khi tap tab. */
+        private const val ZALO_LAUNCH_SETTLE_MS = 1_200L
+        /** Sau đóng menu ZP trên Zalo — chờ cây UI ổn định. */
+        private const val FLOATING_MENU_SETTLE_MS = 450L
 
         /** Áp dụng ngay khi bật/tắt trong Cài đặt (không cần khởi động lại service). */
         fun syncDebugHighlightFromPrefs() {
@@ -283,7 +290,10 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             val mode = intent.getStringExtra(EXTRA_LIKE_MODE)?.let { name ->
                 runCatching { LikeMode.valueOf(name) }.getOrNull()
             }
-            startAutoLike(mode, userInitiated = true)
+            val entry = intent.getStringExtra(EXTRA_START_ENTRY)?.let { name ->
+                runCatching { BotStartEntry.valueOf(name) }.getOrNull()
+            } ?: BotStartEntry.HOME_LIKE_BUTTON
+            startAutoLike(mode, userInitiated = true, startEntry = entry)
         }
     }
 
@@ -1018,7 +1028,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     && !progressManager.isLimitReached()
                     && !settingsManager.isQuietHour()) {
                     val mode = settingsManager.getLikeMode()
-                    mainHandler.post { startAutoLike(mode, userInitiated = false) }
+                    mainHandler.post {
+                        startAutoLike(mode, userInitiated = false, startEntry = BotStartEntry.POLL_AUTO)
+                    }
                 }
             }
             // Bot đang chạy: vòng autoLikeLoop tự scan + settle sau cuộn — tránh scan sớm khi lazy-load.
@@ -1098,7 +1110,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         quietLog: Boolean = false
     ): AccessibilityNodeInfo? {
         repeat(maxAttempts) { attempt ->
-            val root = rootInActiveWindow
+            val root = pickBestAccessibilityRoot()
             if (root != null) {
                 val pkg = root.packageName?.toString() ?: ""
                 logger.setForegroundPackage(pkg)
@@ -1116,6 +1128,48 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         }
         logger.log(logTag, "attempts=$maxAttempts", "ROOT_GIVEUP")
         return null
+    }
+
+    /**
+     * Overlay ZP / status có thể là [rootInActiveWindow] dù Zalo vẫn đang hiện phía dưới —
+     * quét [windows] để lấy cây `com.zing.zalo`.
+     */
+    private fun pickBestAccessibilityRoot(): AccessibilityNodeInfo? {
+        val active = rootInActiveWindow
+        if (active != null) {
+            val pkg = active.packageName?.toString().orEmpty()
+            if (isZaloRelatedPackage(pkg) && !pkg.contains("zalopilot")) {
+                return active
+            }
+        }
+        findZaloRootInAllWindows()?.let { zaloRoot ->
+            runCatching { active?.recycle() }
+            return zaloRoot
+        }
+        return active
+    }
+
+    private fun findZaloRootInAllWindows(): AccessibilityNodeInfo? {
+        val wins = windows ?: return null
+        var fallback: AccessibilityNodeInfo? = null
+        for (win in wins) {
+            val root = win.root ?: continue
+            val pkg = root.packageName?.toString().orEmpty()
+            if (!isZaloRelatedPackage(pkg) || pkg.contains("zalopilot")) {
+                runCatching { root.recycle() }
+                continue
+            }
+            if (isZaloMainAppPackage(pkg)) {
+                fallback?.let { runCatching { it.recycle() } }
+                return root
+            }
+            if (fallback == null) {
+                fallback = root
+            } else {
+                runCatching { root.recycle() }
+            }
+        }
+        return fallback
     }
 
     private fun eventTypeLabel(type: Int): String = when (type) {
@@ -1200,7 +1254,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private fun isBotStartBlocked(): Boolean =
         autoStartSuppressedByUser || settingsManager.isBotRunSuppressed()
 
-    fun startAutoLike(preferredMode: LikeMode? = null, userInitiated: Boolean = false) {
+    fun startAutoLike(
+        preferredMode: LikeMode? = null,
+        userInitiated: Boolean = false,
+        startEntry: BotStartEntry = BotStartEntry.HOME_LIKE_BUTTON
+    ) {
         if (!userInitiated && isBotStartBlocked()) {
             logger.log(LogTag.STATE, "autoLike", "START_BLOCKED_USER_STOPPED")
             return
@@ -1234,14 +1292,18 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             autoStartSuppressedByUser = false
             settingsManager.setBotRunSuppressed(false)
         }
+        sessionLikeMode = null
+        logSettingsReload("START")
         startAutoLikeInProgress = true
         scope.launch {
             try {
-                val sessionMode = resolveStartLikeMode(preferredMode)
+                val sessionMode = resolveStartLikeMode(preferredMode, startEntry)
                 val visitMode = sessionMode == LikeMode.VISIT
                 val modeLabel = if (visitMode) "Visit danh bạ" else "Nhật ký"
-                updateStatus("↩ Mở Zalo — $modeLabel…")
-                if (!prepareZaloForCurrentMode(sessionMode)) {
+                if (startEntry == BotStartEntry.HOME_LIKE_BUTTON) {
+                    showToast("↩ Đang mở Zalo — $modeLabel…")
+                }
+                if (!prepareZaloForCurrentMode(sessionMode, startEntry)) {
                     logger.log(LogTag.STATE, "mode=$modeLabel", "PREPARE_ZALO_TAB_FAIL")
                     showToast(
                         if (visitMode) "⚠️ Không vào được Danh bạ — mở Zalo → Danh bạ → Bạn bè"
@@ -1249,6 +1311,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                     )
                     return@launch
                 }
+                updateStatus("↩ Mở Zalo — $modeLabel…")
 
                 val root = acquireRootOrNull(
                     maxAttempts = 5,
@@ -1356,6 +1419,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun visitScriptLoopInner(testOneRound: Boolean = false) {
+        logSettingsReload("VISIT")
         if (!ensureZaloForegroundForBot(12_000L)) {
             updateStatus("⚠️ Không mở được Zalo")
             showToast("⚠️ Mở Zalo thủ công → Danh bạ → Bạn bè")
@@ -1388,10 +1452,27 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     }
 
     fun isZaloMainForeground(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val pkg = root.packageName?.toString().orEmpty()
-        runCatching { root.recycle() }
-        return isZaloMainAppPackage(pkg)
+        pickBestAccessibilityRoot()?.let { root ->
+            val pkg = root.packageName?.toString().orEmpty()
+            val ok = isZaloMainAppPackage(pkg)
+            runCatching { root.recycle() }
+            if (ok) return true
+        }
+        return isZaloForeground
+    }
+
+    /** Nút ZP nổi không truyền mode — đoán FEED/VISIT từ cây Zalo (không overlay ZP). */
+    fun inferLikeModeForStart(): LikeMode? {
+        val root = pickBestAccessibilityRoot() ?: return null
+        return try {
+            when {
+                nodeFinder.isLikelyTimelineFeedScreen(root) -> LikeMode.FEED
+                nodeFinder.isContactListScreen(root) -> LikeMode.VISIT
+                else -> null
+            }
+        } finally {
+            runCatching { root.recycle() }
+        }
     }
 
     fun launchZaloMain(): Boolean {
@@ -1411,18 +1492,41 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Mode đang chạy (khóa phiên) hoặc prefs nếu chưa start. */
+    /** Mode đã chốt lúc bắt đầu phiên này; trước start xem prefs qua [settingsManager.getLikeMode]. */
     private fun activeLikeMode(): LikeMode =
         sessionLikeMode ?: settingsManager.getLikeMode()
+
+    /** Mỗi lần chạy / mỗi vòng loop: đọc lại prefs (không cache snapshot cũ). */
+    private fun logSettingsReload(trigger: String) {
+        val s = settingsManager.load()
+        logger.log(
+            LogTag.STATE,
+            "mode=${s.likeModeStr} feedMode=${settingsManager.getFeedMode().name} " +
+                "action=${s.visitActionMode} feedCmt=${s.feedCommentCount} " +
+                "visitLike=${s.visitLikeCount} visitCmt=${s.visitCommentCount} " +
+                "session=${s.sessionLimit} daily=${s.dailyLimit} " +
+                "delay=${s.delayMinMs}-${s.delayMaxMs} eco=${s.ecoMode}",
+            "SETTINGS_RELOAD_$trigger"
+        )
+    }
 
     /**
      * Khi không truyền mode: ưu tiên màn Zalo hiện tại (Nhật ký / Danh bạ) rồi mới prefs —
      * tránh đang xem feed nhưng setting Visit → tự nhảy Danh bạ.
      */
-    private suspend fun resolveStartLikeMode(preferredMode: LikeMode?): LikeMode {
+    private suspend fun resolveStartLikeMode(
+        preferredMode: LikeMode?,
+        startEntry: BotStartEntry
+    ): LikeMode {
         if (preferredMode != null) {
             settingsManager.setLikeMode(preferredMode)
             return preferredMode
+        }
+        if (startEntry == BotStartEntry.FLOATING_ON_ZALO) {
+            inferLikeModeForStart()?.let { inferred ->
+                settingsManager.setLikeMode(inferred)
+                return inferred
+            }
         }
         val root = acquireRootOrNull(
             maxAttempts = 3,
@@ -1449,17 +1553,82 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         return settingsManager.getLikeMode()
     }
 
-    /**
-     * Mở Zalo lên foreground, **chờ nav dưới vẽ xong**, rồi mới tìm tab và tap (Nhật ký / Danh bạ → Bạn bè).
-     * Tránh tap quá sớm khi cold start chỉ mới “mở Zalo” chưa có bottom bar.
-     */
-    private suspend fun prepareZaloForCurrentMode(mode: LikeMode): Boolean {
-        if (!ensureZaloForegroundForBot(22_000L)) return false
-        if (!waitForZaloBottomNavigationReady(14_000L)) {
-            logger.log(LogTag.STATE, "prepareZaloForCurrentMode", "ZALO_NAV_WAIT_TIMEOUT")
-            return false
+    private suspend fun isPrepareTargetScreenReady(visit: Boolean): Boolean {
+        val root = acquireRootOrNull(
+            maxAttempts = 4,
+            delayRangeMs = 100L..280L,
+            logTag = LogTag.STATE,
+            quietLog = true
+        ) ?: return false
+        return try {
+            if (visit) nodeFinder.isContactListScreen(root) else nodeFinder.isLikelyTimelineFeedScreen(root)
+        } finally {
+            runCatching { root.recycle() }
         }
+    }
+
+    /**
+     * Chuẩn bị Zalo trước khi `isRunning = true`.
+     * - [BotStartEntry.HOME_LIKE_BUTTON] / [BotStartEntry.POLL_AUTO]: mở Zalo → chờ → nav → tap tab.
+     * - [BotStartEntry.FLOATING_ON_ZALO]: Zalo đã mở — đọc cây Zalo (kể cả khi overlay ZP), chỉ chuyển tab nếu sai.
+     */
+    private suspend fun prepareZaloForCurrentMode(mode: LikeMode, entry: BotStartEntry): Boolean {
         val visit = mode == LikeMode.VISIT
+        logger.log(LogTag.STATE, "mode=$mode entry=$entry", "PREPARE_ZALO_START")
+
+        when (entry) {
+            BotStartEntry.HOME_LIKE_BUTTON, BotStartEntry.POLL_AUTO -> {
+                if (!ensureZaloForegroundForBot(
+                        timeoutMs = 22_000L,
+                        requireRunningBot = false,
+                        preferExistingZalo = false
+                    )
+                ) {
+                    return false
+                }
+                delay(ZALO_LAUNCH_SETTLE_MS)
+                if (!waitForZaloBottomNavigationReady(14_000L) && !isPrepareTargetScreenReady(visit)) {
+                    logger.log(LogTag.STATE, "entry=$entry", "ZALO_NAV_WAIT_TIMEOUT")
+                    return false
+                }
+            }
+            BotStartEntry.FLOATING_ON_ZALO -> {
+                delay(FLOATING_MENU_SETTLE_MS)
+                if (!ensureZaloForegroundForBot(
+                        timeoutMs = 12_000L,
+                        requireRunningBot = false,
+                        preferExistingZalo = true
+                    )
+                ) {
+                    if (!ensureZaloForegroundForBot(
+                            timeoutMs = 22_000L,
+                            requireRunningBot = false,
+                            preferExistingZalo = false
+                        )
+                    ) {
+                        return false
+                    }
+                    delay(ZALO_LAUNCH_SETTLE_MS)
+                }
+                if (isPrepareTargetScreenReady(visit)) {
+                    logger.log(LogTag.STATE, "visit=$visit", "ZALO_PREPARE_ALREADY_READY")
+                    return true
+                }
+                if (!waitForZaloBottomNavigationReady(10_000L) && !isPrepareTargetScreenReady(visit)) {
+                    logger.log(LogTag.STATE, "entry=$entry", "ZALO_NAV_WAIT_TIMEOUT")
+                    return false
+                }
+            }
+        }
+        return navigateZaloToTargetTab(visit)
+    }
+
+    /** Tap tab Nhật ký / Danh bạ → Bạn bè cho tới khi [isPrepareTargetScreenReady] hoặc hết retry. */
+    private suspend fun navigateZaloToTargetTab(visit: Boolean): Boolean {
+        if (isPrepareTargetScreenReady(visit)) {
+            logger.log(LogTag.STATE, "visit=$visit", "ZALO_NAV_TARGET_ALREADY")
+            return true
+        }
         repeat(8) { attempt ->
             val root = acquireRootOrNull(
                 maxAttempts = 5,
@@ -1521,17 +1690,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 runCatching { root.recycle() }
             }
         }
-        val finalRoot = acquireRootOrNull(4, 120L..280L, LogTag.STATE, quietLog = true) ?: return false
-        return try {
-            val ok = if (visit) {
-                nodeFinder.isContactListScreen(finalRoot)
-            } else {
-                nodeFinder.isLikelyTimelineFeedScreen(finalRoot)
-            }
+        return isPrepareTargetScreenReady(visit).also { ok ->
             if (!ok) logger.log(LogTag.STATE, "visit=$visit", "ZALO_PREPARE_FINAL_FAIL")
-            ok
-        } finally {
-            runCatching { finalRoot.recycle() }
         }
     }
 
@@ -1570,20 +1730,39 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         return tapNodeByCoordinate(node)
     }
 
-    suspend fun ensureZaloForegroundForBot(timeoutMs: Long = 15_000L): Boolean {
-        if (!isRunning || isBotStartBlocked()) return false
+    /**
+     * @param requireRunningBot false khi chuẩn bị tab trước [isRunning]=true (startAutoLike / prepareZalo).
+     * true khi bot đang chạy và cần kéo Zalo lại foreground (visit reopen, pause away).
+     */
+    suspend fun ensureZaloForegroundForBot(
+        timeoutMs: Long = 15_000L,
+        requireRunningBot: Boolean = true,
+        preferExistingZalo: Boolean = false
+    ): Boolean {
+        if (isBotStartBlocked()) return false
+        if (requireRunningBot && !isRunning) return false
         if (isZaloMainForeground()) return true
+        if (preferExistingZalo || (!requireRunningBot && isZaloForeground)) {
+            findZaloRootInAllWindows()?.let { zaloRoot ->
+                runCatching { zaloRoot.recycle() }
+                return true
+            }
+        }
         launchZaloMain()
         delay(900)
-        return waitForZaloMainForeground(timeoutMs)
+        return waitForZaloMainForeground(timeoutMs, requireRunningBot = requireRunningBot)
     }
 
-    suspend fun waitForZaloMainForeground(timeoutMs: Long = 12_000L): Boolean {
+    suspend fun waitForZaloMainForeground(
+        timeoutMs: Long = 12_000L,
+        requireRunningBot: Boolean = true
+    ): Boolean {
         if (isZaloMainForeground()) return true
         launchZaloMain()
         delay(700)
         val deadline = System.currentTimeMillis() + timeoutMs
-        while (isRunning && System.currentTimeMillis() < deadline) {
+        while (System.currentTimeMillis() < deadline) {
+            if (requireRunningBot && !isRunning) return isZaloMainForeground()
             delay(400)
             if (isZaloMainForeground()) return true
         }
@@ -1787,6 +1966,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 return
             }
 
+            logSettingsReload("LOOP")
             val settings = settingsManager.load()
 
             if (sessionLikeCount >= settings.sessionLimit) {
@@ -1870,7 +2050,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 }
 
                 val scrollProf = gestureProfileForStreak()
-                val scanResult = runFeedMode(liveRoot, settings)
+                val scanResult = runFeedMode(liveRoot)
                 val feedMode = settingsManager.getFeedMode()
 
                 when (scanResult) {
@@ -2061,10 +2241,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         return FeedScanResult.ALL_SKIPPED
     }
 
-    private suspend fun runFeedMode(
-        root: AccessibilityNodeInfo,
-        @Suppress("UNUSED_PARAMETER") settings: LikeSettings
-    ): FeedScanResult {
+    private suspend fun runFeedMode(root: AccessibilityNodeInfo): FeedScanResult {
+        val settings = settingsManager.load()
         markFeedUiConfirmed()
         val visitActionMode = try {
             VisitActionMode.valueOf(settings.visitActionMode)

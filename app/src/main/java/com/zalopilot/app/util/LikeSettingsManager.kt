@@ -70,6 +70,7 @@ class LikeSettingsManager @Inject constructor(
         const val KEY_BOT_RUN_SUPPRESSED = "bot_run_suppressed"
     }
 
+    /** Đọc prefs mỗi lần gọi — bot phải gọi lại khi start / mỗi vòng loop, không giữ snapshot cũ. */
     fun load(): LikeSettings {
         val json = prefs.getString("settings", null) ?: return LikeSettings()
         return try {

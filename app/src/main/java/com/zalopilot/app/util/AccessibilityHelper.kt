@@ -69,12 +69,17 @@ object AccessibilityHelper {
         "android.provider.extra.ACCESSIBILITY_SERVICE_COMPONENT_NAME"
 
     /**
+     * @param entry [BotStartEntry.HOME_LIKE_BUTTON] cho nút Trang chủ; [BotStartEntry.FLOATING_ON_ZALO] cho menu ZP trên Zalo.
      * @return true nếu đã gọi start hoặc đã gửi broadcast chờ service nhận.
      */
-    fun requestStartAutoLike(context: Context, mode: LikeMode? = null): Boolean {
+    fun requestStartAutoLike(
+        context: Context,
+        mode: LikeMode? = null,
+        entry: BotStartEntry = BotStartEntry.HOME_LIKE_BUTTON
+    ): Boolean {
         LikeSettingsManager(context.applicationContext).setBotRunSuppressed(false)
         ZaloPilotAccessibilityService.instance?.let {
-            it.startAutoLike(mode, userInitiated = true)
+            it.startAutoLike(mode, userInitiated = true, startEntry = entry)
             return true
         }
         if (!isAccessibilityEnabled(context)) {
@@ -89,11 +94,12 @@ object AccessibilityHelper {
         val broadcast = Intent(ZaloPilotAccessibilityService.ACTION_START_AUTO_LIKE)
             .setPackage(context.packageName)
         mode?.let { broadcast.putExtra(ZaloPilotAccessibilityService.EXTRA_LIKE_MODE, it.name) }
+        broadcast.putExtra(ZaloPilotAccessibilityService.EXTRA_START_ENTRY, entry.name)
         context.sendBroadcast(broadcast)
         Handler(Looper.getMainLooper()).postDelayed({
             val svc = ZaloPilotAccessibilityService.instance
             if (svc != null) {
-                svc.startAutoLike(mode, userInitiated = true)
+                svc.startAutoLike(mode, userInitiated = true, startEntry = entry)
             } else {
                 Toast.makeText(
                     context,

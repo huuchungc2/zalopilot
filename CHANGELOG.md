@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- fix(start): hai luồng BẮT ĐẦU — `BotStartEntry` (Trang chủ: mở Zalo→chờ→tab; floating trên Zalo: đọc cây Zalo, không launch lại); `pickBestAccessibilityRoot`; `prepare` trước `isRunning`.
+- fix(settings): mỗi lần start + mỗi vòng loop `settingsManager.load()`; `runFeedMode` tự load; log `SETTINGS_RELOAD_*`.
+
 - fix(feed): like Nhật ký theo SPEC — skip khi đã có ô bình luận; xác nhận like bằng ô bình luận sau tap (re-tap nếu unlike); không tăng counter khi chưa xác nhận; COMMENT_ONLY neo `feedItemFooterBarModule`.
 - fix(feed/comment): MIX/COMMENT_ONLY — chỉ báo «Đã gửi comment» khi `sent=true`; `runFeedCommentsAfterLike` trả `Boolean`.
 - fix(stop): DỪNG không còn tự chạy lại — `startAutoLike` từ poll không xóa cờ chặn; lưu `bot_run_suppressed` vào prefs; hủy visit job + không `ensureZaloForeground` sau DỪNG.

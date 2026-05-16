@@ -48,6 +48,23 @@ app/src/main/java/com/zalopilot/app/
 
 > **Đọc section này trước khi sửa start/stop/poll/visit reopen.** Đây là logic product đã chốt — **không** đọc code cũ rồi đoán (đặc biệt đừng gọi `startAutoLike(mode)` mà không phân biệt user vs poll).
 
+### Hai cách BẮT ĐẦU like (product — phải giữ)
+
+| # | User làm gì | `BotStartEntry` | Chuỗi bắt buộc |
+|---|-------------|-----------------|----------------|
+| **1** | Trong app ZaloPilot bấm **▶ Like Nhật ký** hoặc **▶ Like danh bạ** | `HOME_LIKE_BUTTON` | **Mở Zalo** (`launchZaloMain` nếu chưa foreground) → **chờ** `ZALO_LAUNCH_SETTLE_MS` (~1,2s) → **chờ bottom nav** → **tap tab** đúng mode (Nhật ký / Danh bạ→Bạn bè) → `isRunning=true` → chạy loop |
+| **2** | **Tự mở Zalo** (đang ở feed hoặc danh bạ), menu nút **ZP** → **▶ Bắt đầu like** | `FLOATING_ON_ZALO` | **Không** launch lại nếu đã thấy cây `com.zing.zalo` (`pickBestAccessibilityRoot` / `windows`) → chờ menu đóng (`FLOATING_MENU_SETTLE_MS`) → **đúng màn rồi thì chạy luôn** → sai tab thì tap chuyển → chạy loop |
+
+**Không trộn:** Flow (1) luôn `preferExistingZalo=false` + settle sau launch. Flow (2) `preferExistingZalo=true` trước; chỉ launch fallback khi không đọc được Zalo.
+
+**Mode:** (1) truyền `LikeMode` từ nút. (2) `inferLikeModeForStart()` từ cây Zalo, không có thì prefs.
+
+**API:** `requestStartAutoLike(context, mode, entry)` → `startAutoLike(..., startEntry)` → `prepareZaloForCurrentMode(mode, entry)`.
+
+**Settings:** Mỗi lần **bắt đầu chạy** (`startAutoLike`) và mỗi **vòng** `autoLikeLoop` / Visit — gọi `settingsManager.load()` (log `SETTINGS_RELOAD_*`). Chỉ `sessionLikeMode` khóa FEED/VISIT trong **một phiên** đang chạy; delay, comment, session limit, visitLikeCount… luôn lấy prefs mới nhất.
+
+**Lỗi hay gặp:** Gọi `ensureZaloForegroundForBot` với `requireRunningBot=true` **trước** `isRunning=true` → fail dù Zalo đã mở. Đọc `rootInActiveWindow` khi overlay ZP là active → fail; phải `pickBestAccessibilityRoot()`.
+
 ### Hành vi product (user-facing)
 
 | Hành động | Ý nghĩa |
@@ -92,7 +109,8 @@ Hai lớp (OR với nhau):
 | `startAutoLike` clear cờ | **Chỉ** khi `userInitiated == true` |
 | `applyZaloBackground` visit reopen | `!isBotStartBlocked()` trước `ensureZaloForegroundForBot` |
 | `autoLikeLoop` pause Zalo away + Visit | Không `ensureZaloForegroundForBot` nếu blocked |
-| `ensureZaloForegroundForBot` | `if (!isRunning \|\| isBotStartBlocked()) return false` |
+| `ensureZaloForegroundForBot` | `requireRunningBot`: chỉ khi bot đã chạy; `prepareZalo` dùng `requireRunningBot=false`. `isBotStartBlocked()` luôn chặn |
+| `prepareZaloForCurrentMode` | Phân nhánh theo `BotStartEntry` — xem bảng «Hai cách BẮT ĐẦU» |
 
 ### Dừng nội bộ (không phải user DỪNG)
 

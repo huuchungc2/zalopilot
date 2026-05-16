@@ -431,6 +431,13 @@ class NodeFinder @Inject constructor(
      */
     fun isLikelyTimelineFeedScreen(root: AccessibilityNodeInfo?): Boolean {
         if (root == null) return false
+        if (hasViewId(root, "maintab_timeline") &&
+            (hasViewId(root, "layoutSocialFeed") ||
+                hasViewId(root, "swipe_refresh_layout") ||
+                hasViewId(root, "feedItemFooterBarModule"))
+        ) {
+            return true
+        }
         if (hasZaloMainBottomTabs(root)) return true
         if (hasViewId(root, "swipe_refresh_layout")) return true
         if (hasViewId(root, "layoutSocialFeed")) return true
@@ -456,6 +463,8 @@ class NodeFinder @Inject constructor(
         if (root == null) return false
         if (hasZaloMainBottomTabs(root)) return true
         if (hasViewId(root, "maintab_timeline")) return true
+        if (hasViewId(root, "layoutSocialFeed") || hasViewId(root, "swipe_refresh_layout")) return true
+        if (isContactListScreen(root)) return true
         return false
     }
 
@@ -2049,11 +2058,21 @@ class NodeFinder @Inject constructor(
     fun resolveClickableTapTarget(node: AccessibilityNodeInfo): AccessibilityNodeInfo? =
         findClickableAncestor(node) ?: node.takeIf { it.isClickable && it.hasValidScreenBounds() }
 
-    /** Tab Nhật ký dưới cùng — null nếu đã chọn. */
+    /** Tab feed dưới cùng (`maintab_timeline` / «Tường nhà» / «Nhật ký») — null nếu đã ở feed. */
     fun findTimelineTabTapTarget(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        val tab = findTimelineTab(root) ?: return null
-        if (tab.isSelected || tab.isChecked) return null
-        return resolveClickableTapTarget(tab)
+        findByViewId(root, "maintab_timeline").forEach { tab ->
+            if (tab.isSelected || tab.isChecked) return null
+            resolveClickableTapTarget(tab)?.let { return it }
+        }
+        val tab = findTimelineTab(root)
+        if (tab != null) {
+            if (!tab.isSelected && !tab.isChecked) {
+                resolveClickableTapTarget(tab)?.let { return it }
+            }
+        }
+        findClickableWithPhrase(root, "tường nhà")?.let { return it }
+        findClickableWithPhrase(root, "timeline")?.let { return it }
+        return null
     }
 
     /** Tab Danh bạ (bottom nav) — null nếu đã ở Danh bạ. */

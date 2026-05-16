@@ -27,6 +27,7 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.zalopilot.app.accessibility.ZaloPilotAccessibilityService
 import com.zalopilot.app.util.AccessibilityHelper
+import com.zalopilot.app.util.BotStartEntry
 import com.zalopilot.app.util.AppVersion
 import com.zalopilot.app.util.LikeMode
 import com.zalopilot.app.util.LikeProgressManager
@@ -273,7 +274,13 @@ class FloatingMenuService : Service() {
                 })
             } else {
                 addView(menuItem("▶  Bắt đầu like", "#27AE60") {
-                    AccessibilityHelper.requestStartAutoLike(this@FloatingMenuService)
+                    val inferred = ZaloPilotAccessibilityService.instance?.inferLikeModeForStart()
+                    val mode = inferred ?: settingsManager.getLikeMode()
+                    AccessibilityHelper.requestStartAutoLike(
+                        this@FloatingMenuService,
+                        mode,
+                        BotStartEntry.FLOATING_ON_ZALO
+                    )
                     closeMenu()
                 })
             }
@@ -385,7 +392,8 @@ class FloatingMenuService : Service() {
             (screenHasText(root, "Photos") || screenHasText(root, "Ảnh")) &&
                 (screenHasText(root, "Videos") || screenHasText(root, "Video")) -> "profile"
             screenHasHint(root, "Message") || screenHasHint(root, "Tin nhắn") -> "chat"
-            screenHasText(root, "Nhật ký") || screenHasText(root, "Timeline") -> "feed"
+            screenHasText(root, "Nhật ký") || screenHasText(root, "Timeline") ||
+                screenHasText(root, "Tường nhà") -> "feed"
             else -> "unknown"
         }
     }
