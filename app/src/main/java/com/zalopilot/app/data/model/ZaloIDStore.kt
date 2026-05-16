@@ -31,6 +31,7 @@ class ZaloIDStore @Inject constructor(
         const val KEY_AUTHOR_NAME = "author_name_id"
         const val KEY_CONTACT_LIST = "contact_list_id"
         const val KEY_CONTACT_ITEM = "contact_item_id"
+        const val KEY_COMMENT_BUTTON = "comment_button_id"
 
         // Text fallback dùng để tìm khi chưa có ID hoặc ID vỡ
         const val TEXT_LIKE = "Thích"
@@ -61,8 +62,10 @@ class ZaloIDStore @Inject constructor(
     fun getAuthorNameID(): String? = getID(KEY_AUTHOR_NAME)
     fun getContactListID(): String? = getID(KEY_CONTACT_LIST)
     fun getContactItemID(): String? = getID(KEY_CONTACT_ITEM)
+    fun getCommentButtonID(): String? = getID(KEY_COMMENT_BUTTON)
 
     fun saveLikeButtonID(id: String) = saveID(KEY_LIKE_BUTTON, id)
+    fun saveCommentButtonID(id: String) = saveID(KEY_COMMENT_BUTTON, id)
 
     fun clearLikeButtonID() {
         prefs.edit().remove(KEY_LIKE_BUTTON).apply()

@@ -12,6 +12,12 @@
     "content_desc_fallback": "Thích",
     "already_selected_text": "Đã thích"
   },
+  "comment_button": {
+    "resource_id": "com.zing.zalo:id/ui_feed_item_footer_comment_btn",
+    "resource_id_fallback": "com.zing.zalo:id/btn_comment",
+    "text_fallback": "Bình luận",
+    "content_desc_fallback": "Bình luận"
+  },
   "scroll_container": {
     "resource_id": "com.zing.zalo:id/feed_recycler_view",
     "class_fallback": "androidx.recyclerview.widget.RecyclerView"

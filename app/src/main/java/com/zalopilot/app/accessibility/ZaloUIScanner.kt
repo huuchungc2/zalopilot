@@ -56,6 +56,7 @@ class ZaloUIScanner @Inject constructor(
 
             var foundAny = false
             foundAny = scanLikeButton(root) || foundAny
+            foundAny = scanCommentButton(root) || foundAny
             foundAny = scanTabTimeline(root) || foundAny
             foundAny = scanAuthorName(root) || foundAny
             foundAny = scanFeedRecycler(root) || foundAny
@@ -153,6 +154,48 @@ class ZaloUIScanner @Inject constructor(
         }
 
         logger.log(LogTag.SCAN, "candidates=${candidates.size}", "LIKE_ID_MISS")
+        return false
+    }
+
+    private fun scanCommentButton(root: AccessibilityNodeInfo): Boolean {
+        val env = scanEnvFromRoot(root)
+        val phrases = listOf("bình luận", "comment")
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 2200) {
+            val n = stack.removeLast()
+            visited++
+            val id = n.viewIdResourceName
+            if (!id.isNullOrBlank() && id.startsWith("com.zing.zalo:id/")) {
+                val low = id.lowercase()
+                if ((low.contains("comment") || low.contains("ui_feed_item_footer_comment")) &&
+                    !low.contains("send") && !low.contains("input") && !low.contains("cmtinput")
+                ) {
+                    if (!shouldRejectScanNode(n, env)) {
+                        val current = idStore.getCommentButtonID()
+                        if (current != id) {
+                            idStore.saveCommentButtonID(id)
+                            logger.log(LogTag.SCAN, "comment_button = $id", "ID_SAVED")
+                        }
+                        return true
+                    }
+                }
+            }
+            val t = "${n.text} ${n.contentDescription}".lowercase()
+            if (phrases.any { t.contains(it) } && n.isClickable && !shouldRejectScanNode(n, env)) {
+                id?.let { saved ->
+                    if (saved.startsWith("com.zing.zalo:id/")) {
+                        idStore.saveCommentButtonID(saved)
+                        logger.log(LogTag.SCAN, "comment_button = $saved", "ID_SAVED")
+                        return true
+                    }
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
         return false
     }
 

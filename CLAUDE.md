@@ -156,7 +156,7 @@ Hai lớp (OR với nhau):
 
 > **Đọc section này trước khi sửa comment feed / `runFeedCommentsAfterLike`.** Cài đặt UI: `visitActionMode` = `LIKE_ONLY` | `COMMENT_ONLY` | `MIX` (+ `feedCommentCount` cho số lần gửi/bài ở MIX).
 >
-> **Trạng thái code:** spec có thể **chưa** khớp — hiện COMMENT_ONLY vẫn quét `findLikeButtons()` rồi neo comment qua nút Thích → dễ lỗi gửi + status `unknown` (không đọc được `getAuthorName`).
+> **Trạng thái code:** COMMENT_ONLY/MIX neo `feedItemFooterBarModule` + `findFeedCommentTapTarget` (nút/vùng Bình luận); MIX `runFeedCommentsAfterLike` dùng `findFeedFooterAt` — không neo Thích làm đích chính.
 
 **Cuộn:** giống feed like — cùng `autoLikeLoop`, `FeedMode` (SCROLL / MANUAL / MIX), `delayFeedSettleAfterScroll` sau cuộn. **Không** logic skip phức tạp cho comment (không skip author session, không skip theo ô bình luận / postKey cho chế độ comment).
 

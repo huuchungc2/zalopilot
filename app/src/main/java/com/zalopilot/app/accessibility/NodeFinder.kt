@@ -36,18 +36,23 @@ class NodeFinder @Inject constructor(
      * Ưu tiên ID đã học, sau đó text hệ thống, rồi duyệt cây (text + contentDescription).
      */
     fun findLikeButtons(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> =
-        findLikeButtonsInternal(root, useLearnedLikeId = true)
+        findLikeButtonsInternal(root, useLearnedLikeId = true, skipAlreadyLiked = true)
+
+    /** Neo comment — gồm bài đã thích (không lọc [isAlreadyLiked]). */
+    fun findLikeAnchorsForFeedComment(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> =
+        findLikeButtonsInternal(root, useLearnedLikeId = true, skipAlreadyLiked = false)
 
     /**
      * Quét nút like chỉ bằng text + traversal — **không** dùng [ZaloIDStore.getLikeButtonID].
      * Layout profile/timeline dùng id khác feed nhật ký; saved id feed gây ID_MISS và bỏ lỡ nút like profile.
      */
     private fun findLikeButtonsWithoutLearnedId(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> =
-        findLikeButtonsInternal(root, useLearnedLikeId = false)
+        findLikeButtonsInternal(root, useLearnedLikeId = false, skipAlreadyLiked = true)
 
     private fun findLikeButtonsInternal(
         root: AccessibilityNodeInfo,
-        useLearnedLikeId: Boolean
+        useLearnedLikeId: Boolean,
+        skipAlreadyLiked: Boolean = true
     ): List<AccessibilityNodeInfo> {
         val seen = LinkedHashSet<String>()
         val result = mutableListOf<AccessibilityNodeInfo>()
@@ -63,7 +68,7 @@ class NodeFinder @Inject constructor(
             if (!leaf.hasValidScreenBounds()) return
             if (LikeViewIdRules.shouldRejectNodeForLike(leaf)) return
             // Important: trạng thái like phải kiểm tra trên leaf (btn_like_text/icon/btn_like...), không dùng container ancestor.
-            if (isAlreadyLiked(leaf)) return
+            if (skipAlreadyLiked && isAlreadyLiked(leaf)) return
 
             val clickTarget = resolveLikeClickTargetFromLeaf(leaf)
             if (!clickTarget.hasValidScreenBounds()) return
@@ -86,8 +91,10 @@ class NodeFinder @Inject constructor(
             if (savedId != null) {
                 val byId = root.findAccessibilityNodeInfosByViewId(savedId)
                 if (byId.isNotEmpty()) {
-                    byId.filter { !LikeViewIdRules.shouldRejectNodeForLike(it) && !isAlreadyLiked(it) }
-                        .forEach { addResolved(it) }
+                    byId.filter {
+                        !LikeViewIdRules.shouldRejectNodeForLike(it) &&
+                            (!skipAlreadyLiked || !isAlreadyLiked(it))
+                    }.forEach { addResolved(it) }
                     if (result.isNotEmpty()) {
                         logFoundSummary(result)
                         return result
@@ -915,6 +922,58 @@ class NodeFinder @Inject constructor(
         return false
     }
 
+    /**
+     * Verify feed like sau tap — tìm anchor theo bounds/id; fallback quét footer trong vùng bài
+     * (feed dịch sau animation, [findLikeAreaNodeAt] có thể miss).
+     */
+    fun hasCommentBoxOnFeedItemNearLikeAt(
+        root: AccessibilityNodeInfo,
+        origRect: Rect,
+        origId: String?
+    ): Boolean {
+        findLikeAreaNodeAt(root, origRect, origId)?.let { anchor ->
+            if (hasCommentBoxOnFeedItemNearLike(anchor)) return true
+        }
+        return hasCommentBoxInRectBand(root, origRect)
+    }
+
+    private fun hasCommentBoxInRectBand(root: AccessibilityNodeInfo, origRect: Rect): Boolean {
+        val band = Rect(
+            (origRect.left - 80).coerceAtLeast(0),
+            (origRect.top - 120).coerceAtLeast(0),
+            origRect.right + 400,
+            origRect.bottom + 320
+        )
+        for (footer in findFeedItemFooters(root)) {
+            if (!footer.isVisibleToUser || !footer.hasValidScreenBounds()) continue
+            val fr = Rect().also { footer.getBoundsInScreen(it) }
+            if (!Rect.intersects(band, fr)) continue
+            if (hasCommentBoxOnFeedItemNearLike(footer)) return true
+        }
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 1200) {
+            val n = stack.removeLast()
+            visited++
+            if (!n.isVisibleToUser || !n.hasValidScreenBounds()) continue
+            val r = Rect().also { n.getBoundsInScreen(it) }
+            if (!Rect.intersects(band, r)) {
+                for (i in 0 until n.childCount) {
+                    n.getChild(i)?.let { stack.addLast(it) }
+                }
+                continue
+            }
+            if (isCommentPlaceholderNode(n) || isLikelyCommentInputNode(n)) return true
+            val id = n.viewIdResourceName.orEmpty().lowercase()
+            if (id.contains("cmtinput_text")) return true
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return false
+    }
+
     fun hasExpandedInlineCommentComposerNearLike(likeNode: AccessibilityNodeInfo): Boolean {
         val host = findFeedFooterHostNearLike(likeNode)
         findByViewId(host, "cmtinput_text").forEach { n ->
@@ -1311,9 +1370,89 @@ class NodeFinder @Inject constructor(
         return result
     }
 
-    /** Feed COMMENT_ONLY: neo theo footer từng bài (không dùng findLikeButtons toàn màn). */
+    data class FeedCommentPostAnchor(
+        val footer: AccessibilityNodeInfo,
+        val like: AccessibilityNodeInfo?
+    )
+
+    /**
+     * Bài trên feed để COMMENT_ONLY — sắp trên → dưới; gồm bài đã thích.
+     */
+    fun findFeedCommentPostAnchors(root: AccessibilityNodeInfo): List<FeedCommentPostAnchor> {
+        val seen = LinkedHashSet<String>()
+        val out = mutableListOf<FeedCommentPostAnchor>()
+        fun boundsKey(n: AccessibilityNodeInfo): String {
+            val r = Rect().also { n.getBoundsInScreen(it) }
+            return "${r.left}_${r.top}_${r.right}_${r.bottom}"
+        }
+        fun add(footer: AccessibilityNodeInfo, like: AccessibilityNodeInfo?) {
+            if (!footer.isVisibleToUser || !footer.hasValidScreenBounds()) return
+            val r = Rect().also { footer.getBoundsInScreen(it) }
+            if (r.width() < 40 || r.height() < 20) return
+            val key = boundsKey(footer)
+            if (seen.add(key)) out.add(FeedCommentPostAnchor(footer, like))
+        }
+        findFeedItemFooters(root).forEach { add(it, null) }
+        for (like in findLikeAnchorsForFeedComment(root)) {
+            add(findFeedFooterHostNearLike(like), like)
+        }
+        val commentIdSuffixes = listOf(
+            "ui_feed_item_footer_comment_btn",
+            "btn_comment",
+            "ui_feed_item_footer_comment"
+        )
+        for (suffix in commentIdSuffixes) {
+            findByViewId(root, suffix).forEach { n ->
+                add(findFeedFooterHostNearLike(n), null)
+            }
+        }
+        if (out.isNotEmpty()) {
+            logger.log(LogTag.SCAN, "count=${out.size}", "FEED_COMMENT_POST_ANCHORS")
+        } else {
+            logger.log(LogTag.SCAN, "feed", "FEED_COMMENT_POST_ANCHORS_EMPTY")
+        }
+        return out.sortedBy { anchor ->
+            Rect().also { anchor.footer.getBoundsInScreen(it) }.top
+        }
+    }
+
+    /** @see findFeedCommentPostAnchors */
     fun findFeedCommentAnchors(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> =
-        findFeedItemFooters(root)
+        findFeedCommentPostAnchors(root).map { it.footer }
+
+    /**
+     * Footer bài feed chứa [origRect] (MIX sau like) — SPEC comment neo footer, không neo Thích.
+     */
+    fun findFeedFooterAt(
+        root: AccessibilityNodeInfo,
+        origRect: Rect,
+        origId: String?
+    ): AccessibilityNodeInfo? {
+        val band = Rect(
+            (origRect.left - 120).coerceAtLeast(0),
+            (origRect.top - 400).coerceAtLeast(0),
+            origRect.right + 120,
+            origRect.bottom + 120
+        )
+        var best: AccessibilityNodeInfo? = null
+        var bestOverlap = 0
+        for (footer in findFeedItemFooters(root)) {
+            val fr = Rect().also { footer.getBoundsInScreen(it) }
+            val overlap = Rect.intersects(band, fr)
+            if (!overlap) continue
+            val intersect = Rect(fr).apply { intersect(band) }
+            val area = intersect.width().coerceAtLeast(0) * intersect.height().coerceAtLeast(0)
+            if (area > bestOverlap) {
+                bestOverlap = area
+                best = footer
+            }
+        }
+        if (best != null) return best
+        findLikeAreaNodeAt(root, origRect, origId)?.let { like ->
+            return findFeedFooterHostNearLike(like)
+        }
+        return null
+    }
 
     /** Chat sau tap contact — thẻ «Bắt đầu chia sẻ…» / vùng có thể tap mở profile. */
     fun findChatIntroProfileTapTarget(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -1362,6 +1501,35 @@ class NodeFinder @Inject constructor(
         return false
     }
 
+    fun isCommentControlNode(node: AccessibilityNodeInfo): Boolean {
+        if (isLikeControlNode(node)) return false
+        val id = node.viewIdResourceName.orEmpty().lowercase()
+        if (id.contains("comment") && !id.contains("like") && !id.contains("send")) return true
+        val t = "${node.text} ${node.contentDescription}".lowercase()
+        return t.contains("bình luận") || t == "comment"
+    }
+
+    /** Chỉ vùng nút Thích trên footer — không bọc cả footer (comment icon nằm cạnh). */
+    fun likeButtonRectInFooter(footer: AccessibilityNodeInfo): Rect? {
+        for (suffix in listOf(
+            "ui_feed_item_footer_like_btn",
+            "btn_like_text",
+            "btn_like_icon",
+            "btn_like"
+        )) {
+            for (n in findByViewId(footer, suffix)) {
+                if (!n.hasValidScreenBounds()) continue
+                val r = Rect().also { n.getBoundsInScreen(it) }
+                if (r.width() >= 24 && r.height() >= 24) return r
+            }
+        }
+        for (like in findLikeButtonsWithoutLearnedId(footer)) {
+            if (!like.hasValidScreenBounds()) continue
+            return Rect().also { like.getBoundsInScreen(it) }
+        }
+        return null
+    }
+
     fun nodeOverlapsRect(node: AccessibilityNodeInfo, zone: Rect, marginPx: Int = 16): Boolean {
         val r = Rect().also { node.getBoundsInScreen(it) }
         if (r.isEmpty) return false
@@ -1395,31 +1563,210 @@ class NodeFinder @Inject constructor(
         return Rect.intersects(expanded, cRect)
     }
 
-    fun findCommentButton(likeNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        val likeRect = Rect().also { likeNode.getBoundsInScreen(it) }
-        val footer = findFeedFooterHostNearLike(likeNode)
-        footer.let { bar ->
-            findClickableWithPhrase(bar, "bình luận")?.let { btn ->
-                if (!isLikeControlNode(btn) && !nodeOverlapsRect(btn, likeRect, 24)) return btn
-            }
-            findClickableWithPhrase(bar, "comment")?.let { btn ->
-                if (!isLikeControlNode(btn) && !nodeOverlapsRect(btn, likeRect, 24)) return btn
+    sealed class FeedCommentTapTarget {
+        data class Node(val node: AccessibilityNodeInfo) : FeedCommentTapTarget()
+        data class Area(val rect: Rect, val reason: String) : FeedCommentTapTarget()
+    }
+
+    private fun isFeedFooterModule(node: AccessibilityNodeInfo): Boolean =
+        node.viewIdResourceName.orEmpty().lowercase().contains("feeditemfooterbarmodule")
+
+    /** Feed COMMENT_ONLY / MIX: nút hoặc vùng tap mở bình luận (kể cả footer text gộp). */
+    fun findFeedCommentTapTarget(anchor: AccessibilityNodeInfo): FeedCommentTapTarget? {
+        val footer = findFeedFooterHostNearLike(anchor)
+        val likeRect = if (!isFeedFooterModule(anchor)) {
+            Rect().also { anchor.getBoundsInScreen(it) }
+        } else {
+            null
+        }
+
+        val learnedId = idStore.getCommentButtonID()
+        if (!learnedId.isNullOrBlank()) {
+            for (n in findByViewId(footer, learnedId)) {
+                resolveCommentTapNode(n)?.let { return FeedCommentTapTarget.Node(it) }
             }
         }
 
-        val parent = likeNode.parent ?: return null
-        for (i in 0 until parent.childCount) {
-            val sib = parent.getChild(i) ?: continue
-            if (sib == likeNode) continue
-            if (!sib.isClickable) continue
-            if (isLikeControlNode(sib) || nodeOverlapsRect(sib, likeRect, 20)) continue
-            val r = Rect().also { sib.getBoundsInScreen(it) }
-            if (r.left < likeRect.right - 8) continue
-            val cls = sib.className?.toString()?.lowercase().orEmpty()
-            if (!cls.contains("image") && !cls.contains("button")) continue
-            val t = sib.text?.toString().orEmpty()
-            if (t.contains("…") || t.contains("...")) continue
-            return sib
+        val idSuffixes = listOf(
+            "ui_feed_item_footer_comment_btn",
+            "ui_feed_item_footer_comment",
+            "btn_comment",
+            "comment_btn",
+            "btnComment",
+            "feed_comment_btn",
+            "img_comment",
+            "btn_comment_text"
+        )
+        for (suffix in idSuffixes) {
+            for (n in findByViewId(footer, suffix)) {
+                resolveCommentTapNode(n)?.let { return FeedCommentTapTarget.Node(it) }
+            }
+        }
+
+        findCommentIconInFooter(footer)?.let { return FeedCommentTapTarget.Node(it) }
+
+        footer.let { bar ->
+            findClickableWithPhrase(bar, "bình luận")?.let { btn ->
+                if (isValidCommentTapNode(btn, likeRect)) return FeedCommentTapTarget.Node(btn)
+            }
+            findClickableWithPhrase(bar, "comment")?.let { btn ->
+                if (isValidCommentTapNode(btn, likeRect)) return FeedCommentTapTarget.Node(btn)
+            }
+        }
+
+        if (!isFeedFooterModule(anchor) && likeRect != null) {
+            val parent = anchor.parent
+            if (parent != null) {
+                for (i in 0 until parent.childCount) {
+                    val sib = parent.getChild(i) ?: continue
+                    if (sib == anchor) continue
+                    val clickable = if (sib.isClickable) sib else findClickableAncestor(sib) ?: continue
+                    if (isLikeControlNode(clickable)) continue
+                    val r = Rect().also { clickable.getBoundsInScreen(it) }
+                    // Icon Bình luận thường bên TRÁI Thích — bỏ sibling nằm chủ yếu bên phải Like
+                    if (r.left >= likeRect.left - 12) continue
+                    if (isCommentControlNode(clickable) ||
+                        r.right <= likeRect.left + 40
+                    ) {
+                        return FeedCommentTapTarget.Node(clickable)
+                    }
+                }
+            }
+        }
+
+        commentTapRectForAggregatedFooter(footer)?.let { rect ->
+            return FeedCommentTapTarget.Area(rect, "aggregated_footer")
+        }
+        return null
+    }
+
+    fun findCommentButton(likeNode: AccessibilityNodeInfo): AccessibilityNodeInfo? =
+        (findFeedCommentTapTarget(likeNode) as? FeedCommentTapTarget.Node)?.node
+
+    private fun resolveCommentTapNode(n: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (!n.isVisibleToUser || !n.hasValidScreenBounds()) return null
+        if (isLikeControlNode(n)) return null
+        if (n.isClickable) return n
+        return findClickableAncestor(n)?.takeIf { !isLikeControlNode(it) }
+    }
+
+    private fun isValidCommentTapNode(btn: AccessibilityNodeInfo, likeRect: Rect?): Boolean {
+        if (isLikeControlNode(btn)) return false
+        if (likeRect == null) return true
+        if (isFeedFooterModule(btn)) return false
+        return !nodeOverlapsRect(btn, likeRect, 24)
+    }
+
+    /** Icon / nút bình luận trong footer (thường nửa trái, cạnh Thích). */
+    private fun findCommentIconInFooter(footer: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (!footer.hasValidScreenBounds()) return null
+        val footerRect = Rect().also { footer.getBoundsInScreen(it) }
+        val midX = footerRect.centerX()
+        var best: AccessibilityNodeInfo? = null
+        var bestDist = Int.MAX_VALUE
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(footer)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 100) {
+            val n = stack.removeLast()
+            visited++
+            if (!n.isVisibleToUser || !n.hasValidScreenBounds()) {
+                for (i in 0 until n.childCount) {
+                    n.getChild(i)?.let { stack.addLast(it) }
+                }
+                continue
+            }
+            val clickable = if (n.isClickable) n else findClickableAncestor(n)
+            if (clickable != null && !isLikeControlNode(clickable)) {
+                val cr = Rect().also { clickable.getBoundsInScreen(it) }
+                val idLow = n.viewIdResourceName.orEmpty().lowercase()
+                val cls = n.className?.toString()?.lowercase().orEmpty()
+                val t = "${n.text} ${n.contentDescription}".lowercase()
+                val looksComment = idLow.contains("comment") ||
+                    t.contains("bình luận") ||
+                    t.contains("comment") ||
+                    cls.contains("image") ||
+                    cls.contains("button") ||
+                    cls.contains("view")
+                if (looksComment && cr.centerX() <= midX + 80) {
+                    val dist = kotlin.math.abs(cr.centerX() - footerRect.left)
+                    if (dist < bestDist) {
+                        bestDist = dist
+                        best = clickable
+                    }
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { stack.addLast(it) }
+            }
+        }
+        return best
+    }
+
+    /**
+     * Feed: icon Bình luận **bên trái** nút Thích — tọa độ cố định từ bounds Thích (luôn dùng gesture).
+     */
+    fun feedCommentIconTapRect(
+        like: AccessibilityNodeInfo?,
+        footer: AccessibilityNodeInfo?
+    ): Rect? {
+        val likeRect = when {
+            like != null && like.hasValidScreenBounds() ->
+                Rect().also { like.getBoundsInScreen(it) }
+            footer != null -> likeButtonRectInFooter(footer)
+            else -> null
+        }
+        if (likeRect != null && likeRect.width() > 0 && likeRect.height() > 0) {
+            val tapX = (likeRect.left - 52).coerceAtLeast(24)
+            val tapY = likeRect.centerY()
+            return Rect(tapX - 32, tapY - 32, tapX + 32, tapY + 32)
+        }
+        return footer?.let { commentTapRectForAggregatedFooter(it) }
+    }
+
+    /** Vùng tap icon/text Bình luận trên footer (tránh vùng Thích bên phải). */
+    fun commentTapRectForAggregatedFooter(footer: AccessibilityNodeInfo): Rect? {
+        if (!footer.hasValidScreenBounds()) return null
+        val r = Rect().also { footer.getBoundsInScreen(it) }
+        if (r.height() < 28) return null
+        var commentRight = r.left + (r.width() * 0.44f).toInt()
+        for (suffix in listOf(
+            "ui_feed_item_footer_like_btn",
+            "btn_like_text",
+            "btn_like_icon",
+            "btn_like"
+        )) {
+            findByViewId(footer, suffix).forEach { like ->
+                if (!like.hasValidScreenBounds()) return@forEach
+                val lr = Rect().also { like.getBoundsInScreen(it) }
+                commentRight = minOf(commentRight, lr.left - 10)
+            }
+        }
+        if (commentRight <= r.left + 48) {
+            commentRight = r.left + (r.width() * 0.44f).toInt()
+        }
+        val top = r.top + (r.height() * 0.12f).toInt()
+        val bottom = r.bottom - (r.height() * 0.08f).toInt().coerceAtLeast(top + 24)
+        return Rect(r.left + 12, top, commentRight, bottom)
+    }
+
+    /** Luôn có vùng tap khi đã neo được footer (tránh chỉ cuộn vì findFeedCommentTapTarget null). */
+    fun resolveFeedCommentTapTarget(footer: AccessibilityNodeInfo): FeedCommentTapTarget? {
+        findFeedCommentTapTarget(footer)?.let { return it }
+        commentTapRectForAggregatedFooter(footer)?.let { rect ->
+            return FeedCommentTapTarget.Area(rect, "footer_comment_rect")
+        }
+        val r = Rect().also { footer.getBoundsInScreen(it) }
+        if (r.width() > 72 && r.height() > 24) {
+            return FeedCommentTapTarget.Area(
+                Rect(
+                    r.left + 14,
+                    r.centerY() - 36,
+                    r.left + r.width() / 2,
+                    r.centerY() + 36
+                ),
+                "footer_left_half"
+            )
         }
         return null
     }
