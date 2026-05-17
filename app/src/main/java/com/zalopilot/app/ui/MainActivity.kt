@@ -22,18 +22,15 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AccountTree
-import androidx.compose.material.icons.outlined.Article
-import androidx.compose.material.icons.outlined.Code
-import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.Email
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.List
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -167,7 +164,7 @@ class MainActivity : ComponentActivity() {
             when (step) {
                 1 -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     StepCard(
-                        Icons.Outlined.Info,
+                        Icons.Filled.Info,
                         "Bật Trợ năng",
                         "Mở màn cài đặt → bật ZaloPilot.",
                         "Mở Trợ năng",
@@ -177,7 +174,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 2 -> StepCard(
-                    Icons.Outlined.Visibility,
+                    Icons.Filled.Phone,
                     "Hiển thị trên app khác",
                     "Cho phép nút ZP nổi trên Zalo.",
                     "Mở cài đặt",
@@ -187,7 +184,7 @@ class MainActivity : ComponentActivity() {
                 }
                 3 -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
-                        Icons.Outlined.Check,
+                        Icons.Filled.Check,
                         contentDescription = null,
                         modifier = Modifier.size(56.dp),
                         tint = ZpColors.ColorGreen
@@ -317,12 +314,12 @@ class MainActivity : ComponentActivity() {
             bottomBar = {
             NavigationBar(containerColor = ZpColors.BgCard) {
                 val tabIcons = listOf(
-                    Icons.Outlined.Home,
-                    Icons.Outlined.Settings,
-                    Icons.Outlined.Email,
-                    Icons.Outlined.Description,
-                    Icons.Outlined.Edit,
-                    Icons.Outlined.List
+                    Icons.Filled.Home,
+                    Icons.Filled.Settings,
+                    Icons.Filled.Email,
+                    Icons.Filled.List,
+                    Icons.Filled.Edit,
+                    Icons.Filled.Menu
                 )
                 listOf("Trang chủ", "Cài đặt", "Bình luận", "Nhật ký", "Script", "UI").forEachIndexed { i, label ->
                     NavigationBarItem(
