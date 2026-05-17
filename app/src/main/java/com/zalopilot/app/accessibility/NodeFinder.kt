@@ -1198,7 +1198,32 @@ class NodeFinder @Inject constructor(
         val hasFriendsSubTab = screenContainsTextOrDesc(root, "Bạn bè", 1200) ||
             screenContainsTextOrDesc(root, "Friends", 1200)
         if (onDanhBa && hasFriendsSubTab && hasOnScreenVisitFriendRows(root)) return true
-        return hasViewId(root, "tv_friends") && hasFriendsSubTab && hasOnScreenVisitFriendRows(root)
+        if (hasViewId(root, "tv_friends") && hasFriendsSubTab && hasOnScreenVisitFriendRows(root)) {
+            return true
+        }
+        // Có hàng bạn trên Danh bạ (recyclerView) dù sub-tab chưa báo selected — hay gặp sau tap Bạn bè.
+        if (onDanhBa && hasOnScreenVisitFriendRows(root) && !isContactsMessagePreviewListVisible(root)) {
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Đủ để bot Visit bắt đầu điều hướng (tab Danh bạ / có thể chuyển sang Bạn bè) — không cần đã thấy hàng bạn.
+     */
+    fun isContactsVisitNavReady(root: AccessibilityNodeInfo): Boolean {
+        if (hasChatScreenMarkers(root) || hasProfileScreenMarkers(root)) return false
+        if (hasViewId(root, "main_chat_view")) return false
+        val onDanhBa = findByViewId(root, "maintab_contact").isNotEmpty() ||
+            screenContainsTextOrDesc(root, "Danh bạ", 1200) ||
+            screenContainsTextOrDesc(root, "Contacts", 1200)
+        if (!onDanhBa) return false
+        if (isContactListScreen(root)) return true
+        if (isContactsMessagePreviewListVisible(root)) return findContactsDirectoryPagerSwitch(root) != null
+        if (findFriendsSubTabTapTarget(root) != null) return true
+        if (hasViewId(root, "tv_friends")) return true
+        return screenContainsTextOrDesc(root, "Bạn bè", 800) ||
+            screenContainsTextOrDesc(root, "Friends", 800)
     }
 
     /**

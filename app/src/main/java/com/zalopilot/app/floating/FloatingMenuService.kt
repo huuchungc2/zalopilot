@@ -194,7 +194,7 @@ class FloatingMenuService : Service() {
         isMenuOpen = true
         val progress = progressManager.load()
         val settings = settingsManager.load()
-        val botRunning = ZaloPilotAccessibilityService.instance?.isRunning == true
+        val botRunning = ZaloPilotAccessibilityService.instance?.isBotActiveForUi() == true
         val autoMode = settingsManager.isAutoStart()
 
         val fp = fabParams ?: return
@@ -366,7 +366,7 @@ class FloatingMenuService : Service() {
     }
 
     private fun updateFabState() {
-        val botRunning = ZaloPilotAccessibilityService.instance?.isRunning == true
+        val botRunning = ZaloPilotAccessibilityService.instance?.isBotActiveForUi() == true
         fabView?.setBackgroundColor(
             if (botRunning) Color.parseColor(FloatingMenuUiColors.COLOR_GREEN)
             else Color.parseColor(FloatingMenuUiColors.ACCENT_BLUE)

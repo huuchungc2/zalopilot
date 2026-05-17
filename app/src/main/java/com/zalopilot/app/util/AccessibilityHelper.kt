@@ -79,6 +79,14 @@ object AccessibilityHelper {
     ): Boolean {
         LikeSettingsManager(context.applicationContext).setBotRunSuppressed(false)
         ZaloPilotAccessibilityService.instance?.let {
+            if (!it.isActive) {
+                Toast.makeText(
+                    context,
+                    "⚠️ Trợ năng ZaloPilot chưa sẵn sàng — tắt/bật lại trong Cài đặt",
+                    Toast.LENGTH_LONG
+                ).show()
+                return false
+            }
             it.startAutoLike(mode, userInitiated = true, startEntry = entry)
             return true
         }

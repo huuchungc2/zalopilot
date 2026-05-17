@@ -163,7 +163,8 @@ class ZPScriptRunner @Inject constructor(
 
             index++
         }
-        return true
+        // Không coi thoát vòng lặp (isRunning=false / lỗi) là «xong phiên».
+        return false
     }
 
     fun loadScriptJson(json: JSONObject): ZPScript = ZPScriptParser.parse(json)
@@ -494,11 +495,13 @@ class ZPScriptRunner @Inject constructor(
         }
         var filtered = filterUnhandledContactTargets(targets)
         if (filtered.isEmpty() && targets.isNotEmpty()) {
+            service.showToast("ℹ️ Bạn trên màn đã visit — đang cuộn tìm bạn mới…")
             val bottomKey = bottomContactKeyFromTargets(targets)
             if (bottomKey != null && bottomKey == alphaScrollBottomKey) {
                 logger.log(LogTag.SCAN, "bottom=$bottomKey", "VISIT_ALPHA_END_ALL_HANDLED")
                 engine.lastContactTargets = emptyList()
                 contactBatchActive = false
+                service.showToast("ℹ️ Hết danh sách chưa xử lý — Visit dừng")
                 return false
             }
             alphaScrollBottomKey = bottomKey
@@ -520,6 +523,13 @@ class ZPScriptRunner @Inject constructor(
             logger.log(LogTag.SCAN, "contacts=${filtered.size}", "VISIT_CONTACTS_FOUND")
         } else {
             logger.log(LogTag.SCAN, "contacts", "VISIT_CONTACTS_EMPTY")
+            if (visitHandledContacts.count() > 0) {
+                service.showToast(
+                    "⚠️ Không thấy bạn mới — thử cuộn hoặc xóa «đã visit» (tab BL/Tin)"
+                )
+            } else {
+                service.showToast("⚠️ Không thấy hàng bạn — chọn Danh bạ → Bạn bè (A-Z)")
+            }
         }
         return filtered.isNotEmpty()
     }
@@ -662,8 +672,18 @@ class ZPScriptRunner @Inject constructor(
                     logger.log(LogTag.STATE, "attempt=$attempt", "OPEN_CONTACTS_LIST_OK")
                     return true
                 }
+                ensureVisitFriendsListVisible(engine)
             } finally {
                 runCatching { check0.recycle() }
+            }
+            val afterPager = engine.acquireRoot() ?: return false
+            try {
+                if (nodeFinder.isContactListScreen(afterPager)) {
+                    logger.log(LogTag.STATE, "attempt=$attempt", "OPEN_CONTACTS_AFTER_PAGER")
+                    return true
+                }
+            } finally {
+                runCatching { afterPager.recycle() }
             }
 
             val rMain = engine.acquireRoot() ?: return false

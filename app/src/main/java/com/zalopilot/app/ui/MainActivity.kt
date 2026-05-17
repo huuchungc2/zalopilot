@@ -94,9 +94,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         permissionGateTick.intValue++
-        if (ZaloPilotAccessibilityService.instance?.isRunning == true) {
-            AccessibilityHelper.requestStopAutoLike(this)
-        }
         if (!AccessibilityHelper.isAccessibilityEnabled(this)) {
             Toast.makeText(
                 this,
@@ -256,7 +253,10 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun ZaloPilotApp() {
         var selectedTab by remember { mutableIntStateOf(0) }
-        var isRunning by remember { mutableStateOf(false) }
+        var isRunning by remember {
+            mutableStateOf(ZaloPilotAccessibilityService.instance?.isBotActiveForUi() == true)
+        }
+        var lastStatusToastRunning by remember { mutableStateOf<Boolean?>(null) }
         var progress by remember { mutableStateOf(progressManager.load()) }
         var settings by remember { mutableStateOf(settingsManager.load()) }
         var logsSlim by remember { mutableStateOf(logger.readSlimLogs()) }
@@ -270,6 +270,10 @@ class MainActivity : ComponentActivity() {
                 kotlinx.coroutines.delay(800)
                 overlayTick++
             }
+        }
+        LaunchedEffect(overlayTick) {
+            val active = ZaloPilotAccessibilityService.instance?.isBotActiveForUi() == true
+            if (isRunning != active) isRunning = active
         }
         val floatingOverlayOn = remember(overlayTick) { FloatingMenuService.isOverlayRunning }
         val accessibilityOn = remember(overlayTick) { AccessibilityHelper.isAccessibilityEnabled(this@MainActivity) }
@@ -296,11 +300,20 @@ class MainActivity : ComponentActivity() {
                                     settings = settingsManager.load()
                                 }
                             }
-                            Toast.makeText(
-                                this@MainActivity,
-                                if (running) "▶ ZaloPilot đang chạy" else "■ ZaloPilot đã dừng",
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            if (lastStatusToastRunning != running) {
+                                lastStatusToastRunning = running
+                                val modeLabel = modeExtra?.let { m ->
+                                    runCatching { LikeMode.valueOf(m) }.getOrNull()?.let { mode ->
+                                        if (mode == LikeMode.VISIT) "danh bạ" else "nhật ký"
+                                    }
+                                }
+                                val msg = when {
+                                    running && modeLabel != null -> "▶ Đang chạy $modeLabel"
+                                    running -> "▶ ZaloPilot đang chạy"
+                                    else -> "■ ZaloPilot đã dừng"
+                                }
+                                Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+                            }
                         }
                         "com.zalopilot.DAILY_LIMIT" ->
                             Toast.makeText(this@MainActivity,
@@ -383,6 +396,22 @@ class MainActivity : ComponentActivity() {
                         accessibilityOn,
                         accessibilityConnected,
                         overlayTick = overlayTick,
+                        onStartBot = { mode ->
+                            settingsManager.setLikeMode(mode)
+                            settings = settingsManager.load()
+                            isRunning = true
+                            val label = if (mode == LikeMode.VISIT) "danh bạ" else "nhật ký"
+                            Toast.makeText(
+                                this@MainActivity,
+                                "▶ Đang bật $label…",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            launchZaloThenStart(mode)
+                        },
+                        onStopBot = {
+                            AccessibilityHelper.requestStopAutoLike(this@MainActivity)
+                            isRunning = false
+                        },
                         onOpenSettings = { selectedTab = 1 },
                         onOpenComments = { selectedTab = 2 }
                     )
@@ -439,13 +468,21 @@ class MainActivity : ComponentActivity() {
         accessibilityOn: Boolean,
         accessibilityConnected: Boolean,
         overlayTick: Int,
+        onStartBot: (LikeMode) -> Unit,
+        onStopBot: () -> Unit,
         onOpenSettings: () -> Unit,
         onOpenComments: () -> Unit
     ) {
         var autoStart by remember { mutableStateOf(settingsManager.isAutoStart()) }
         var ecoMode by remember(settings) { mutableStateOf(settings.ecoMode) }
-        val runningVisit = remember(isRunning, overlayTick) {
-            isRunning && ZaloPilotAccessibilityService.instance?.getSessionLikeMode() == LikeMode.VISIT
+        val runningVisit = remember(isRunning, settings.likeModeStr, overlayTick) {
+            if (!isRunning) return@remember false
+            val session = ZaloPilotAccessibilityService.instance?.getSessionLikeMode()
+            when (session) {
+                LikeMode.VISIT -> true
+                LikeMode.FEED -> false
+                null -> settings.likeModeStr.equals("VISIT", ignoreCase = true)
+            }
         }
         val pct = if (settings.dailyLimit <= 0) 0f
         else (progress.todayLikeCount.toFloat() / settings.dailyLimit).coerceIn(0f, 1f)
@@ -521,7 +558,7 @@ class MainActivity : ComponentActivity() {
                             textAlign = TextAlign.Center
                         )
                         Text(
-                            "Mở lại app ZaloPilot → bot tự dừng",
+                            "Chuyển sang Zalo để bot chạy. Dừng: bấm ■ Dừng lại",
                             fontSize = 12.sp,
                             color = ZpColors.TextSecondary,
                             modifier = Modifier
@@ -538,13 +575,7 @@ class MainActivity : ComponentActivity() {
                                 .height(56.dp)
                                 .clip(RoundedCornerShape(14.dp))
                                 .background(ZpColors.AccentBlue)
-                                .clickable {
-                                    settingsManager.setLikeMode(LikeMode.FEED)
-                                    AccessibilityHelper.requestStartAutoLike(
-                                        this@MainActivity,
-                                        LikeMode.FEED
-                                    )
-                                },
+                                .clickable { onStartBot(LikeMode.FEED) },
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
@@ -561,13 +592,7 @@ class MainActivity : ComponentActivity() {
                                 .height(56.dp)
                                 .clip(RoundedCornerShape(14.dp))
                                 .background(ZpColors.AccentPurple)
-                                .clickable {
-                                    settingsManager.setLikeMode(LikeMode.VISIT)
-                                    AccessibilityHelper.requestStartAutoLike(
-                                        this@MainActivity,
-                                        LikeMode.VISIT
-                                    )
-                                },
+                                .clickable { onStartBot(LikeMode.VISIT) },
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
@@ -617,9 +642,7 @@ class MainActivity : ComponentActivity() {
                 item {
                     Box(
                         Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(14.dp))
-                            .background(ZpColors.ColorRed).clickable {
-                                AccessibilityHelper.requestStopAutoLike(this@MainActivity)
-                            },
+                            .background(ZpColors.ColorRed).clickable { onStopBot() },
                         contentAlignment = Alignment.Center
                     ) {
                         Text("■  Dừng lại", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.W600)
@@ -1812,6 +1835,38 @@ class MainActivity : ComponentActivity() {
         logger.log(LogTag.SCAN, "manual debugDump", "START")
         nodeFinder.debugDump(root, maxNodes = 800)
         Toast.makeText(this, "🔍 Đã dump UI vào log — bấm Lưu log để lấy file", Toast.LENGTH_LONG).show()
+    }
+
+    /** Mở Zalo trước rồi start bot — tránh kẹt trên màn ZaloPilot khi chạy Visit/Nhật ký. */
+    private fun launchZaloThenStart(mode: LikeMode) {
+        if (!AccessibilityHelper.isAccessibilityEnabled(this)) {
+            Toast.makeText(
+                this,
+                "⚠️ Bật Trợ năng ZaloPilot trước",
+                Toast.LENGTH_LONG
+            ).show()
+            AccessibilityHelper.openAccessibilitySettings(this)
+            return
+        }
+        val zalo = packageManager.getLaunchIntentForPackage("com.zing.zalo")
+        if (zalo == null) {
+            Toast.makeText(this, "Chưa cài Zalo", Toast.LENGTH_SHORT).show()
+            return
+        }
+        zalo.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        startActivity(zalo)
+        moveTaskToBack(true)
+        val delayMs = if (mode == LikeMode.VISIT) 1_400L else 450L
+        window.decorView.postDelayed({
+            val started = AccessibilityHelper.requestStartAutoLike(this, mode)
+            if (!started) {
+                Toast.makeText(
+                    this,
+                    "⚠️ Chưa kết nối Trợ năng — tắt/bật lại ZaloPilot trong Cài đặt",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }, delayMs)
     }
 
     private fun startFloatingOverlay() {

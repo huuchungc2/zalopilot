@@ -71,6 +71,9 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     @Volatile
     private var startAutoLikeInProgress = false
 
+    /** UI app + menu ZP: bot đang chạy hoặc đang khởi động (prepare). */
+    fun isBotActiveForUi(): Boolean = isRunning || startAutoLikeInProgress
+
     @Inject lateinit var nodeFinder: NodeFinder
     @Inject lateinit var idStore: ZaloIDStore
     @Inject lateinit var uiScanner: ZaloUIScanner
@@ -1506,22 +1509,52 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         sessionLikeMode = null
         clearFeedItemSaved()
         logSettingsReload("START")
+        val modeHint = when (preferredMode) {
+            LikeMode.VISIT -> "Visit danh bạ"
+            LikeMode.FEED -> "Nhật ký"
+            null -> "bot"
+        }
         startAutoLikeInProgress = true
+        showStatusOverlay("▶ Đang khởi động $modeHint…")
+        showToast("▶ Đang khởi động $modeHint…")
         scope.launch {
             try {
                 val sessionMode = resolveStartLikeMode(preferredMode, startEntry)
+                sessionLikeMode = sessionMode
+                isRunning = true
+                broadcastBotRunningState(running = true, mode = sessionMode)
                 val visitMode = sessionMode == LikeMode.VISIT
                 val modeLabel = if (visitMode) "Visit danh bạ" else "Nhật ký"
                 if (startEntry == BotStartEntry.HOME_LIKE_BUTTON) {
                     showToast("↩ Đang mở Zalo — $modeLabel…")
                 }
-                if (!prepareZaloForCurrentMode(sessionMode, startEntry)) {
-                    logger.log(LogTag.STATE, "mode=$modeLabel", "PREPARE_ZALO_TAB_FAIL")
-                    showToast(
-                        if (visitMode) "⚠️ Không vào được Danh bạ — mở Zalo → Danh bạ → Bạn bè"
-                        else "⚠️ Không vào được Nhật ký — mở Zalo → tab Nhật ký"
-                    )
-                    return@launch
+                val prepared = prepareZaloForCurrentMode(sessionMode, startEntry)
+                if (!prepared) {
+                    if (visitMode) {
+                        val navOk = acquireRootOrNull(4, 120L..280L, LogTag.STATE, quietLog = true)
+                            ?.let { r ->
+                                try {
+                                    nodeFinder.isContactsVisitNavReady(r) ||
+                                        nodeFinder.hasZaloBottomNavigationPresent(r)
+                                } finally {
+                                    runCatching { r.recycle() }
+                                }
+                            } == true
+                        if (!navOk) {
+                            logger.log(LogTag.STATE, "mode=$modeLabel", "PREPARE_ZALO_TAB_FAIL")
+                            showToast("⚠️ Không vào được Danh bạ — mở Zalo → Danh bạ → Bạn bè")
+                            stopAutoLike("prepare_danh_ba")
+                            return@launch
+                        }
+                        logger.log(LogTag.STATE, "mode=$modeLabel", "PREPARE_ZALO_TAB_LENIENT")
+                        showToast("▶ Visit — đang mở danh sách bạn bè…")
+                        waitForContactsFriendsListReady(10_000L)
+                    } else {
+                        logger.log(LogTag.STATE, "mode=$modeLabel", "PREPARE_ZALO_TAB_FAIL")
+                        showToast("⚠️ Không vào được Nhật ký — mở Zalo → tab Nhật ký")
+                        stopAutoLike("prepare_nhat_ky")
+                        return@launch
+                    }
                 }
                 updateStatus("↩ Mở Zalo — $modeLabel…")
 
@@ -1535,6 +1568,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 if (root == null) {
                     logger.log(LogTag.STATE, "pkg=$pkg", "BLOCKED_NO_ROOT")
                     showToast("⚠️ Không đọc được màn hình — thử lại sau vài giây")
+                    stopAutoLike("no_root")
                     return@launch
                 }
 
@@ -1542,6 +1576,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 if (!inTargetApp) {
                     logger.log(LogTag.STATE, "pkg=$pkg visit=$visitMode", "BLOCKED_NOT_IN_ZALO")
                     showToast("⚠️ Không thấy Zalo — thử lại")
+                    stopAutoLike("not_in_zalo")
                     return@launch
                 }
 
@@ -1555,8 +1590,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 logger.log(LogTag.STATE, "pkg=$pkg", "START_CLICKED")
                 uiScanner.forceScan(root)
 
-                sessionLikeMode = sessionMode
-                isRunning = true
                 sessionLikeCount = 0
                 consecutiveNullCount = 0
                 consecutivePollRootNull = 0
@@ -1576,11 +1609,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ZaloPilot:AutoLike")
                 wakeLock?.acquire(10 * 60 * 60 * 1000L)
 
-                sendInternalBroadcast(
-                    Intent("com.zalopilot.STATUS_UPDATE")
-                        .putExtra("running", true)
-                        .putExtra(EXTRA_RUNNING_LIKE_MODE, sessionMode.name)
-                )
+                broadcastBotRunningState(running = true, mode = sessionMode)
                 logger.log(LogTag.STATE, "mode=$modeLabel pkg=$pkg", "STARTED")
                 showToast("▶ Bắt đầu $modeLabel")
                 showStatusOverlay("▶ Đang khởi động...")
@@ -1598,10 +1627,20 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                         stopAutoLike("exception")
                     }
                 }
+            } catch (e: Exception) {
+                logger.logError("startAutoLike", e)
+                showToast("⚠️ Không khởi động được — xem Log")
+                stopAutoLike("start_exception")
             } finally {
                 startAutoLikeInProgress = false
             }
         }
+    }
+
+    private fun broadcastBotRunningState(running: Boolean, mode: LikeMode?) {
+        val intent = Intent("com.zalopilot.STATUS_UPDATE").putExtra("running", running)
+        mode?.let { intent.putExtra(EXTRA_RUNNING_LIKE_MODE, it.name) }
+        sendInternalBroadcast(intent)
     }
 
     /** Chạy 1 vòng script Visit (không lặp goto) — từ tab Script. */
@@ -1641,34 +1680,60 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
 
     private suspend fun visitScriptLoopInner(testOneRound: Boolean = false) {
         logSettingsReload("VISIT")
-        if (!ensureZaloForegroundForBot(12_000L)) {
-            updateStatus("⚠️ Không mở được Zalo")
-            showToast("⚠️ Mở Zalo thủ công → Danh bạ → Bạn bè")
-            stopAutoLike("không mở Zalo")
-            return
-        }
         val json = scriptStore.loadActiveScript()
         if (json == null) {
             updateStatus("⚠️ Chưa có script Visit")
-            showToast("⚠️ Chưa có script — tab Script hoặc assets")
+            showToast("⚠️ Chưa có script — tab Hệ thống → Script")
             logger.log(LogTag.ERROR, "visit", "SCRIPT_MISSING")
             stopAutoLike()
             return
         }
         val script = scriptRunner.loadScriptJson(json)
-        updateStatus("👤 Visit: ${script.id} v${script.version}")
-        logger.log(LogTag.STATE, "id=${script.id} test=$testOneRound", "VISIT_SCRIPT_START")
-        runCatching {
-            scriptRunner.run(this, script, testOneRound = testOneRound)
-        }.onFailure { e ->
-            logger.logError("visitScriptLoop", e)
-            updateStatus("⚠️ Visit lỗi")
-            showToast("⚠️ Visit lỗi — xem tab Log")
-        }
-        logger.log(LogTag.STATE, script.id, "VISIT_SCRIPT_END")
-        if (isRunning) {
-            updateStatus("✅ Visit script xong — dừng")
-            stopAutoLike()
+        var zaloMiss = 0
+        var scriptMiss = 0
+        while (isRunning) {
+            if (!ensureZaloForegroundForBot(18_000L, requireRunningBot = false)) {
+                zaloMiss++
+                updateStatus("⚠️ Chưa thấy Zalo — đang thử lại…")
+                if (zaloMiss == 1 || zaloMiss % 4 == 0) {
+                    showToast("⚠️ Mở Zalo → Danh bạ → Bạn bè (bot đang chờ)")
+                }
+                delay(2_500L)
+                continue
+            }
+            zaloMiss = 0
+            if (!navigateZaloToTargetTab(visit = true)) {
+                tapContactsNavOnce()
+                delay(600)
+            }
+            waitForContactsFriendsListReady(4_000L)
+            updateStatus("👤 Visit: ${script.id} v${script.version}")
+            logger.log(LogTag.STATE, "id=${script.id}", "VISIT_SCRIPT_START")
+            val ok = runCatching {
+                scriptRunner.run(this, script, testOneRound = testOneRound)
+            }.onFailure { e ->
+                logger.logError("visitScriptLoop", e)
+            }.getOrDefault(false)
+            if (ok) {
+                logger.log(LogTag.STATE, script.id, "VISIT_SCRIPT_DONE")
+                updateStatus("✅ Visit xong phiên")
+                showToast("✅ Visit đủ profile / xong phiên")
+                stopAutoLike()
+                return
+            }
+            if (testOneRound) {
+                updateStatus("⚠️ Visit test: bước script lỗi")
+                showToast("⚠️ Visit test dừng — xem Log (findContactItems / tap)")
+                stopAutoLike("visit_test_fail")
+                return
+            }
+            scriptMiss++
+            if (scriptMiss == 1 || scriptMiss % 5 == 0) {
+                showToast("⚠️ Visit: chưa quét được bạn — thử lại ($scriptMiss)…")
+            }
+            logger.log(LogTag.SCAN, "streak=$scriptMiss", "VISIT_SCRIPT_RETRY")
+            tapContactsNavOnce()
+            delay(2_500L)
         }
     }
 
@@ -1777,7 +1842,55 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             quietLog = true
         ) ?: return false
         return try {
-            if (visit) nodeFinder.isContactListScreen(root) else nodeFinder.isLikelyTimelineFeedScreen(root)
+            if (visit) {
+                nodeFinder.isContactListScreen(root) || nodeFinder.isContactsVisitNavReady(root)
+            } else {
+                nodeFinder.isLikelyTimelineFeedScreen(root)
+            }
+        } finally {
+            runCatching { root.recycle() }
+        }
+    }
+
+    /** Chờ list Bạn bè load sau tap tab (Visit hay fail nếu chỉ check một lần). */
+    private suspend fun waitForContactsFriendsListReady(timeoutMs: Long = 8_000L): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline && isActive) {
+            val root = acquireRootOrNull(3, 80L..220L, LogTag.STATE, quietLog = true)
+            if (root != null) {
+                try {
+                    if (nodeFinder.isContactListScreen(root) ||
+                        nodeFinder.hasOnScreenVisitFriendRows(root)
+                    ) {
+                        return true
+                    }
+                } finally {
+                    runCatching { root.recycle() }
+                }
+            }
+            tapContactsNavOnce()
+            delay(500)
+        }
+        return isPrepareTargetScreenReady(visit = true)
+    }
+
+    /** Một lần tap Danh bạ / Bạn bè / pager — không gọi [waitForContactsFriendsListReady]. */
+    private suspend fun tapContactsNavOnce() {
+        val root = acquireRootOrNull(4, 120L..280L, LogTag.STATE, quietLog = true) ?: return
+        try {
+            if (nodeFinder.isContactsMessagePreviewListVisible(root)) {
+                nodeFinder.findContactsDirectoryPagerSwitch(root)?.let { prepareZaloTabClick(it) }
+                delay(650)
+                return
+            }
+            nodeFinder.findContactMainTabTapTarget(root)?.let { prepareZaloTabClick(it) }
+            delay(500)
+            val sub = acquireRootOrNull(3, 80L..200L, LogTag.STATE, quietLog = true)
+            try {
+                sub?.let { nodeFinder.findFriendsSubTabTapTarget(it)?.let { prepareZaloTabClick(it) } }
+            } finally {
+                runCatching { sub?.recycle() }
+            }
         } finally {
             runCatching { root.recycle() }
         }
@@ -1836,7 +1949,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 }
             }
         }
-        return navigateZaloToTargetTab(visit)
+        val nav = navigateZaloToTargetTab(visit)
+        if (visit && nav) {
+            waitForContactsFriendsListReady(6_000L)
+        }
+        return nav || (visit && isPrepareTargetScreenReady(visit = true))
     }
 
     /** Tap tab Nhật ký / Danh bạ → Bạn bè cho tới khi [isPrepareTargetScreenReady] hoặc hết retry. */
@@ -1914,9 +2031,23 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 runCatching { root.recycle() }
             }
         }
-        return isPrepareTargetScreenReady(visit).also { ok ->
-            if (!ok) logger.log(LogTag.STATE, "visit=$visit", "ZALO_PREPARE_FINAL_FAIL")
+        val ok = isPrepareTargetScreenReady(visit)
+        if (!ok && visit) {
+            val lenient = acquireRootOrNull(3, 100L..240L, LogTag.STATE, quietLog = true)
+                ?.let { r ->
+                    try {
+                        nodeFinder.isContactsVisitNavReady(r)
+                    } finally {
+                        runCatching { r.recycle() }
+                    }
+                } == true
+            if (lenient) {
+                logger.log(LogTag.STATE, "visit=true", "ZALO_NAV_LENIENT_OK")
+                return true
+            }
         }
+        if (!ok) logger.log(LogTag.STATE, "visit=$visit", "ZALO_PREPARE_FINAL_FAIL")
+        return ok
     }
 
     /** Chờ bottom navigation Zalo xuất hiện (sau launch / splash). */
@@ -2133,8 +2264,10 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             settingsManager.setBotRunSuppressed(true)
         }
         visitScriptRunning = false
+        val wasStarting = startAutoLikeInProgress
         startAutoLikeInProgress = false
         val wasRunning = isRunning
+        val stoppedMode = sessionLikeMode
         isRunning = false
         cancelPendingUserFeedback()
         sessionLikeMode = null
@@ -2144,8 +2277,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         wakeLock = null
         feedPostsCommentedThisSession.clear()
         clearFeedItemSaved()
-        if (!wasRunning && !userRequested) return
-        sendInternalBroadcast(Intent("com.zalopilot.STATUS_UPDATE").putExtra("running", false))
+        if (!wasRunning && !userRequested && !wasStarting) return
+        broadcastBotRunningState(running = false, mode = stoppedMode)
         val reasonTag = reason.ifBlank { "STOPPED" }
         logger.log(LogTag.STATE, reason.ifBlank { "autoLike" }, reasonTag)
         if (userRequested || wasRunning) {
@@ -3337,28 +3470,29 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         pendingUserFeedback = null
     }
 
-    /** Một kênh khi bot chạy: chỉ thanh trạng thái trên Zalo (không Toast chồng). */
+    /** Bot chạy → overlay; chưa chạy / đang prepare → Toast (tránh im lặng khi Visit prepare lâu). */
     private fun postUserFeedback(msg: String, allowWhenStopped: Boolean) {
         pendingUserFeedback?.let { mainHandler.removeCallbacks(it) }
         val task = Runnable {
             pendingUserFeedback = null
-            if (!isRunning && !allowWhenStopped) return@Runnable
-            applyUserFeedback(msg)
+            applyUserFeedback(msg, allowWhenStopped)
         }
         pendingUserFeedback = task
         mainHandler.post(task)
     }
 
-    private fun applyUserFeedback(msg: String) {
-        if (isRunning || isOverlayShowing) {
+    private fun applyUserFeedback(msg: String, allowWhenStopped: Boolean) {
+        val useOverlay = isRunning || isOverlayShowing || startAutoLikeInProgress
+        if (useOverlay) {
             if (!isOverlayShowing) {
                 showStatusOverlay(msg)
             } else {
                 statusText?.text = msg
                 applyKeepScreenOnToStatusOverlayIfNeeded()
             }
-        } else {
-            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        }
+        if (!isRunning || allowWhenStopped || startAutoLikeInProgress) {
+            Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show()
         }
     }
 
