@@ -199,7 +199,7 @@ class ZPScriptRunner @Inject constructor(
     ): Boolean {
         return when (step.action.lowercase()) {
             "ensurescreen" -> runEnsureScreen(engine, step)
-            "findcontactitems" -> runFindContactItems(engine)
+            "findcontactitems" -> runFindContactItems(service, engine)
             "scrollcontacts" -> runScrollContactsWhenBatchDone(engine)
             "logstoreids" -> {
                 logger.log(
@@ -457,7 +457,10 @@ class ZPScriptRunner @Inject constructor(
         }
     }
 
-    private suspend fun runFindContactItems(engine: ZPEngine): Boolean {
+    private suspend fun runFindContactItems(
+        service: ZaloPilotAccessibilityService,
+        engine: ZPEngine
+    ): Boolean {
         ensureVisitFriendsListVisible(engine)
         if (contactBatchActive && engine.lastContactTargets.isNotEmpty() &&
             contactBatchIndex < engine.lastContactTargets.size

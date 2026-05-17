@@ -79,7 +79,7 @@ object AccessibilityHelper {
     ): Boolean {
         LikeSettingsManager(context.applicationContext).setBotRunSuppressed(false)
         ZaloPilotAccessibilityService.instance?.let {
-            if (!it.isActive) {
+            if (!ZaloPilotAccessibilityService.isActive) {
                 Toast.makeText(
                     context,
                     "⚠️ Trợ năng ZaloPilot chưa sẵn sàng — tắt/bật lại trong Cài đặt",
