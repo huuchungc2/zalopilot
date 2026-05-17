@@ -8,6 +8,9 @@
 ### Fixed
 - Profile Visit: verify like qua text footer gộp («Đã thích»); comment script dùng `resolveFeedCommentTapTarget` (tap vùng bình luận).
 
+### Changed
+- UI (`UI_FIX_ALL.md`): bottom nav label ngắn + maxLines 1; Settings delay/Visit stepper +/-; `ZaloSettingsGroup` + section label; Script tab layout đồng bộ.
+
 - feat(visit): chế độ **CHAT_ONLY** — tap contact → gửi tin trong khung chat (`chatinput_text`); `visitChatCount`; script v12; dùng chung danh sách câu với comment.
 - fix(feed): like Nhật ký theo spec ô bình luận — một bài/vòng; chờ ~1,2s đọc lại item; tap 2 nếu chưa có ô; **không** `isAlreadyLiked`/`verifyLikedNearClickArea` trên feed; `findFeedLikeTapTargets`; doc `FEED_LIKE_SKIP_LOGIC.md` + `CLAUDE.md` § Feed like.
 - feat(feed): toast khi chờ/đọc ô bình luận sau like — báo kết quả check và quyết định like lần 2 hay cuộn tiếp.

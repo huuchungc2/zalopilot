@@ -45,6 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.content.ClipData
@@ -314,33 +315,46 @@ class MainActivity : ComponentActivity() {
             containerColor = ZpColors.BgPage,
             bottomBar = {
             NavigationBar(containerColor = ZpColors.BgCard) {
-                val tabIcons = listOf(
-                    Icons.Filled.Home,
-                    Icons.Filled.Settings,
-                    Icons.Filled.Email,
-                    Icons.Filled.List,
-                    Icons.Filled.Edit,
-                    Icons.Filled.Menu
+                val tabs = listOf(
+                    Triple("Home", Icons.Filled.Home, 0),
+                    Triple("Cài đặt", Icons.Filled.Settings, 1),
+                    Triple("Comment", Icons.Filled.Email, 2),
+                    Triple("Log", Icons.Filled.List, 3),
+                    Triple("Script", Icons.Filled.Edit, 4),
+                    Triple("UI", Icons.Filled.Menu, 5)
                 )
-                listOf("Trang chủ", "Cài đặt", "Bình luận", "Nhật ký", "Script", "UI").forEachIndexed { i, label ->
+                tabs.forEach { (label, icon, index) ->
                     NavigationBarItem(
-                        selected = selectedTab == i,
+                        selected = selectedTab == index,
                         onClick = {
-                            selectedTab = i
-                            if (i == 3) {
+                            selectedTab = index
+                            if (index == 3) {
                                 logsSlim = logger.readSlimLogs()
                                 logsVerbose = logger.readVerboseLogs()
                                 logsError = logger.readErrorLogs()
                             }
                         },
-                        icon = { Icon(tabIcons[i], contentDescription = label) },
-                        label = { Text(label, fontSize = 10.sp) },
+                        icon = {
+                            Icon(
+                                icon,
+                                contentDescription = label,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        },
+                        label = {
+                            Text(
+                                label,
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = ZpColors.AccentBlue,
                             selectedTextColor = ZpColors.AccentBlue,
                             unselectedIconColor = ZpColors.TextSecondary,
                             unselectedTextColor = ZpColors.TextSecondary,
-                            indicatorColor = ZpColors.AccentBlue.copy(alpha = 0.12f)
+                            indicatorColor = Color.Transparent
                         )
                     )
                 }
@@ -697,8 +711,12 @@ class MainActivity : ComponentActivity() {
     fun SettingsScreen(settings: LikeSettings, onSave: (LikeSettings) -> Unit) {
         var dailyLimit by remember(settings) { mutableIntStateOf(settings.dailyLimit) }
         var feedMode by remember { mutableStateOf(settingsManager.getFeedMode()) }
-        var delayMin by remember(settings) { mutableStateOf((settings.delayMinMs / 1000).toString()) }
-        var delayMax by remember(settings) { mutableStateOf((settings.delayMaxMs / 1000).toString()) }
+        var delayMinSec by remember(settings) {
+            mutableIntStateOf((settings.delayMinMs / 1000).toInt().coerceIn(1, 60))
+        }
+        var delayMaxSec by remember(settings) {
+            mutableIntStateOf((settings.delayMaxMs / 1000).toInt().coerceIn(1, 60))
+        }
         var ecoMode by remember(settings) { mutableStateOf(settings.ecoMode) }
         var requireCharging by remember(settings) { mutableStateOf(settings.requireCharging) }
         var lowBatteryPauseEnabled by remember(settings) { mutableStateOf(settings.lowBatteryPauseEnabled) }
@@ -709,43 +727,63 @@ class MainActivity : ComponentActivity() {
 
         LazyColumn(
             modifier = Modifier.fillMaxSize().background(ZpColors.BgPage),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            contentPadding = PaddingValues(bottom = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
-            item { IosScreenTitle("Cài đặt", AppVersion.fullLabel()) }
+            item {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    IosScreenTitle("Cài đặt", AppVersion.fullLabel())
+                }
+            }
             item { IosSectionLabel("GIỚI HẠN LIKE") }
             item {
-                IosCard {
-                    Text("Tối đa / ngày: $dailyLimit bài", fontSize = 13.sp, color = ZpColors.TextPrimary)
-                    Text("Kéo từ 20 tới 3000 — tùy thích", fontSize = 11.sp, color = ZpColors.TextSecondary)
-                    Spacer(Modifier.height(8.dp))
-                    Slider(
-                        value = dailyLimit.toFloat(),
-                        onValueChange = { dailyLimit = it.toInt() },
-                        valueRange = 20f..3000f,
-                        colors = iosSliderColors
-                    )
+                Column(Modifier.padding(horizontal = 16.dp)) {
+                    IosCard {
+                        Text("Tối đa / ngày: $dailyLimit bài", fontSize = 13.sp, color = ZpColors.TextPrimary)
+                        Text("Kéo từ 20 tới 3000 — tùy thích", fontSize = 11.sp, color = ZpColors.TextSecondary)
+                        Spacer(Modifier.height(8.dp))
+                        Slider(
+                            value = dailyLimit.toFloat(),
+                            onValueChange = { dailyLimit = it.toInt() },
+                            valueRange = 20f..3000f,
+                            colors = iosSliderColors
+                        )
+                    }
                 }
             }
             item { IosSectionLabel("TỐC ĐỘ LIKE") }
             item {
-                IosCard {
-                        Text("Delay giữa các lần like", fontSize = 12.sp, color = ZpColors.TextSecondary)
-                        Spacer(Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Delay tối thiểu (giây)", fontSize = 12.sp, color = ZpColors.TextSecondary)
-                                OutlinedTextField(value = delayMin, onValueChange = { delayMin = it }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                            }
-                            Column(Modifier.weight(1f)) {
-                                Text("Delay tối đa (giây)", fontSize = 12.sp, color = ZpColors.TextSecondary)
-                                OutlinedTextField(value = delayMax, onValueChange = { delayMax = it }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                            }
+                ZaloSettingsGroup {
+                    StepperRow(
+                        label = "Delay tối thiểu",
+                        subLabel = "Giây giữa các lần like",
+                        value = delayMinSec,
+                        min = 1,
+                        max = 60,
+                        unit = " giây",
+                        onValueChange = {
+                            delayMinSec = it
+                            if (delayMaxSec < it) delayMaxSec = it
                         }
+                    )
+                    ZaloSettingsDivider()
+                    StepperRow(
+                        label = "Delay tối đa",
+                        subLabel = "Giây giữa các lần like",
+                        value = delayMaxSec,
+                        min = 1,
+                        max = 60,
+                        unit = " giây",
+                        onValueChange = {
+                            delayMaxSec = it
+                            if (delayMinSec > it) delayMinSec = it
+                        }
+                    )
                 }
             }
             item { IosSectionLabel("TIẾT KIỆM PIN") }
             item {
+                Column(Modifier.padding(horizontal = 16.dp)) {
                 IosCard {
                     Row(
                         Modifier.fillMaxWidth(),
@@ -767,9 +805,11 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+                }
             }
             item { IosSectionLabel("PIN & SẠC") }
             item {
+                Column(Modifier.padding(horizontal = 16.dp)) {
                 IosCard(contentPadding = PaddingValues(0.dp)) {
                     Row(
                         Modifier.fillMaxWidth().padding(16.dp),
@@ -828,45 +868,54 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+                }
             }
             item { IosSectionLabel("LIKE DANH BẠ") }
             item {
-                IosCard {
+                ZaloSettingsGroup {
+                    StepperRow(
+                        label = "Like mỗi profile",
+                        subLabel = "Bấm Like danh sách ở Home",
+                        value = visitLikeCount,
+                        min = 0,
+                        max = 10,
+                        unit = " bài",
+                        onValueChange = { visitLikeCount = it }
+                    )
+                    ZaloSettingsDivider()
+                    StepperRow(
+                        label = "Profile tối đa / phiên",
+                        subLabel = "Giới hạn một lần chạy Visit",
+                        value = visitMaxProfiles,
+                        min = 5,
+                        max = 200,
+                        unit = "",
+                        onValueChange = { visitMaxProfiles = it }
+                    )
+                    ZaloSettingsDivider()
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
-                            "Bấm Like danh sách ở Trang chủ",
+                            "Comment & câu mẫu → tab Comment",
                             fontSize = 12.sp,
-                            color = ZpColors.TextSecondary
+                            color = ZpColors.TextSecondary,
+                            modifier = Modifier.weight(1f)
                         )
-                        Spacer(Modifier.height(8.dp))
-                        Text("Like mỗi profile: $visitLikeCount", fontSize = 13.sp, color = ZpColors.TextPrimary)
-                        Slider(
-                            value = visitLikeCount.toFloat(),
-                            onValueChange = { visitLikeCount = it.toInt() },
-                            valueRange = 0f..10f,
-                            steps = 9,
-                            colors = iosSliderColors
-                        )
-                        Text("Profile tối đa / phiên: $visitMaxProfiles", fontSize = 13.sp)
-                        Slider(
-                            value = visitMaxProfiles.toFloat(),
-                            onValueChange = { visitMaxProfiles = it.toInt() },
-                            valueRange = 5f..200f,
-                            colors = iosSliderColors
-                        )
-                        Text(
-                            "Comment & câu mẫu → tab Bình luận",
-                            fontSize = 12.sp,
-                            color = ZpColors.TextSecondary
-                        )
-                        Spacer(Modifier.height(4.dp))
                         TextButton(onClick = {
                             progressManager.resetVisitIndex()
                             Toast.makeText(this@MainActivity, "Đã reset visitIndex", Toast.LENGTH_SHORT).show()
                         }) { Text("Reset visitIndex", color = ZpColors.AccentBlue) }
+                    }
                 }
             }
             item { IosSectionLabel("CHẾ ĐỘ FEED") }
             item {
+                Column(Modifier.padding(horizontal = 16.dp)) {
                 IosCard {
                         Text("Cách bot cuộn khi không tìm thấy like", fontSize = 12.sp, color = ZpColors.TextSecondary)
                         Spacer(Modifier.height(10.dp))
@@ -898,11 +947,14 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.padding(top = 8.dp)
                         )
                 }
+                }
             }
             item {
                 Text(
                     "Phiên bản ${AppVersion.fullLabel()}",
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     textAlign = TextAlign.Center,
                     fontSize = 12.sp,
                     color = ZpColors.TextSecondary
@@ -912,10 +964,12 @@ class MainActivity : ComponentActivity() {
                 Button(onClick = {
                     settingsManager.setFeedMode(feedMode)
                     val base = settingsManager.load()
+                    val minSec = delayMinSec.coerceIn(1, 60)
+                    val maxSec = delayMaxSec.coerceIn(minSec, 60)
                     onSave(base.copy(
                         dailyLimit = dailyLimit,
-                        delayMinMs = (delayMin.toLongOrNull() ?: 1L) * 1000L,
-                        delayMaxMs = (delayMax.toLongOrNull() ?: 3L) * 1000L,
+                        delayMinMs = minSec * 1000L,
+                        delayMaxMs = maxSec * 1000L,
                         interactModeStr = InteractMode.TAP.name,
                         humanLikeScroll = true,
                         ecoMode = ecoMode,
@@ -928,7 +982,11 @@ class MainActivity : ComponentActivity() {
                         visitMaxProfiles = visitMaxProfiles
                     ))
                     Toast.makeText(this@MainActivity, "✅ Đã lưu cài đặt", Toast.LENGTH_SHORT).show()
-                }, modifier = Modifier.fillMaxWidth().height(50.dp),
+                },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .padding(horizontal = 16.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = ZpColors.AccentBlue),
                     shape = RoundedCornerShape(14.dp)) {
                     Text("Lưu cài đặt", fontSize = 15.sp, fontWeight = FontWeight.W500)

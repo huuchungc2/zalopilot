@@ -75,24 +75,36 @@ fun ScriptScreen(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(ZpColors.BgPage),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(0.dp)
     ) {
-        item { IosScreenTitle("Script", "Tải JSON từ server — chỉnh flow không cần build APK") }
         item {
-            Text(AppVersion.fullLabel(), fontSize = 11.sp, color = ZpColors.TextSecondary, modifier = Modifier.padding(start = 4.dp))
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                IosScreenTitle("Script", "Tải JSON từ server — chỉnh flow không cần build APK")
+            }
         }
         item {
-            IosCard {
-                Text("Server URL", fontSize = 12.sp, color = ZpColors.TextSecondary)
-                Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
-                    value = serverUrl,
-                    onValueChange = { serverUrl = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(Modifier.height(8.dp))
+            Text(
+                AppVersion.fullLabel(),
+                fontSize = 11.sp,
+                color = ZpColors.TextSecondary,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+        }
+        item {
+            ZaloSettingsGroup {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Server URL", fontSize = 12.sp, color = ZpColors.TextSecondary)
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = serverUrl,
+                        onValueChange = { serverUrl = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+                ZaloSettingsDivider()
+                Column(Modifier.padding(16.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = {
@@ -129,6 +141,7 @@ fun ScriptScreen(
                 if (status.isNotBlank()) {
                     Text(status, fontSize = 12.sp, color = ZpColors.TextSecondary)
                 }
+                }
             }
         }
         items(remoteScripts, key = { "remote-${it.id}" }) { meta ->
@@ -162,9 +175,7 @@ fun ScriptScreen(
                 }
             }
         }
-        item {
-            IosSectionLabel("TRÊN MÁY / BUNDLED")
-        }
+        item { IosSectionLabel("TRÊN MÁY / BUNDLED") }
         items(localScripts.ifEmpty {
             listOf(
                 ZPScriptMeta(
@@ -201,6 +212,7 @@ fun ScriptScreen(
             }
         }
         item {
+            Column(Modifier.padding(horizontal = 16.dp)) {
             IosCard {
                 Text("Script đang dùng: $activeId", fontWeight = FontWeight.Medium, color = ZpColors.TextPrimary)
                 Spacer(Modifier.height(8.dp))
@@ -242,6 +254,7 @@ fun ScriptScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = ZpColors.ColorRed),
                     shape = RoundedCornerShape(14.dp)
                 ) { Text("Xóa cache") }
+            }
             }
         }
     }
