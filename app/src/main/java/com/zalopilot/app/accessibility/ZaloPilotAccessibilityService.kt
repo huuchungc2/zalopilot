@@ -1726,18 +1726,24 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             return preferredMode
         }
         when (startEntry) {
-            BotStartEntry.HOME_LIKE_BUTTON, BotStartEntry.POLL_AUTO -> {
+            BotStartEntry.HOME_LIKE_BUTTON -> {
                 val saved = settingsManager.getLikeMode()
                 logger.log(LogTag.STATE, "mode=$saved entry=$startEntry", "START_MODE_FROM_PREFS")
                 return saved
             }
-            BotStartEntry.FLOATING_ON_ZALO -> {
+            BotStartEntry.POLL_AUTO, BotStartEntry.FLOATING_ON_ZALO -> {
                 inferLikeModeForStart()?.let { inferred ->
                     settingsManager.setLikeMode(inferred)
-                    logger.log(LogTag.STATE, "mode=$inferred", "START_MODE_INFERRED_FLOATING")
+                    logger.log(
+                        LogTag.STATE,
+                        "mode=$inferred entry=$startEntry",
+                        "START_MODE_INFERRED_UI"
+                    )
                     return inferred
                 }
-                return settingsManager.getLikeMode()
+                val saved = settingsManager.getLikeMode()
+                logger.log(LogTag.STATE, "mode=$saved entry=$startEntry", "START_MODE_FROM_PREFS_FALLBACK")
+                return saved
             }
         }
     }

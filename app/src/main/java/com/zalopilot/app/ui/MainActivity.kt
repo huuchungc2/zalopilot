@@ -658,7 +658,7 @@ class MainActivity : ComponentActivity() {
                         Column(Modifier.weight(1f)) {
                             Text("Tự động chạy lại", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = ZpColors.TextPrimary)
                             Text(
-                                "Tự bật bot khi mở Zalo (nếu chưa DỪNG)",
+                                "Mở Zalo → tự chạy theo màn (Nhật ký / Danh bạ); không rõ thì dùng nút Home bấm lần trước",
                                 fontSize = 12.sp,
                                 color = ZpColors.TextSecondary
                             )

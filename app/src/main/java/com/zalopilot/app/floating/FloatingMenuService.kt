@@ -291,7 +291,23 @@ class FloatingMenuService : Service() {
                     closeMenu()
                 })
             } else {
-                addView(menuItem("▶ Nhật ký", FloatingMenuUiColors.ACCENT_BLUE) {
+                val inferred = ZaloPilotAccessibilityService.instance?.inferLikeModeForStart()
+                val detectLabel = when (inferred) {
+                    LikeMode.FEED -> "nhật ký"
+                    LikeMode.VISIT -> "danh bạ"
+                    null -> "màn không rõ → dùng lần trước"
+                }
+                addView(menuItem("▶ Bắt đầu ($detectLabel)", FloatingMenuUiColors.COLOR_GREEN) {
+                    val mode = inferred ?: settingsManager.getLikeMode()
+                    settingsManager.setLikeMode(mode)
+                    AccessibilityHelper.requestStartAutoLike(
+                        this@FloatingMenuService,
+                        mode,
+                        BotStartEntry.FLOATING_ON_ZALO
+                    )
+                    closeMenu()
+                })
+                addView(menuItem("▶ Nhật ký (ép)", FloatingMenuUiColors.ACCENT_BLUE) {
                     settingsManager.setLikeMode(LikeMode.FEED)
                     AccessibilityHelper.requestStartAutoLike(
                         this@FloatingMenuService,
@@ -300,7 +316,7 @@ class FloatingMenuService : Service() {
                     )
                     closeMenu()
                 })
-                addView(menuItem("▶ Danh bạ", FloatingMenuUiColors.ACCENT_PURPLE) {
+                addView(menuItem("▶ Danh bạ (ép)", FloatingMenuUiColors.ACCENT_PURPLE) {
                     settingsManager.setLikeMode(LikeMode.VISIT)
                     AccessibilityHelper.requestStartAutoLike(
                         this@FloatingMenuService,
