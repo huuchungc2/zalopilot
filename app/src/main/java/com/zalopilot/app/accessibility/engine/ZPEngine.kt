@@ -226,7 +226,7 @@ class ZPEngine(
             profileToast("⏭ Profile: chế độ không like (COMMENT_ONLY hoặc count=0)")
             return ProfileLikeResult(0, noPostsOnProfile = false)
         }
-        profileToast("👤 Profile: chuẩn bị timeline (like tối đa $max)…")
+        profileToast("👤 Profile: chuẩn bị timeline (like tối đa $maxLikes)…")
         prepareProfileTimelineForLikes()
         var liked = 0
         var allLikedScrollStreak = 0
