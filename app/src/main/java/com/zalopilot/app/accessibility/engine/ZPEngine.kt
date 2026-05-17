@@ -552,6 +552,7 @@ class ZPEngine(
                 logger.log(LogTag.CLICK, target.reason, "VISIT_COMMENT_TAP_AREA")
                 true
             }
+            null -> false
         }
     }
 

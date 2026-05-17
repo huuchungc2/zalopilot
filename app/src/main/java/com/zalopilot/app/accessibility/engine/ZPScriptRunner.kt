@@ -240,7 +240,7 @@ class ZPScriptRunner @Inject constructor(
                 }
                 val requested = engine.resolveVarInt(step.count ?: "\$visitLikeCount")
                 val max = when (mode) {
-                    VisitActionMode.COMMENT_ONLY -> 0
+                    VisitActionMode.COMMENT_ONLY, VisitActionMode.CHAT_ONLY -> 0
                     VisitActionMode.LIKE_ONLY, VisitActionMode.MIX -> requested
                 }
                 if (mode == VisitActionMode.COMMENT_ONLY) {
@@ -592,7 +592,7 @@ class ZPScriptRunner @Inject constructor(
     private fun bottomContactKeyFromTargets(targets: List<ScriptTapTarget>): String? =
         targets.maxByOrNull { it.bounds.bottom }?.label?.let { visitHandledContacts.keyFromTapLabel(it) }
 
-    private fun refreshCurrentVisitKeyFromChat(engine: ZPEngine) {
+    private suspend fun refreshCurrentVisitKeyFromChat(engine: ZPEngine) {
         val root = engine.acquireRoot() ?: return
         try {
             nodeFinder.findChatContactDisplayName(root)?.let { name ->
