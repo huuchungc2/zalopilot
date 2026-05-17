@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- fix(feed): like Nhật ký theo spec ô bình luận — một bài/vòng; chờ ~1,2s đọc lại item; tap 2 nếu chưa có ô; **không** `isAlreadyLiked`/`verifyLikedNearClickArea` trên feed; `findFeedLikeTapTargets`; doc `FEED_LIKE_SKIP_LOGIC.md` + `CLAUDE.md` § Feed like.
+- feat(feed): toast khi chờ/đọc ô bình luận sau like — báo kết quả check và quyết định like lần 2 hay cuộn tiếp.
+- fix(feed/comment): thoát viewer ảnh khi tap comment nhầm (`escapeFullscreenImageViewerDuringFeed`); clamp tap BL trong footer; một bài/vòng + `feedPostsCommentedThisSession` (không comment lại sau cuộn).
+- fix(feed): bỏ hẳn `feedPostsHandledThisSession` / `processedPosts` cho like — chỉ ô bình luận trên UI (skip / verify / đếm counter).
+- fix(feed): like 2 bước — sau tap 2 không đọc lại; xong bước 2 là cuộn bài khác.
+- fix(feed): mỗi vòng chỉ xử lý bài trên cùng màn; có ô BL → cuộn (không like bài thứ 2 cùng màn).
+- docs: **FEED_LIKE_SKIP_LOGIC.md** — logic like/skip feed (ô BL, nhớ phiên, verify, log); **CLAUDE.md** § Feed like trỏ tới file + cập nhật không re-tap.
+- fix(feed): bỏ `FEED_UNLIKE_RETRY_TAP`; `feedPostsHandledThisSession`; cải thiện `fillCommentInputAndSend` (composer, PASTE).
 - fix(start): hai luồng BẮT ĐẦU — `BotStartEntry` (Trang chủ: mở Zalo→chờ→tab; floating trên Zalo: đọc cây Zalo, không launch lại); `pickBestAccessibilityRoot`; `prepare` trước `isRunning`.
 - fix(settings): mỗi lần start + mỗi vòng loop `settingsManager.load()`; `runFeedMode` tự load; log `SETTINGS_RELOAD_*`.
 

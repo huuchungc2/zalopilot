@@ -43,6 +43,12 @@ class NodeFinder @Inject constructor(
         findLikeButtonsInternal(root, useLearnedLikeId = true, skipAlreadyLiked = false)
 
     /**
+     * Feed like — không lọc [isAlreadyLiked]; skip/xác nhận chỉ bằng ô bình luận trên item.
+     */
+    fun findFeedLikeTapTargets(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> =
+        findLikeButtonsInternal(root, useLearnedLikeId = true, skipAlreadyLiked = false)
+
+    /**
      * Quét nút like chỉ bằng text + traversal — **không** dùng [ZaloIDStore.getLikeButtonID].
      * Layout profile/timeline dùng id khác feed nhật ký; saved id feed gây ID_MISS và bỏ lỡ nút like profile.
      */
@@ -1685,9 +1691,7 @@ class NodeFinder @Inject constructor(
                 val looksComment = idLow.contains("comment") ||
                     t.contains("bình luận") ||
                     t.contains("comment") ||
-                    cls.contains("image") ||
-                    cls.contains("button") ||
-                    cls.contains("view")
+                    (cls.contains("imageview") && idLow.contains("comment"))
                 if (looksComment && cr.centerX() <= midX + 80) {
                     val dist = kotlin.math.abs(cr.centerX() - footerRect.left)
                     if (dist < bestDist) {
@@ -1710,16 +1714,23 @@ class NodeFinder @Inject constructor(
         like: AccessibilityNodeInfo?,
         footer: AccessibilityNodeInfo?
     ): Rect? {
+        val footerRect = footer?.takeIf { it.hasValidScreenBounds() }?.let {
+            Rect().also { r -> it.getBoundsInScreen(r) }
+        }
         val likeRect = when {
             like != null && like.hasValidScreenBounds() ->
                 Rect().also { like.getBoundsInScreen(it) }
-            footer != null -> likeButtonRectInFooter(footer)
+            footerRect != null -> likeButtonRectInFooter(footer!!)
             else -> null
         }
-        if (likeRect != null && likeRect.width() > 0 && likeRect.height() > 0) {
-            val tapX = (likeRect.left - 52).coerceAtLeast(24)
-            val tapY = likeRect.centerY()
-            return Rect(tapX - 32, tapY - 32, tapX + 32, tapY + 32)
+        footer?.let { commentTapRectForAggregatedFooter(it) }?.let { return it }
+        if (likeRect != null && likeRect.width() > 0 && likeRect.height() > 0 && footerRect != null) {
+            val fr = footerRect
+            val bandTop = fr.top + (fr.height() * 0.2f).toInt()
+            val bandBottom = fr.bottom - 8
+            val tapY = likeRect.centerY().coerceIn(bandTop, bandBottom)
+            val tapX = (likeRect.left - 44).coerceIn(fr.left + 12, fr.right - 56)
+            return Rect(tapX - 28, tapY - 28, tapX + 28, tapY + 28)
         }
         return footer?.let { commentTapRectForAggregatedFooter(it) }
     }
@@ -1947,6 +1958,21 @@ class NodeFinder @Inject constructor(
             if (r.top > rootR.top + rootR.height() / 4) out.add(mc)
         }
         return out.toList()
+    }
+
+    /** Ô nhập / placeholder chỉ trong footer một bài — không quét cả feed. */
+    fun findCommentInputInFooter(footer: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val host = findFeedFooterHostNearLike(footer)
+        findCommentInputInScope(host)?.let { return it }
+        findCommentInputPlaceholderNearLike(footer)?.let { return it }
+        return null
+    }
+
+    fun nodeCenterIsAboveFeedFooter(node: AccessibilityNodeInfo, footer: AccessibilityNodeInfo): Boolean {
+        if (!node.hasValidScreenBounds() || !footer.hasValidScreenBounds()) return false
+        val fr = Rect().also { footer.getBoundsInScreen(it) }
+        val nr = Rect().also { node.getBoundsInScreen(it) }
+        return nr.centerY() < fr.top - 10
     }
 
     private fun findCommentInputInScope(scope: AccessibilityNodeInfo): AccessibilityNodeInfo? {

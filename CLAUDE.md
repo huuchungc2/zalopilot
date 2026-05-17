@@ -131,22 +131,20 @@ Hai lớp (OR với nhau):
 
 > **Đọc section này trước khi sửa `runFeedMode` / feed like.** Đây là logic product owner đã chốt; **không** thay bằng suy diễn từ code cũ (`findLikeButtons` toàn màn, `isAlreadyLiked`, `verifyLikedNearClickArea` làm nguồn truth chính).
 >
-> **Trạng thái code:** spec này có thể **chưa** khớp implementation — implement/sửa feed phải bám spec; sau khi sửa cập nhật CHANGELOG.
+> **Implementation chi tiết (like / skip / nhớ phiên / log):** xem [`FEED_LIKE_SKIP_LOGIC.md`](FEED_LIKE_SKIP_LOGIC.md) — cập nhật file đó khi đổi `runFeedMode` / `feedShouldAttemptLike`.
 
-**Nguồn truth (chỉ trên cùng một feed item / footer bài, quanh nút Thích):** có **ô bình luận** hay không (placeholder «Nhập bình luận» / composer inline / `cmtinput_text` trong footer item — **không** chỉ ô đã mở focus).
+**Nguồn truth (cùng feed item / footer bài):** có **ô bình luận** hay không — **không** dùng «Đã thích» / `isAlreadyLiked` trên feed (không detect ổn định). Chi tiết: [`FEED_LIKE_SKIP_LOGIC.md`](FEED_LIKE_SKIP_LOGIC.md).
 
-| Giai đoạn | Có ô bình luận trên item? | Hành động |
-|-----------|---------------------------|-----------|
-| **Trước tap** | Có | Đã like → **skip**, không tap Thích |
-| **Trước tap** | Chưa | Tap Thích (case 1: chưa like; case 2: đã like nhưng Zalo chưa kịp hiện ô — chưa phân biệt được ở bước này) |
-| **Sau tap** (không cuộn ngay; delay; đọc lại **cùng item**) | Có | Like lần đầu thật → `progressManager.incrementAndSave()` → broadcast `PROGRESS_UPDATE` → **rồi mới** cuộn |
-| **Sau tap** (cùng item) | Vẫn không | Tap vừa rồi = **unlike** → **tap Thích lại** → khi có ô → `incrementAndSave()` → cuộn |
+| Bước | Hành động |
+|------|-----------|
+| 1 — Check ô | Có → skip, cuộn; không → tap Thích lần 1 |
+| 2 — Sau tap 1 | Chờ, đọc lại item: có ô → +1 like, cuộn; không ô → tap lần 2, **cuộn** (không đọc lại sau lần 2) |
 
-**Counter «Đã like»:** tăng khi xác nhận like thật theo bảng trên (có ô sau check / sau re-like). **Không** chỉ tăng khi `verifyLikedNearClickArea` / text «Đã thích» / `isAlreadyLiked` pass.
+**Counter «Đã like»:** chỉ khi thấy ô BL sau tap 1 hoặc tap 2. **Không** `verifyLikedNearClickArea` / `isAlreadyLiked` trên feed.
 
-**Sau like thành công:** **không** `scrollFeedWithVerification()` ngay — chờ UI → re-scan item → xử lý re-like nếu cần → mới cuộn + `delayFeedSettleAfterScroll`.
+**Sau like thành công:** cuộn theo `FeedMode` + `delayFeedSettleAfterScroll`.
 
-**Không** dùng làm quyết định chính cho feed: list `findLikeButtons()` cả màn rồi like «nút đầu tiên»; `postKey` / author session skip thay cho ô bình luận.
+**Không** lưu danh sách bài đã like — **không** `postKey` / phiên thay ô bình luận. Mỗi vòng chỉ đọc màn: có ô BL → skip; chưa có → tap → đọc lại ô BL.
 
 **Visit / profile:** vẫn có thể dùng `isAlreadyLiked()` (layout khác feed) — section §7 bên dưới áp dụng **không** override spec feed này.
 
@@ -294,9 +292,9 @@ FeedMode được đọc trong `autoLikeLoop` sau mỗi `FeedScanResult.LIKED`:
 
 ### 6. Verify trạng thái sau khi click like
 
-**Feed:** verify = **§ Feed like** — đọc lại item, ô bình luận, re-like nếu cần; **không** cuộn trước khi xong bước đó.
+**Feed:** verify = **§ Feed like** — chờ, đọc lại item, ô bình luận; tap 2 nếu chưa có ô; **không** cuộn trước khi xong.
 
-**Visit / profile (và fallback feed nếu spec chưa implement):** sau `performLikeClickWithFallbacks()` thành công, delay ~1500ms (+ retry) rồi xác nhận «Đã thích» / `isAlreadyLiked`. `CLICK_UNCONFIRMED` → không `incrementAndSave()`.
+**Visit / profile:** sau `performLikeClickWithFallbacks()` thành công, delay ~1500ms (+ retry) rồi xác nhận «Đã thích» / `isAlreadyLiked`. `CLICK_UNCONFIRMED` → không `incrementAndSave()`.
 
 ### 7. isAlreadyLiked() — Visit / profile (không phải feed)
 
