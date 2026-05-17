@@ -99,7 +99,11 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     private var consecutivePollRootNull = 0
     private val likedAuthorsThisSession = mutableSetOf<String>()
     private val clickedPositionsThisSession = mutableSetOf<String>()
-    /** Feed like: không lưu danh sách bài — chỉ đọc ô bình luận trên UI mỗi lần quét. */
+    /**
+     * Feed like: bài vừa chọn tap (chưa có ô BL) — vòng sau trùng key → chỉ cuộn, không tap lại.
+     * Xóa khi DỪNG; cập nhật khi bắt đầu tap bài mới.
+     */
+    private val feedItemSavedKeys = mutableSetOf<String>()
     private val feedCommentTriedThisScan = mutableSetOf<String>()
     /** Bài đã gửi comment thành công trong phiên — không xóa khi cuộn (tránh comment lại cùng bài). */
     private val feedPostsCommentedThisSession = mutableSetOf<String>()
@@ -1476,6 +1480,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             settingsManager.setBotRunSuppressed(false)
         }
         sessionLikeMode = null
+        clearFeedItemSaved()
         logSettingsReload("START")
         startAutoLikeInProgress = true
         scope.launch {
@@ -2096,12 +2101,14 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         startAutoLikeInProgress = false
         val wasRunning = isRunning
         isRunning = false
+        cancelPendingUserFeedback()
         sessionLikeMode = null
         likeJob?.cancel()
         likeJob = null
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         feedPostsCommentedThisSession.clear()
+        clearFeedItemSaved()
         if (!wasRunning && !userRequested) return
         sendInternalBroadcast(Intent("com.zalopilot.STATUS_UPDATE").putExtra("running", false))
         val reasonTag = reason.ifBlank { "STOPPED" }
@@ -2125,7 +2132,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             if (progressManager.isLimitReached()) {
                 val count = progressManager.load().todayLikeCount
                 updateStatus("✅ Đã like đủ $count bài hôm nay")
-                showToast("✅ Đã like đủ $count bài hôm nay!")
                 logger.log(LogTag.STATE, "autoLike", "DAILY_LIMIT_REACHED")
             sendInternalBroadcast(Intent("com.zalopilot.DAILY_LIMIT"))
             stopAutoLike()
@@ -2356,10 +2362,6 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         NO_BUTTONS      // Không thấy nút Thích nào → có thể hết feed hoặc sai tab
     }
 
-    /** Feed SPEC bước 1: chỉ ô bình luận trên item — có → skip; không → tap. */
-    private fun feedShouldAttemptLike(likeNode: AccessibilityNodeInfo): Boolean =
-        !nodeFinder.hasCommentBoxOnFeedItemNearLike(likeNode)
-
     /** Đọc lại cùng feed item (theo rect/id lúc tap) — có ô bình luận hay không. */
     private suspend fun feedItemHasCommentBoxAt(origRect: Rect, origId: String?): Boolean {
         val fresh = acquireRootOrNull(4, 80L..220L, LogTag.CLICK, quietLog = true) ?: return false
@@ -2380,23 +2382,22 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         nodeForRetry: AccessibilityNodeInfo,
         postKey: String
     ): Boolean {
-        updateStatus("⏳ Chờ UI bài này…")
-        showToast("⏳ Đã tap like — chờ UI rồi đọc ô bình luận…")
+        updateStatus("⏳ Tap like — chờ UI, đọc ô bình luận…")
         logger.log(LogTag.CLICK, postKey, "FEED_LIKE_WAIT_AFTER_TAP1")
         delay(ecoVerifyMs(FEED_LIKE_SETTLE_AFTER_TAP1_MS))
 
-        showToast("🔍 Đang đọc lại bài — kiểm tra ô bình luận…")
+        updateStatus("🔍 Bước 2: kiểm tra ô bình luận…")
         if (feedItemHasCommentBoxAt(origRect, origId)) {
             logger.log(LogTag.CLICK, postKey, "FEED_LIKE_CONFIRMED_COMMENT_BOX")
-            showToast("✅ Có ô bình luận → like OK, đi tiếp")
+            updateStatus("✅ Có ô BL → +1 like, cuộn")
             return true
         }
-        showToast("❌ Chưa thấy ô bình luận → quyết định: like lần 2")
+        updateStatus("❌ Chưa ô BL → tap Thích lần 2")
 
         val fresh = acquireRootOrNull(4, 80L..200L, LogTag.CLICK, quietLog = true)
         if (fresh == null) {
             logger.log(LogTag.CLICK, postKey, "FEED_LIKE_SECOND_TAP_NO_ROOT")
-            showToast("⚠️ Không đọc được màn — bỏ qua bài, cuộn tiếp")
+            updateStatus("⚠️ Không đọc màn — cuộn tiếp")
             return false
         }
         try {
@@ -2405,18 +2406,17 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 ?: nodeForRetry
             if (nodeFinder.isLikeTapLikelyToOpenComment(retryNode)) {
                 logger.log(LogTag.CLICK, postKey, "FEED_LIKE_SECOND_TAP_SKIP_TRAP")
-                showToast("⚠️ Vùng tap gần comment — không like lần 2, cuộn tiếp")
+                updateStatus("⚠️ Gần nút comment — cuộn tiếp")
                 return false
             }
-            updateStatus("👍 Like lần 2 (chưa thấy ô bình luận)…")
-            showToast("👍 Like lần 2 (vì chưa thấy ô bình luận)")
+            updateStatus("👍 Like lần 2…")
             logger.log(LogTag.CLICK, postKey, "FEED_LIKE_SECOND_TAP")
             performLikeClickWithFallbacks(retryNode)
         } finally {
             runCatching { fresh.recycle() }
         }
         logger.log(LogTag.CLICK, postKey, "FEED_LIKE_SECOND_TAP_DONE_SCROLL")
-        showToast("⏭ Like lần 2 xong — cuộn bài khác")
+        updateStatus("⏭ Like lần 2 xong — cuộn")
         return false
     }
 
@@ -2594,13 +2594,15 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
                 return abandonFeedPostLikeTrap(nodeForClick, author)
             }
 
-            showToast("🔍 Bước 1: kiểm tra ô bình luận…")
-            if (!feedShouldAttemptLike(nodeForClick)) {
-                showToast("⏭ Đã có ô bình luận — bỏ qua, cuộn")
+            val hasCommentBox = nodeFinder.hasCommentBoxOnFeedItemNearLike(nodeForClick)
+            if (hasCommentBox) {
+                updateStatus("⏭ Có ô BL — skip, cuộn")
                 logger.log(LogTag.STATE, postKey, "SKIP_FEED_HAS_COMMENT_BOX_PRE_TAP")
                 return FeedScanResult.ALL_SKIPPED
             }
-            showToast("👍 Chưa có ô — tap Thích lần 1")
+
+            rememberFeedItemSaved(nodeForClick)
+            updateStatus("💾 Lưu bài — tap Thích lần 1")
 
             try {
                 val clicked = performLikeClickWithFallbacks(nodeForClick)
@@ -2820,6 +2822,22 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun clearFeedItemSaved() {
+        feedItemSavedKeys.clear()
+    }
+
+    /** Lưu bài sắp tap (chưa có ô BL) — vòng sau trùng thì chỉ cuộn. */
+    private fun rememberFeedItemSaved(likeNode: AccessibilityNodeInfo) {
+        feedItemSavedKeys.clear()
+        feedItemSavedKeys.addAll(feedSessionKeysFor(likeNode))
+        logger.log(LogTag.STATE, "keys=${feedItemSavedKeys.joinToString()}", "FEED_ITEM_SAVED")
+    }
+
+    private fun isSameAsFeedItemSaved(likeNode: AccessibilityNodeInfo): Boolean {
+        if (feedItemSavedKeys.isEmpty()) return false
+        return feedSessionKeysFor(likeNode).any { it in feedItemSavedKeys }
+    }
+
     /** Các khóa nhận diện cùng một bài trong phiên (content + neo lỏng khi không đọc được snippet). */
     private fun feedSessionKeysFor(likeNode: AccessibilityNodeInfo): Set<String> {
         val postKey = makePostKey(likeNode)
@@ -2840,27 +2858,22 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         }
 
     /**
-     * Một bài / một vòng — chỉ bài trên cùng màn; có ô BL hoặc không eligible → null (cuộn).
+     * Một bài / một vòng — bài trên cùng: có ô BL → cuộn; trùng bài đã lưu → cuộn; không thì cho tap.
      */
     private fun pickFirstEligibleFeedLikeNode(likeNodes: List<AccessibilityNodeInfo>): AccessibilityNodeInfo? {
         val node = sortFeedLikeNodesTopFirst(likeNodes).firstOrNull() ?: return null
-        if (!feedShouldAttemptLike(node)) {
-            showToast("⏭ Bước 1: đã có ô bình luận — bỏ qua, cuộn")
+        if (nodeFinder.hasCommentBoxOnFeedItemNearLike(node)) {
+            updateStatus("⏭ Có ô BL — skip, cuộn")
             logger.log(LogTag.STATE, makePostKey(node), "SKIP_FEED_HAS_COMMENT_BOX")
+            return null
+        }
+        if (isSameAsFeedItemSaved(node)) {
+            updateStatus("⏭ Trùng bài đã lưu — chỉ cuộn")
+            logger.log(LogTag.STATE, makePostKey(node), "SKIP_FEED_SAME_SAVED_ITEM_SCROLL")
             return null
         }
         if (feedSessionKeysFor(node).any { it in feedPostsAbandonedLikeTrap }) {
             logger.log(LogTag.STATE, makePostKey(node), "SKIP_LIKE_TRAP_ABANDONED")
-            return null
-        }
-        val postKey = makePostKey(node)
-        val nowMs = System.currentTimeMillis()
-        if (postKey == lastClickedPostKey && nowMs - lastClickedPostAt < POST_CLICK_COOLDOWN_MS) {
-            logger.log(
-                LogTag.STATE,
-                "postKey=$postKey deltaMs=${nowMs - lastClickedPostAt}",
-                "SKIP_COOLDOWN"
-            )
             return null
         }
         return node
@@ -3282,15 +3295,40 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun updateStatus(msg: String) {
-        mainHandler.post {
+    private var pendingUserFeedback: Runnable? = null
+
+    private fun cancelPendingUserFeedback() {
+        pendingUserFeedback?.let { mainHandler.removeCallbacks(it) }
+        pendingUserFeedback = null
+    }
+
+    /** Một kênh khi bot chạy: chỉ thanh trạng thái trên Zalo (không Toast chồng). */
+    private fun postUserFeedback(msg: String, allowWhenStopped: Boolean) {
+        pendingUserFeedback?.let { mainHandler.removeCallbacks(it) }
+        val task = Runnable {
+            pendingUserFeedback = null
+            if (!isRunning && !allowWhenStopped) return@Runnable
+            applyUserFeedback(msg)
+        }
+        pendingUserFeedback = task
+        mainHandler.post(task)
+    }
+
+    private fun applyUserFeedback(msg: String) {
+        if (isRunning || isOverlayShowing) {
             if (!isOverlayShowing) {
                 showStatusOverlay(msg)
-                return@post
+            } else {
+                statusText?.text = msg
+                applyKeepScreenOnToStatusOverlayIfNeeded()
             }
-            statusText?.text = msg
-            applyKeepScreenOnToStatusOverlayIfNeeded()
+        } else {
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun updateStatus(msg: String) {
+        postUserFeedback(msg, allowWhenStopped = false)
     }
 
     private fun hideStatusOverlay() {
@@ -3307,10 +3345,18 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** Visit / engine — cùng kênh overlay với feed (không Toast thứ hai). */
+    internal fun updateStatusForBot(msg: String) {
+        updateStatus(msg)
+    }
+
+    /**
+     * Khi bot chạy → cùng kênh [updateStatus] (overlay). Khi dừng → Toast (■ Đã dừng, đã kết nối…).
+     */
     internal fun showToast(msg: String) {
-        mainHandler.post {
-            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-        }
+        val allowWhenStopped =
+            msg.startsWith("■") || msg.contains("ZaloPilot đã kết nối")
+        postUserFeedback(msg, allowWhenStopped = allowWhenStopped)
     }
 
     /**

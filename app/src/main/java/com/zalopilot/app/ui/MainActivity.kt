@@ -18,8 +18,20 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AccountTree
+import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.AccessibilityNew
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -64,7 +76,6 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var zaloIdStore: ZaloIDStore
     @Inject lateinit var scriptStore: ZPScriptStore
 
-    private val zaloBlue = Color(0xFF0068FF)
     private val permissionGateTick = mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -127,24 +138,24 @@ class MainActivity : ComponentActivity() {
         }
 
         Column(
-            modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)).padding(24.dp),
+            modifier = Modifier.fillMaxSize().background(ZpColors.BgPage).padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text("ZaloPilot", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = zaloBlue)
-            Text(AppVersion.fullLabel(), fontSize = 12.sp, color = Color.Gray)
-            Text("Thiết lập lần đầu", fontSize = 14.sp, color = Color.Gray)
+            Text("ZaloPilot", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = ZpColors.TextPrimary)
+            Text(AppVersion.fullLabel(), fontSize = 12.sp, color = ZpColors.TextSecondary)
+            Text("Thiết lập lần đầu", fontSize = 14.sp, color = ZpColors.TextSecondary)
             Spacer(Modifier.height(32.dp))
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 listOf(1, 2, 3).forEach { s ->
                     Box(Modifier.size(32.dp).clip(CircleShape)
-                        .background(if (s <= step) zaloBlue else Color(0xFFE0E0E0)),
+                        .background(if (s <= step) ZpColors.AccentBlue else ZpColors.BgSecondary),
                         contentAlignment = Alignment.Center) {
                         Text("$s", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     }
                     if (s < 3) Box(Modifier.width(32.dp).height(2.dp)
-                        .background(if (s < step) zaloBlue else Color(0xFFE0E0E0)))
+                        .background(if (s < step) ZpColors.AccentBlue else ZpColors.BgSecondary))
                 }
             }
 
@@ -152,64 +163,38 @@ class MainActivity : ComponentActivity() {
 
             when (step) {
                 1 -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (!acc) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text(
-                                "Nếu vừa thấy \"ZaloPilot tiếp tục dừng\" — Android tự TẮT Trợ năng. " +
-                                    "Màn \"Thông tin ứng dụng → Quyền\" KHÔNG phải chỗ bật Trợ năng.",
-                                modifier = Modifier.padding(14.dp),
-                                fontSize = 12.sp,
-                                color = Color(0xFFC62828),
-                                lineHeight = 18.sp
-                            )
-                        }
-                    }
                     StepCard(
-                        "♿",
-                        "Bật Trợ năng (Accessibility)",
-                        "Samsung:\n" +
-                            "1. Cài đặt → tìm \"Hỗ trợ tiếp cận\"\n" +
-                            "2. Ứng dụng đã cài → ZaloPilot → BẬT\n\n" +
-                            "Nếu không bật được: Thông tin ứng dụng ZaloPilot → ⋮ → " +
-                            "\"Cho phép cài đặt hạn chế\" → quay lại bật Trợ năng.",
-                        "Mở cài đặt Trợ năng ZaloPilot",
+                        Icons.Outlined.AccessibilityNew,
+                        "Bật Trợ năng",
+                        "Mở màn cài đặt → bật ZaloPilot.",
+                        "Mở Trợ năng",
                         acc
                     ) {
                         AccessibilityHelper.openAccessibilitySettings(this@MainActivity)
                     }
-                    if (!acc && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedButton(
-                            onClick = { AccessibilityHelper.openAppDetailsSettings(this@MainActivity) },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Text("Thông tin ứng dụng (cài đặt hạn chế)", fontSize = 13.sp)
-                        }
-                    }
                 }
-                2 -> StepCard("🪟", "Hiển thị trên app khác",
-                    "Để nút ZP nổi lên trên màn hình Zalo.\n\nBấm nút bên dưới → tìm ZaloPilot → bật lên:",
-                    "Mở Cài đặt", overlay) {
+                2 -> StepCard(
+                    Icons.Outlined.Layers,
+                    "Hiển thị trên app khác",
+                    "Cho phép nút ZP nổi trên Zalo.",
+                    "Mở cài đặt",
+                    overlay
+                ) {
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
                 }
                 3 -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("✅", fontSize = 48.sp)
-                    Spacer(Modifier.height(16.dp))
-                    Text("Thiết lập hoàn tất!", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF27AE60))
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Trang chủ có BẮT ĐẦU/DỪNG và nút nổi ZP (bật khi cần).",
-                        fontSize = 14.sp, color = Color.Gray, textAlign = TextAlign.Center
+                    Icon(
+                        Icons.Outlined.CheckCircle,
+                        contentDescription = null,
+                        modifier = Modifier.size(56.dp),
+                        tint = ZpColors.ColorGreen
                     )
+                    Spacer(Modifier.height(16.dp))
+                    Text("Xong!", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = ZpColors.ColorGreen)
                     Spacer(Modifier.height(24.dp))
                     Button(onClick = {
                         recreate()
-                    }, colors = ButtonDefaults.buttonColors(containerColor = zaloBlue),
+                    }, colors = ButtonDefaults.buttonColors(containerColor = ZpColors.AccentBlue),
                         modifier = Modifier.fillMaxWidth().height(50.dp),
                         shape = RoundedCornerShape(12.dp)) {
                         Text("Vào app chính", fontSize = 15.sp, fontWeight = FontWeight.W500)
@@ -220,29 +205,41 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    fun StepCard(icon: String, title: String, desc: String, btnText: String, done: Boolean, onClick: () -> Unit) {
-        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-            Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(icon, fontSize = 40.sp)
+    fun StepCard(
+        icon: ImageVector,
+        title: String,
+        desc: String,
+        btnText: String,
+        done: Boolean,
+        onClick: () -> Unit
+    ) {
+        IosCard(contentPadding = PaddingValues(24.dp)) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(icon, contentDescription = null, modifier = Modifier.size(40.dp), tint = ZpColors.AccentBlue)
                 Spacer(Modifier.height(12.dp))
-                Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = ZpColors.TextPrimary)
                 Spacer(Modifier.height(8.dp))
-                Text(desc, fontSize = 13.sp, color = Color.Gray, textAlign = TextAlign.Center, lineHeight = 20.sp)
+                Text(desc, fontSize = 13.sp, color = ZpColors.TextSecondary, textAlign = TextAlign.Center, lineHeight = 20.sp)
                 Spacer(Modifier.height(20.dp))
                 if (done) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(Modifier.size(20.dp).clip(CircleShape).background(Color(0xFF27AE60)), contentAlignment = Alignment.Center) {
+                        Box(
+                            Modifier.size(20.dp).clip(CircleShape).background(ZpColors.ColorGreen),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Text("✓", color = Color.White, fontSize = 12.sp)
                         }
-                        Text("Đã cấp quyền ✓", color = Color(0xFF27AE60), fontWeight = FontWeight.W500)
+                        Text("Đã cấp quyền", color = ZpColors.ColorGreen, fontWeight = FontWeight.W500)
                     }
                 } else {
-                    Button(onClick = onClick, colors = ButtonDefaults.buttonColors(containerColor = zaloBlue),
-                        modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(10.dp)) {
+                    Button(
+                        onClick = onClick,
+                        colors = ButtonDefaults.buttonColors(containerColor = ZpColors.AccentBlue),
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
                         Text(btnText)
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Text("Sau khi bật xong, app tự chuyển bước tiếp", fontSize = 11.sp, color = Color.Gray, textAlign = TextAlign.Center)
                 }
             }
         }
@@ -312,21 +309,38 @@ class MainActivity : ComponentActivity() {
             onDispose { unregisterReceiver(receiver) }
         }
 
-        Scaffold(bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                listOf("Trang chủ", "Cài đặt", "Nhật ký", "Script", "UI").forEachIndexed { i, label ->
+        Scaffold(
+            containerColor = ZpColors.BgPage,
+            bottomBar = {
+            NavigationBar(containerColor = ZpColors.BgCard) {
+                val tabIcons = listOf(
+                    Icons.Outlined.Home,
+                    Icons.Outlined.Settings,
+                    Icons.Outlined.ChatBubbleOutline,
+                    Icons.Outlined.Article,
+                    Icons.Outlined.Code,
+                    Icons.Outlined.AccountTree
+                )
+                listOf("Trang chủ", "Cài đặt", "Bình luận", "Nhật ký", "Script", "UI").forEachIndexed { i, label ->
                     NavigationBarItem(
                         selected = selectedTab == i,
                         onClick = {
                             selectedTab = i
-                            if (i == 2) {
+                            if (i == 3) {
                                 logsSlim = logger.readSlimLogs()
                                 logsVerbose = logger.readVerboseLogs()
                                 logsError = logger.readErrorLogs()
                             }
                         },
-                        icon = { Text(listOf("🏠", "⚙️", "📋", "📜", "🌳")[i], fontSize = 18.sp) },
-                        label = { Text(label, fontSize = 10.sp) }
+                        icon = { Icon(tabIcons[i], contentDescription = label) },
+                        label = { Text(label, fontSize = 10.sp) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = ZpColors.AccentBlue,
+                            selectedTextColor = ZpColors.AccentBlue,
+                            unselectedIconColor = ZpColors.TextSecondary,
+                            unselectedTextColor = ZpColors.TextSecondary,
+                            indicatorColor = ZpColors.AccentBlue.copy(alpha = 0.12f)
+                        )
                     )
                 }
             }
@@ -339,10 +353,19 @@ class MainActivity : ComponentActivity() {
                         settings,
                         floatingOverlayOn,
                         accessibilityOn,
-                        accessibilityConnected
+                        accessibilityConnected,
+                        onOpenSettings = { selectedTab = 1 },
+                        onOpenComments = { selectedTab = 2 }
                     )
-                    1 -> SettingsScreen(settings) { settings = it; settingsManager.save(it) }
-                    2 -> LogScreen(
+                    1 -> SettingsScreen(
+                        settings,
+                        onSave = { settings = it; settingsManager.save(it) }
+                    )
+                    2 -> CommentScreen(
+                        settings,
+                        onSave = { settings = it; settingsManager.save(it) }
+                    )
+                    3 -> LogScreen(
                         logsSlim = logsSlim,
                         logsVerbose = logsVerbose,
                         logsError = logsError,
@@ -365,8 +388,8 @@ class MainActivity : ComponentActivity() {
                             Toast.makeText(this@MainActivity, "Đã xóa log & file tạm", Toast.LENGTH_SHORT).show()
                         }
                     )
-                    3 -> ScriptScreen(scriptStore = scriptStore, zaloBlue = zaloBlue)
-                    4 -> UiTreeScreen()
+                    4 -> ScriptScreen(scriptStore = scriptStore)
+                    5 -> UiTreeScreen()
                 }
             }
         }
@@ -381,250 +404,288 @@ class MainActivity : ComponentActivity() {
         settings: LikeSettings,
         floatingOverlayOn: Boolean,
         accessibilityOn: Boolean,
-        accessibilityConnected: Boolean
+        accessibilityConnected: Boolean,
+        onOpenSettings: () -> Unit,
+        onOpenComments: () -> Unit
     ) {
-        LazyColumn(modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)),
-            contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        var autoStart by remember { mutableStateOf(settingsManager.isAutoStart()) }
+        var ecoMode by remember(settings) { mutableStateOf(settings.ecoMode) }
+        val runningMode = remember(settings.likeModeStr) {
+            runCatching { LikeMode.valueOf(settings.likeModeStr) }.getOrDefault(LikeMode.FEED)
+        }
+        val pct = if (settings.dailyLimit <= 0) 0f
+        else (progress.todayLikeCount.toFloat() / settings.dailyLimit).coerceIn(0f, 1f)
+        val pctLabel = if (settings.dailyLimit <= 0) "—" else "${(pct * 100).toInt()}%"
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().background(ZpColors.BgPage),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
             if (!accessibilityOn || !accessibilityConnected) {
                 item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Column(Modifier.padding(16.dp)) {
+                    IosCard {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
                             Text(
-                                if (!accessibilityOn) "⚠️ Chưa bật Trợ năng ZaloPilot"
-                                else "⚠️ Trợ năng đã bật nhưng chưa kết nối",
-                                fontSize = 15.sp,
+                                if (!accessibilityOn) "Chưa bật Trợ năng" else "Chưa kết nối",
+                                fontSize = 14.sp,
                                 fontWeight = FontWeight.W600,
-                                color = Color(0xFFE65100)
+                                color = ZpColors.ColorOrange,
+                                modifier = Modifier.weight(1f)
                             )
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                if (!accessibilityOn) {
-                                    "Bot không chạy được. Bấm nút bên dưới — app mở đúng màn cài đặt → bật ZaloPilot."
-                                } else {
-                                    "Mở Zalo (Nhật ký hoặc Danh bạ) vài giây, quay lại app. Hoặc tắt/bật lại ZaloPilot trong Trợ năng."
-                                },
-                                fontSize = 12.sp,
-                                color = Color(0xFF5D4037),
-                                lineHeight = 18.sp
-                            )
-                            Spacer(Modifier.height(12.dp))
-                            Button(
-                                onClick = { AccessibilityHelper.openAccessibilitySettings(this@MainActivity) },
-                                modifier = Modifier.fillMaxWidth().height(46.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100)),
-                                shape = RoundedCornerShape(10.dp)
+                            TextButton(
+                                onClick = { AccessibilityHelper.openAccessibilitySettings(this@MainActivity) }
                             ) {
-                                Text(
-                                    if (!accessibilityOn) "♿  Mở cài đặt Trợ năng (ZaloPilot)"
-                                    else "♿  Mở lại cài đặt Trợ năng",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.W600
-                                )
+                                Text("Mở", fontWeight = FontWeight.W600, color = ZpColors.AccentBlue)
                             }
                         }
                     }
                 }
             }
             item {
-                Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(zaloBlue).padding(20.dp)) {
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("ZaloPilot", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
-                                Text("Auto Like Zalo", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
-                                Text(
-                                    AppVersion.fullLabel(),
-                                    color = Color.White.copy(alpha = 0.65f),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                            Surface(shape = RoundedCornerShape(99.dp), color = if (isRunning) Color(0xFF27AE60) else Color.White.copy(alpha = 0.2f)) {
-                                Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Box(Modifier.size(7.dp).clip(CircleShape).background(Color.White))
-                                    Text(if (isRunning) "Đang chạy" else "Đã dừng", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.W500)
-                                }
-                            }
-                        }
-                        Spacer(Modifier.height(14.dp))
-                        val runningMode = remember(settings.likeModeStr) {
-                            runCatching { LikeMode.valueOf(settings.likeModeStr) }
-                                .getOrDefault(LikeMode.FEED)
-                        }
-                        if (isRunning) {
-                            Text(
-                                "Đang chạy: ${if (runningMode == LikeMode.VISIT) "Like danh bạ" else "Like Nhật ký"}",
-                                color = Color.White.copy(alpha = 0.9f),
-                                fontSize = 13.sp
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 12.dp, start = 4.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("ZaloPilot", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = ZpColors.TextPrimary)
+                        Text("Auto Like Zalo", fontSize = 15.sp, color = ZpColors.TextSecondary)
+                    }
+                    Surface(shape = RoundedCornerShape(99.dp), color = ZpColors.BgSecondary) {
+                        Row(
+                            Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                Modifier.size(7.dp).clip(CircleShape)
+                                    .background(if (isRunning) ZpColors.ColorGreen else ZpColors.ColorRed)
                             )
-                            Spacer(Modifier.height(10.dp))
-                            Button(
-                                onClick = { AccessibilityHelper.requestStopAutoLike(this@MainActivity) },
-                                modifier = Modifier.fillMaxWidth().height(52.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE24B4A)),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("■  DỪNG", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.W600)
-                            }
-                        } else {
                             Text(
-                                "Chạm để like — tham số trong tab Cài đặt",
-                                color = Color.White.copy(alpha = 0.85f),
-                                fontSize = 12.sp
+                                if (isRunning) "Đang chạy" else "Đã dừng",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.W600,
+                                color = ZpColors.TextPrimary
                             )
-                            Spacer(Modifier.height(10.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Button(
-                                    onClick = {
+                        }
+                    }
+                }
+            }
+            item {
+                IosCard {
+                    if (isRunning) {
+                        Text(
+                            "Đang chạy: ${if (runningMode == LikeMode.VISIT) "Like danh bạ" else "Like Nhật ký"}",
+                            fontSize = 13.sp,
+                            color = ZpColors.TextSecondary
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Box(
+                                Modifier.weight(1f).height(52.dp).clip(RoundedCornerShape(14.dp))
+                                    .background(ZpColors.AccentBlue).clickable {
                                         settingsManager.setLikeMode(LikeMode.FEED)
                                         AccessibilityHelper.requestStartAutoLike(this@MainActivity, LikeMode.FEED)
                                     },
-                                    modifier = Modifier.weight(1f).height(52.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF27AE60)),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text(
-                                        "▶ Like Nhật ký",
-                                        color = Color.White,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.W600,
-                                        textAlign = TextAlign.Center
-                                    )
-                                }
-                                Button(
-                                    onClick = {
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "▶  Like nhật ký",
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.W600,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                            Box(
+                                Modifier.weight(1f).height(52.dp).clip(RoundedCornerShape(14.dp))
+                                    .background(ZpColors.AccentPurple).clickable {
                                         settingsManager.setLikeMode(LikeMode.VISIT)
                                         AccessibilityHelper.requestStartAutoLike(this@MainActivity, LikeMode.VISIT)
                                     },
-                                    modifier = Modifier.weight(1f).height(52.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8E44AD)),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text(
-                                        "▶ Like danh bạ",
-                                        color = Color.White,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.W600,
-                                        textAlign = TextAlign.Center
-                                    )
-                                }
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "▶  Like danh sách",
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.W600,
+                                    textAlign = TextAlign.Center
+                                )
                             }
                         }
                         Spacer(Modifier.height(10.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Button(
-                                onClick = {
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(
+                            Modifier.weight(1f).height(44.dp).clip(RoundedCornerShape(14.dp))
+                                .background(ZpColors.BgSecondary).clickable {
                                     val intent = packageManager.getLaunchIntentForPackage("com.zing.zalo")
                                     if (intent == null) {
-                                        Toast.makeText(this@MainActivity, "⚠️ Chưa cài Zalo", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(this@MainActivity, "Chưa cài Zalo", Toast.LENGTH_SHORT).show()
                                     } else {
                                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                         startActivity(intent)
                                     }
                                 },
-                                modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f)),
-                                shape = RoundedCornerShape(10.dp),
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
-                            ) {
-                                Text("Mở Zalo", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.W500)
-                            }
-                            Button(
-                                onClick = {
-                                    if (floatingOverlayOn) {
-                                        stopFloatingOverlay()
-                                    } else {
-                                        startFloatingOverlay()
-                                    }
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("Mở Zalo", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = ZpColors.TextPrimary)
+                        }
+                        Box(
+                            Modifier.weight(1f).height(44.dp).clip(RoundedCornerShape(14.dp))
+                                .background(ZpColors.BgSecondary).clickable {
+                                    if (floatingOverlayOn) stopFloatingOverlay() else startFloatingOverlay()
                                 },
-                                modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (floatingOverlayOn) {
-                                        Color(0xFFE24B4A).copy(alpha = 0.35f)
-                                    } else {
-                                        Color.White.copy(alpha = 0.18f)
-                                    }
-                                ),
-                                shape = RoundedCornerShape(10.dp),
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
-                            ) {
-                                Text(
-                                    if (floatingOverlayOn) "Tắt nút nổi" else "Bật nút nổi",
-                                    color = Color.White,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.W500
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("TIẾN ĐỘ HÔM NAY", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                        Spacer(Modifier.height(10.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            StatCard("${progress.todayLikeCount}", "Đã like", zaloBlue, Modifier.weight(1f))
-                            StatCard("${progress.todayPostsHandledCount}", "Đã duyệt", Color(0xFF555555), Modifier.weight(1f))
-                            StatCard("${settings.dailyLimit}", "Giới hạn", Color(0xFF444444), Modifier.weight(1f))
-                        }
-                        Spacer(Modifier.height(10.dp))
-                        val pct = if (settings.dailyLimit <= 0) 0f
-                        else (progress.todayLikeCount.toFloat() / settings.dailyLimit).coerceIn(0f, 1f)
-                        LinearProgressIndicator(progress = { pct },
-                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(99.dp)),
-                            color = zaloBlue, trackColor = Color(0xFFE0E0E0))
-                        Spacer(Modifier.height(4.dp))
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            contentAlignment = Alignment.Center
+                        ) {
                             Text(
-                                if (settings.dailyLimit <= 0) "${progress.todayLikeCount} / ∞"
-                                else "${progress.todayLikeCount} / ${settings.dailyLimit}",
-                                fontSize = 12.sp,
-                                color = Color.Gray
+                                if (floatingOverlayOn) "Tắt nút nổi" else "Bật nút nổi",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = ZpColors.TextPrimary
                             )
-                            Text(if (settings.dailyLimit <= 0) "—" else "${(pct * 100).toInt()}%", fontSize = 12.sp, color = Color.Gray)
                         }
                     }
                 }
             }
+            if (isRunning) {
+                item {
+                    Box(
+                        Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(14.dp))
+                            .background(ZpColors.ColorRed).clickable {
+                                AccessibilityHelper.requestStopAutoLike(this@MainActivity)
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("■  Dừng lại", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.W600)
+                    }
+                }
+            }
+            item { IosSectionLabel("TIẾN ĐỘ HÔM NAY") }
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("TỰ CHẠY", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                        Spacer(Modifier.height(8.dp))
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(if (settingsManager.isAutoStart()) "🤖 Bật" else "👆 Tắt", fontSize = 14.sp, fontWeight = FontWeight.W500)
-                                Text(
-                                    "Khi bật: mở Zalo sẽ chạy theo lần chọn Nhật ký/Danh bạ gần nhất",
-                                    fontSize = 12.sp,
-                                    color = Color.Gray
-                                )
-                            }
-                            Switch(checked = settingsManager.isAutoStart(),
-                                onCheckedChange = { settingsManager.setAutoStart(it) },
-                                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue))
-                        }
+                IosCard {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        StatCard(
+                            "${progress.todayLikeCount}",
+                            "Đã like",
+                            ZpColors.AccentBlue,
+                            Modifier.weight(1f)
+                        )
+                        StatCard(
+                            "${progress.todayPostsHandledCount}",
+                            "Đã duyệt",
+                            ZpColors.TextPrimary,
+                            Modifier.weight(1f)
+                        )
+                        StatCard(
+                            "${settings.dailyLimit}",
+                            "Giới hạn",
+                            ZpColors.TextPrimary,
+                            Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            if (settings.dailyLimit <= 0) "${progress.todayLikeCount}"
+                            else "${progress.todayLikeCount} / ${settings.dailyLimit}",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = ZpColors.TextPrimary
+                        )
+                        LinearProgressIndicator(
+                            progress = { pct },
+                            modifier = Modifier.weight(1f).height(5.dp).clip(RoundedCornerShape(99.dp)),
+                            color = ZpColors.AccentBlue,
+                            trackColor = ZpColors.BgSecondary
+                        )
+                        Text(pctLabel, fontSize = 13.sp, color = ZpColors.TextSecondary)
                     }
                 }
             }
             item {
-                // Nút "Bật nút nổi" đã đưa lên header cho dễ thao tác.
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    TextButton(onClick = onOpenSettings) {
+                        Text("Cài đặt", color = ZpColors.AccentBlue, fontSize = 14.sp)
+                    }
+                    TextButton(onClick = onOpenComments) {
+                        Text("Bình luận", color = ZpColors.AccentBlue, fontSize = 14.sp)
+                    }
+                }
+            }
+            item { IosSectionLabel("TỰ CHẠY") }
+            item {
+                IosCard(contentPadding = PaddingValues(0.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Tự động chạy lại", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = ZpColors.TextPrimary)
+                            Text(
+                                "Tự bật bot khi mở Zalo (nếu chưa DỪNG)",
+                                fontSize = 12.sp,
+                                color = ZpColors.TextSecondary
+                            )
+                        }
+                        Switch(
+                            checked = autoStart,
+                            onCheckedChange = {
+                                autoStart = it
+                                settingsManager.setAutoStart(it)
+                            },
+                            colors = iosSwitchColors
+                        )
+                    }
+                    HorizontalDivider(color = ZpColors.Divider, thickness = 0.5.dp)
+                    Row(
+                        Modifier.fillMaxWidth().padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Ngủ trưa", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = ZpColors.TextPrimary)
+                            Text(
+                                "Tiết kiệm pin — poll chậm, delay dài hơn",
+                                fontSize = 12.sp,
+                                color = ZpColors.TextSecondary
+                            )
+                        }
+                        Switch(
+                            checked = ecoMode,
+                            onCheckedChange = {
+                                ecoMode = it
+                                val updated = settings.copy(ecoMode = it)
+                                settingsManager.save(updated)
+                            },
+                            colors = iosSwitchColors
+                        )
+                    }
+                }
             }
         }
     }
 
     @Composable
     fun StatCard(value: String, label: String, color: Color, modifier: Modifier = Modifier) {
-        Box(modifier.clip(RoundedCornerShape(10.dp)).background(Color(0xFFF5F5F5)).padding(12.dp), contentAlignment = Alignment.Center) {
+        Box(
+            modifier.clip(RoundedCornerShape(12.dp)).background(ZpColors.BgSecondary).padding(12.dp),
+            contentAlignment = Alignment.Center
+        ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(value, fontSize = 24.sp, fontWeight = FontWeight.W500, color = color)
-                Text(label, fontSize = 12.sp, color = Color.Gray)
+                Text(value, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = color)
+                Text(label, fontSize = 12.sp, color = ZpColors.TextSecondary)
             }
         }
     }
@@ -633,243 +694,180 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun SettingsScreen(settings: LikeSettings, onSave: (LikeSettings) -> Unit) {
-        var dailyLimit by remember { mutableIntStateOf(settings.dailyLimit) }
+        var dailyLimit by remember(settings) { mutableIntStateOf(settings.dailyLimit) }
         var feedMode by remember { mutableStateOf(settingsManager.getFeedMode()) }
-        var delayMin by remember { mutableStateOf((settings.delayMinMs / 1000).toString()) }
-        var delayMax by remember { mutableStateOf((settings.delayMaxMs / 1000).toString()) }
-        var ecoMode by remember { mutableStateOf(settings.ecoMode) }
-        var requireCharging by remember { mutableStateOf(settings.requireCharging) }
-        var lowBatteryPauseEnabled by remember { mutableStateOf(settings.lowBatteryPauseEnabled) }
-        var lowBatteryThreshold by remember { mutableIntStateOf(settings.lowBatteryThreshold) }
-        var pauseWhenZaloAway by remember { mutableStateOf(settings.pauseWhenZaloAway) }
-        var visitLikeCount by remember { mutableIntStateOf(settings.visitLikeCount) }
-        var visitCommentCount by remember { mutableIntStateOf(settings.visitCommentCount) }
-        var feedCommentCount by remember { mutableIntStateOf(settings.feedCommentCount) }
-        var visitMaxProfiles by remember { mutableIntStateOf(settings.visitMaxProfiles) }
-        var visitActionMode by remember {
-            mutableStateOf(
-                try { VisitActionMode.valueOf(settings.visitActionMode) } catch (e: Exception) {
-                    VisitActionMode.LIKE_ONLY
-                }
-            )
-        }
-        var visitCommentsText by remember {
-            mutableStateOf(settings.visitCommentList.joinToString("\n"))
-        }
+        var delayMin by remember(settings) { mutableStateOf((settings.delayMinMs / 1000).toString()) }
+        var delayMax by remember(settings) { mutableStateOf((settings.delayMaxMs / 1000).toString()) }
+        var ecoMode by remember(settings) { mutableStateOf(settings.ecoMode) }
+        var requireCharging by remember(settings) { mutableStateOf(settings.requireCharging) }
+        var lowBatteryPauseEnabled by remember(settings) { mutableStateOf(settings.lowBatteryPauseEnabled) }
+        var lowBatteryThreshold by remember(settings) { mutableIntStateOf(settings.lowBatteryThreshold) }
+        var pauseWhenZaloAway by remember(settings) { mutableStateOf(settings.pauseWhenZaloAway) }
+        var visitLikeCount by remember(settings) { mutableIntStateOf(settings.visitLikeCount) }
+        var visitMaxProfiles by remember(settings) { mutableIntStateOf(settings.visitMaxProfiles) }
 
-        LazyColumn(modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)),
-            contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().background(ZpColors.BgPage),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item { IosScreenTitle("Cài đặt", AppVersion.fullLabel()) }
+            item { IosSectionLabel("GIỚI HẠN LIKE") }
             item {
-                Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(zaloBlue).padding(20.dp)) {
-                    Column {
-                        Text("Cài đặt", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
-                        Text("Tùy chỉnh tốc độ like", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
-                        Text(
-                            AppVersion.fullLabel(),
-                            color = Color.White.copy(alpha = 0.65f),
-                            fontSize = 11.sp
-                        )
-                    }
+                IosCard {
+                    Text("Tối đa / ngày: $dailyLimit bài", fontSize = 13.sp, color = ZpColors.TextPrimary)
+                    Text("Kéo từ 20 tới 3000 — tùy thích", fontSize = 11.sp, color = ZpColors.TextSecondary)
+                    Spacer(Modifier.height(8.dp))
+                    Slider(
+                        value = dailyLimit.toFloat(),
+                        onValueChange = { dailyLimit = it.toInt() },
+                        valueRange = 20f..3000f,
+                        colors = iosSliderColors
+                    )
                 }
             }
+            item { IosSectionLabel("TỐC ĐỘ LIKE") }
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("GIỚI HẠN LIKE", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                        Spacer(Modifier.height(8.dp))
-                        Text("Tối đa / ngày: $dailyLimit bài", fontSize = 13.sp)
-                        Text("Kéo từ 20 tới 3000 — tùy thích", fontSize = 11.sp, color = Color.Gray)
-                        Slider(value = dailyLimit.toFloat(), onValueChange = { dailyLimit = it.toInt() },
-                            valueRange = 20f..3000f, colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue))
-                    }
-                }
-            }
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("TỐC ĐỘ LIKE", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                IosCard {
+                        Text("Delay giữa các lần like", fontSize = 12.sp, color = ZpColors.TextSecondary)
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Column(Modifier.weight(1f)) {
-                                Text("Delay tối thiểu (giây)", fontSize = 12.sp, color = Color.Gray)
+                                Text("Delay tối thiểu (giây)", fontSize = 12.sp, color = ZpColors.TextSecondary)
                                 OutlinedTextField(value = delayMin, onValueChange = { delayMin = it }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                             }
                             Column(Modifier.weight(1f)) {
-                                Text("Delay tối đa (giây)", fontSize = 12.sp, color = Color.Gray)
+                                Text("Delay tối đa (giây)", fontSize = 12.sp, color = ZpColors.TextSecondary)
                                 OutlinedTextField(value = delayMax, onValueChange = { delayMax = it }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                             }
                         }
-                    }
                 }
             }
+            item { IosSectionLabel("TIẾT KIỆM PIN") }
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
+                IosCard {
                     Row(
-                        Modifier.padding(16.dp),
+                        Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text("TIẾT KIỆM PIN (NGỦ TRƯA)", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                            Spacer(Modifier.height(4.dp))
+                            Text("Ngủ trưa", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = ZpColors.TextPrimary)
                             Text(
-                                "Poll/scan chậm hơn, delay like dài hơn (~×1.5), màn tắt ít dừng nhầm. Mượt, ít nóng hơn; like chậm hơn. Nên bật khi cắm sạc hoặc để máy nghỉ.",
+                                "Poll chậm, delay dài hơn — ít nóng pin",
                                 fontSize = 12.sp,
-                                color = Color.Gray
+                                color = ZpColors.TextSecondary
                             )
                         }
                         Switch(
                             checked = ecoMode,
                             onCheckedChange = { ecoMode = it },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
+                            colors = iosSwitchColors
                         )
                     }
                 }
             }
+            item { IosSectionLabel("PIN & SẠC") }
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("PIN & SẠC", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                        Spacer(Modifier.height(10.dp))
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Chỉ chạy khi cắm sạc", fontSize = 13.sp, fontWeight = FontWeight.W500)
-                                Text(
-                                    "Rút sạc → bot tạm dừng. Cắm lại → tự chạy tiếp.",
-                                    fontSize = 11.sp,
-                                    color = Color.Gray
-                                )
-                            }
-                            Switch(
-                                checked = requireCharging,
-                                onCheckedChange = { requireCharging = it },
-                                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
-                            )
+                IosCard(contentPadding = PaddingValues(0.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Chỉ chạy khi cắm sạc", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = ZpColors.TextPrimary)
+                            Text("Rút sạc → tạm dừng", fontSize = 12.sp, color = ZpColors.TextSecondary)
                         }
-
-                        Spacer(Modifier.height(12.dp))
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Pause khi pin thấp", fontSize = 13.sp, fontWeight = FontWeight.W500)
-                                Text(
-                                    "Pin xuống dưới ngưỡng → tạm dừng. Sạc lên/cắm sạc → chạy lại.",
-                                    fontSize = 11.sp,
-                                    color = Color.Gray
-                                )
-                            }
-                            Switch(
-                                checked = lowBatteryPauseEnabled,
-                                onCheckedChange = { lowBatteryPauseEnabled = it },
-                                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
-                            )
+                        Switch(
+                            checked = requireCharging,
+                            onCheckedChange = { requireCharging = it },
+                            colors = iosSwitchColors
+                        )
+                    }
+                    HorizontalDivider(color = ZpColors.Divider, thickness = 0.5.dp)
+                    Row(
+                        Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Pause khi pin thấp", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = ZpColors.TextPrimary)
+                            Text("Pin dưới ngưỡng → tạm dừng", fontSize = 12.sp, color = ZpColors.TextSecondary)
                         }
-
-                        if (lowBatteryPauseEnabled) {
-                            Spacer(Modifier.height(6.dp))
-                            Text("Ngưỡng pin: $lowBatteryThreshold%", fontSize = 12.sp, color = Color.Gray)
+                        Switch(
+                            checked = lowBatteryPauseEnabled,
+                            onCheckedChange = { lowBatteryPauseEnabled = it },
+                            colors = iosSwitchColors
+                        )
+                    }
+                    if (lowBatteryPauseEnabled) {
+                        HorizontalDivider(color = ZpColors.Divider, thickness = 0.5.dp)
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            Text("Ngưỡng pin: $lowBatteryThreshold%", fontSize = 12.sp, color = ZpColors.TextSecondary)
                             Slider(
                                 value = lowBatteryThreshold.toFloat(),
                                 onValueChange = { lowBatteryThreshold = it.toInt() },
                                 valueRange = 5f..50f,
-                                colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue)
-                            )
-                        }
-
-                        Spacer(Modifier.height(12.dp))
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Tiết kiệm khi rời Zalo", fontSize = 13.sp, fontWeight = FontWeight.W500)
-                                Text(
-                                    "Mở app khác → bot chờ. Mở Zalo lại → tự chạy tiếp (không cần Start lại).",
-                                    fontSize = 11.sp,
-                                    color = Color.Gray
-                                )
-                            }
-                            Switch(
-                                checked = pauseWhenZaloAway,
-                                onCheckedChange = { pauseWhenZaloAway = it },
-                                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = zaloBlue)
+                                colors = iosSliderColors
                             )
                         }
                     }
+                    HorizontalDivider(color = ZpColors.Divider, thickness = 0.5.dp)
+                    Row(
+                        Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Tiết kiệm khi rời Zalo", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = ZpColors.TextPrimary)
+                            Text("Mở Zalo lại → tự chạy tiếp", fontSize = 12.sp, color = ZpColors.TextSecondary)
+                        }
+                        Switch(
+                            checked = pauseWhenZaloAway,
+                            onCheckedChange = { pauseWhenZaloAway = it },
+                            colors = iosSwitchColors
+                        )
+                    }
                 }
             }
+            item { IosSectionLabel("LIKE DANH BẠ") }
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("LIKE DANH BẠ (VISIT)", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
+                IosCard {
                         Text(
-                            "Bấm Like danh bạ ở Trang chủ để chạy — chỉnh số liệu bên dưới",
+                            "Bấm Like danh sách ở Trang chủ",
                             fontSize = 12.sp,
-                            color = Color.Gray
+                            color = ZpColors.TextSecondary
                         )
                         Spacer(Modifier.height(8.dp))
-                        Text("Like mỗi profile: $visitLikeCount", fontSize = 13.sp)
+                        Text("Like mỗi profile: $visitLikeCount", fontSize = 13.sp, color = ZpColors.TextPrimary)
                         Slider(
                             value = visitLikeCount.toFloat(),
                             onValueChange = { visitLikeCount = it.toInt() },
                             valueRange = 0f..10f,
                             steps = 9,
-                            colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue)
-                        )
-                        Text("Comment mỗi profile: $visitCommentCount", fontSize = 13.sp)
-                        Slider(
-                            value = visitCommentCount.toFloat(),
-                            onValueChange = { visitCommentCount = it.toInt() },
-                            valueRange = 0f..5f,
-                            steps = 5,
-                            colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue)
+                            colors = iosSliderColors
                         )
                         Text("Profile tối đa / phiên: $visitMaxProfiles", fontSize = 13.sp)
                         Slider(
                             value = visitMaxProfiles.toFloat(),
                             onValueChange = { visitMaxProfiles = it.toInt() },
                             valueRange = 5f..200f,
-                            colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue)
+                            colors = iosSliderColors
                         )
-                        listOf(
-                            VisitActionMode.LIKE_ONLY to "Chỉ like",
-                            VisitActionMode.COMMENT_ONLY to "Chỉ comment",
-                            VisitActionMode.MIX to "Mix"
-                        ).forEach { (mode, label) ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                RadioButton(
-                                    selected = visitActionMode == mode,
-                                    onClick = { visitActionMode = mode },
-                                    colors = RadioButtonDefaults.colors(selectedColor = zaloBlue)
-                                )
-                                Text(label, fontSize = 13.sp)
-                            }
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Text("Nội dung bình luận (mỗi dòng 1 câu)", fontSize = 12.sp, color = Color.Gray)
-                        OutlinedTextField(
-                            value = visitCommentsText,
-                            onValueChange = { visitCommentsText = it },
-                            modifier = Modifier.fillMaxWidth().height(120.dp),
-                            placeholder = { Text("👍\nHay quá!") }
+                        Text(
+                            "Comment & câu mẫu → tab Bình luận",
+                            fontSize = 12.sp,
+                            color = ZpColors.TextSecondary
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = {
-                                visitCommentsText = "👍\n❤️\nHay quá!\nTuyệt vời!"
-                            }) { Text("Khôi phục mặc định") }
-                            TextButton(onClick = {
-                                progressManager.resetVisitIndex()
-                                Toast.makeText(this@MainActivity, "Đã reset visitIndex", Toast.LENGTH_SHORT).show()
-                            }) { Text("Reset visitIndex") }
-                        }
-                    }
+                        Spacer(Modifier.height(4.dp))
+                        TextButton(onClick = {
+                            progressManager.resetVisitIndex()
+                            Toast.makeText(this@MainActivity, "Đã reset visitIndex", Toast.LENGTH_SHORT).show()
+                        }) { Text("Reset visitIndex", color = ZpColors.AccentBlue) }
                 }
             }
+            item { IosSectionLabel("CHẾ ĐỘ FEED") }
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("CHẾ ĐỘ FEED", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.W500)
-                        Spacer(Modifier.height(8.dp))
-                        Text("Cách bot cuộn khi không tìm thấy like", fontSize = 12.sp, color = Color.Gray)
+                IosCard {
+                        Text("Cách bot cuộn khi không tìm thấy like", fontSize = 12.sp, color = ZpColors.TextSecondary)
                         Spacer(Modifier.height(10.dp))
                         listOf(
                             FeedMode.SCROLL to "Cuộn tự động",
@@ -880,38 +878,24 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (feedMode == mode) zaloBlue.copy(alpha = 0.1f) else Color.Transparent)
+                                    .background(if (feedMode == mode) ZpColors.AccentBlue.copy(alpha = 0.1f) else Color.Transparent)
                                     .padding(vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 RadioButton(
                                     selected = feedMode == mode,
                                     onClick = { feedMode = mode },
-                                    colors = RadioButtonDefaults.colors(selectedColor = zaloBlue)
+                                    colors = RadioButtonDefaults.colors(selectedColor = ZpColors.AccentBlue)
                                 )
                                 Text(label, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp))
                             }
                         }
-                        Spacer(Modifier.height(12.dp))
                         Text(
-                            "Comment sau mỗi lần like (0 = chỉ like). Dùng danh sách câu ở mục Like danh bạ.",
-                            fontSize = 11.sp,
-                            color = Color.Gray
+                            "Chế độ like/comment → tab Bình luận",
+                            fontSize = 12.sp,
+                            color = ZpColors.TextSecondary,
+                            modifier = Modifier.padding(top = 8.dp)
                         )
-                        Text(
-                            "Chỉ comment / Mix / Chỉ like — chọn ở mục «Like danh bạ» phía trên; «Chỉ comment» trên Nhật ký sẽ không bấm Thích, chỉ gửi comment (slider số câu ngay dưới).",
-                            fontSize = 11.sp,
-                            color = Color.Gray
-                        )
-                        Text("Comment / bài (Nhật ký): $feedCommentCount", fontSize = 13.sp)
-                        Slider(
-                            value = feedCommentCount.toFloat(),
-                            onValueChange = { feedCommentCount = it.toInt() },
-                            valueRange = 0f..5f,
-                            steps = 5,
-                            colors = SliderDefaults.colors(thumbColor = zaloBlue, activeTrackColor = zaloBlue)
-                        )
-                    }
                 }
             }
             item {
@@ -920,16 +904,14 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Center,
                     fontSize = 12.sp,
-                    color = Color.Gray
+                    color = ZpColors.TextSecondary
                 )
             }
             item {
                 Button(onClick = {
                     settingsManager.setFeedMode(feedMode)
-                    val comments = visitCommentsText.lines()
-                        .map { it.trim() }
-                        .filter { it.isNotEmpty() }
-                    onSave(settings.copy(
+                    val base = settingsManager.load()
+                    onSave(base.copy(
                         dailyLimit = dailyLimit,
                         delayMinMs = (delayMin.toLongOrNull() ?: 1L) * 1000L,
                         delayMaxMs = (delayMax.toLongOrNull() ?: 3L) * 1000L,
@@ -942,17 +924,156 @@ class MainActivity : ComponentActivity() {
                         pauseWhenZaloAway = pauseWhenZaloAway,
                         likeModeStr = settingsManager.getLikeMode().name,
                         visitLikeCount = visitLikeCount,
-                        visitCommentCount = visitCommentCount,
-                        feedCommentCount = feedCommentCount,
-                        visitMaxProfiles = visitMaxProfiles,
-                        visitActionMode = visitActionMode.name,
-                        visitCommentList = if (comments.isEmpty()) settings.visitCommentList else comments
+                        visitMaxProfiles = visitMaxProfiles
                     ))
                     Toast.makeText(this@MainActivity, "✅ Đã lưu cài đặt", Toast.LENGTH_SHORT).show()
                 }, modifier = Modifier.fillMaxWidth().height(50.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = zaloBlue),
-                    shape = RoundedCornerShape(12.dp)) {
+                    colors = ButtonDefaults.buttonColors(containerColor = ZpColors.AccentBlue),
+                    shape = RoundedCornerShape(14.dp)) {
                     Text("Lưu cài đặt", fontSize = 15.sp, fontWeight = FontWeight.W500)
+                }
+            }
+        }
+    }
+
+    // ─── Comment ─────────────────────────────────────────────────
+
+    @Composable
+    fun CommentScreen(settings: LikeSettings, onSave: (LikeSettings) -> Unit) {
+        var visitCommentCount by remember(settings) { mutableIntStateOf(settings.visitCommentCount) }
+        var feedCommentCount by remember(settings) { mutableIntStateOf(settings.feedCommentCount) }
+        var visitActionMode by remember(settings) {
+            mutableStateOf(
+                try {
+                    VisitActionMode.valueOf(settings.visitActionMode)
+                } catch (e: Exception) {
+                    VisitActionMode.LIKE_ONLY
+                }
+            )
+        }
+        var visitCommentsText by remember(settings) {
+            mutableStateOf(settings.visitCommentList.joinToString("\n"))
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().background(ZpColors.BgPage),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item { IosScreenTitle("Bình luận", "Nhật ký & danh bạ dùng chung danh sách câu") }
+            item { IosSectionLabel("CHẾ ĐỘ") }
+            item {
+                IosCard {
+                    Text(
+                        "Áp dụng cả Nhật ký và Like danh bạ",
+                        fontSize = 12.sp,
+                        color = ZpColors.TextSecondary
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    listOf(
+                        VisitActionMode.LIKE_ONLY to "Chỉ like",
+                        VisitActionMode.COMMENT_ONLY to "Chỉ comment",
+                        VisitActionMode.MIX to "Like rồi comment"
+                    ).forEach { (mode, label) ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = visitActionMode == mode,
+                                onClick = { visitActionMode = mode },
+                                colors = RadioButtonDefaults.colors(selectedColor = ZpColors.AccentBlue)
+                            )
+                            Text(label, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+            item { IosSectionLabel("NHẬT KÝ") }
+            item {
+                IosCard {
+                    Text("Số comment / bài (0 = không gửi)", fontSize = 12.sp, color = ZpColors.TextSecondary)
+                    Text("Comment / bài: $feedCommentCount", fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+                    Slider(
+                        value = feedCommentCount.toFloat(),
+                        onValueChange = { feedCommentCount = it.toInt() },
+                        valueRange = 0f..5f,
+                        steps = 5,
+                        colors = iosSliderColors
+                    )
+                    if (visitActionMode == VisitActionMode.COMMENT_ONLY) {
+                        Text(
+                            "Chỉ comment: bot không bấm Thích, chỉ gửi bình luận.",
+                            fontSize = 11.sp,
+                            color = ZpColors.TextSecondary,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            }
+            item { IosSectionLabel("DANH BẠ (VISIT)") }
+            item {
+                IosCard {
+                    Text("Số comment / profile (0 = không gửi)", fontSize = 12.sp, color = ZpColors.TextSecondary)
+                    Text("Comment / profile: $visitCommentCount", fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+                    Slider(
+                        value = visitCommentCount.toFloat(),
+                        onValueChange = { visitCommentCount = it.toInt() },
+                        valueRange = 0f..5f,
+                        steps = 5,
+                        colors = iosSliderColors
+                    )
+                }
+            }
+            item { IosSectionLabel("NỘI DUNG (MỖI DÒNG 1 CÂU)") }
+            item {
+                IosCard {
+                    Text(
+                        "Bot chọn ngẫu nhiên một dòng mỗi lần gửi. Thêm bao nhiêu dòng cũng được.",
+                        fontSize = 12.sp,
+                        color = ZpColors.TextSecondary
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = visitCommentsText,
+                        onValueChange = { visitCommentsText = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 160.dp, max = 360.dp),
+                        placeholder = { Text("👍\n🔥 Xịn quá\n💖 Thích lắm") },
+                        minLines = 6
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = {
+                            visitCommentsText = settingsManager.defaultVisitCommentsText()
+                        }) { Text("Khôi phục mặc định") }
+                        val lineCount = visitCommentsText.lines().count { it.trim().isNotEmpty() }
+                        Text("$lineCount câu", fontSize = 12.sp, color = ZpColors.TextSecondary)
+                    }
+                }
+            }
+            item {
+                Button(
+                    onClick = {
+                        val comments = visitCommentsText.lines()
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                        val base = settingsManager.load()
+                        onSave(
+                            base.copy(
+                                visitCommentCount = visitCommentCount,
+                                feedCommentCount = feedCommentCount,
+                                visitActionMode = visitActionMode.name,
+                                visitCommentList = if (comments.isEmpty()) base.visitCommentList else comments
+                            )
+                        )
+                        Toast.makeText(this@MainActivity, "✅ Đã lưu bình luận", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = ZpColors.AccentBlue),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("Lưu bình luận", fontSize = 15.sp, fontWeight = FontWeight.W500)
                 }
             }
         }
@@ -991,101 +1112,70 @@ class MainActivity : ComponentActivity() {
             refreshStoredIds()
         }
 
-        Column(Modifier.fillMaxSize().background(Color(0xFFF5F5F5))) {
-            Box(Modifier.fillMaxWidth().background(Color(0xFF1a1a2e)).padding(16.dp)) {
-                Column {
-                    Text("UI Tree Zalo", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    if (treeResult != null) {
-                        Text("${treeResult!!.count} nodes · quét lúc ${treeResult!!.scannedAt}",
-                            color = Color.White.copy(0.7f), fontSize = 12.sp)
-                    } else {
-                        Text("Chưa có dữ liệu — mở Zalo rồi bấm Quét", color = Color.White.copy(0.7f), fontSize = 12.sp)
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
-                                val root = ZaloPilotAccessibilityService.instance?.rootInActiveWindow
-                                if (root == null) {
-                                    Toast.makeText(this@MainActivity, "⚠️ Mở Zalo trước rồi quét", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    nodeFinder.dumpToFile(root)
-                                    // Đợi file ghi xong rồi load lại
-                                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                        treeResult = logger.readUiTree()
-                                        Toast.makeText(this@MainActivity, "✅ Quét xong ${treeResult?.count} nodes", Toast.LENGTH_SHORT).show()
-                                    }, 800)
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0068FF)),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                        ) { Text("🔍 Quét", color = Color.White, fontSize = 13.sp) }
-
-                        Button(
-                            onClick = {
-                                val root = ZaloPilotAccessibilityService.instance?.rootInActiveWindow
-                                if (root == null) {
-                                    Toast.makeText(this@MainActivity, "⚠️ Mở Zalo trước rồi quét", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    runCatching {
-                                        uiScanner.forceScan(root)
-                                        val f = zaloIdStore.exportToJson()
-                                        refreshStoredIds()
-                                        Toast.makeText(this@MainActivity, "✅ Đã quét UI & lưu ${f.name}", Toast.LENGTH_SHORT).show()
-                                    }.onFailure { e ->
-                                        Toast.makeText(this@MainActivity, "❌ ${e.message}", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(0.2f)),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                        ) { Text("🧠 Quét UI", color = Color.White, fontSize = 13.sp) }
-
-                        Button(
-                            onClick = {
+        Column(Modifier.fillMaxSize().background(ZpColors.BgPage)) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text("UI Tree", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = ZpColors.TextPrimary)
+                if (treeResult != null) {
+                    Text(
+                        "${treeResult!!.count} nodes · quét lúc ${treeResult!!.scannedAt}",
+                        fontSize = 13.sp,
+                        color = ZpColors.TextSecondary
+                    )
+                } else {
+                    Text("Chưa có dữ liệu — mở Zalo rồi bấm Quét", fontSize = 13.sp, color = ZpColors.TextSecondary)
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.horizontalScroll(rememberScrollState())
+                ) {
+                    IosSecondaryButton("Quét", onClick = {
+                        val root = ZaloPilotAccessibilityService.instance?.rootInActiveWindow
+                        if (root == null) {
+                            Toast.makeText(this@MainActivity, "Mở Zalo trước rồi quét", Toast.LENGTH_SHORT).show()
+                        } else {
+                            nodeFinder.dumpToFile(root)
+                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                                 treeResult = logger.readUiTree()
-                                Toast.makeText(this@MainActivity, "🔄 Đã load lại", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(0.2f)),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                        ) { Text("🔄 Load lại", color = Color.White, fontSize = 13.sp) }
-
-                        Button(
-                            onClick = { exportUiTree() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(0.2f)),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                        ) { Text("💾 Lưu", color = Color.White, fontSize = 13.sp) }
-
-                        Button(
-                            onClick = { copyUiTreeJson() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(0.2f)),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                        ) { Text("📋 Copy JSON", color = Color.White, fontSize = 13.sp) }
-                    }
+                                Toast.makeText(this@MainActivity, "Quét xong ${treeResult?.count} nodes", Toast.LENGTH_SHORT).show()
+                            }, 800)
+                        }
+                    })
+                    IosSecondaryButton("Quét UI", onClick = {
+                        val root = ZaloPilotAccessibilityService.instance?.rootInActiveWindow
+                        if (root == null) {
+                            Toast.makeText(this@MainActivity, "Mở Zalo trước rồi quét", Toast.LENGTH_SHORT).show()
+                        } else {
+                            runCatching {
+                                uiScanner.forceScan(root)
+                                val f = zaloIdStore.exportToJson()
+                                refreshStoredIds()
+                                Toast.makeText(this@MainActivity, "Đã quét UI & lưu ${f.name}", Toast.LENGTH_SHORT).show()
+                            }.onFailure { e ->
+                                Toast.makeText(this@MainActivity, "${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    })
+                    IosSecondaryButton("Load lại", onClick = {
+                        treeResult = logger.readUiTree()
+                        Toast.makeText(this@MainActivity, "Đã load lại", Toast.LENGTH_SHORT).show()
+                    })
+                    IosSecondaryButton("Lưu", onClick = { exportUiTree() })
+                    IosSecondaryButton("Copy JSON", onClick = { copyUiTreeJson() })
                 }
             }
 
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                shape = RoundedCornerShape(12.dp)
+            IosCard(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
-                Column(Modifier.padding(14.dp)) {
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text("ID đã học", fontSize = 14.sp, fontWeight = FontWeight.W600)
-                            Text("ZaloIDStore · bấm Quét UI trên Zalo để cập nhật", fontSize = 11.sp, color = Color.Gray)
+                            Text("ID đã học", fontSize = 14.sp, fontWeight = FontWeight.W600, color = ZpColors.TextPrimary)
+                            Text("ZaloIDStore · bấm Quét UI trên Zalo để cập nhật", fontSize = 11.sp, color = ZpColors.TextSecondary)
                         }
                         TextButton(
                             onClick = {
@@ -1098,11 +1188,11 @@ class MainActivity : ComponentActivity() {
                     }
                     Spacer(Modifier.height(6.dp))
                     storedIds.forEach { (label, value) ->
-                        Text(label, fontSize = 10.sp, color = Color.Gray)
+                        Text(label, fontSize = 10.sp, color = ZpColors.TextSecondary)
                         Text(
                             value,
                             fontSize = 12.sp,
-                            color = if (value.startsWith("—")) Color.Gray else Color(0xFF111111),
+                            color = if (value.startsWith("—")) ZpColors.TextSecondary else ZpColors.TextPrimary,
                             modifier = Modifier.padding(bottom = 8.dp)
                         )
                     }
@@ -1117,12 +1207,11 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("📋 Copy chi tiết", fontSize = 13.sp)
+                        Text("Copy chi tiết", fontSize = 13.sp)
                     }
-                }
             }
 
-            Column(Modifier.background(Color.White).padding(12.dp)) {
+            Column(Modifier.background(ZpColors.BgCard).padding(12.dp)) {
                 OutlinedTextField(
                     value = filter, onValueChange = { filter = it },
                     placeholder = { Text("Tìm text / id / class...", fontSize = 13.sp) },
@@ -1134,7 +1223,7 @@ class MainActivity : ComponentActivity() {
                         label = { Text("Clickable", fontSize = 11.sp) })
                     FilterChip(selected = showOnlyWithId, onClick = { showOnlyWithId = !showOnlyWithId },
                         label = { Text("Có ID", fontSize = 11.sp) })
-                    Text("${filtered.size} / ${nodes.size}", fontSize = 11.sp, color = Color.Gray,
+                    Text("${filtered.size} / ${nodes.size}", fontSize = 11.sp, color = ZpColors.TextSecondary,
                         modifier = Modifier.align(Alignment.CenterVertically))
                 }
             }
@@ -1142,9 +1231,14 @@ class MainActivity : ComponentActivity() {
             if (nodes.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("🌳", fontSize = 40.sp)
-                        Spacer(Modifier.height(8.dp))
-                        Text("Mở Zalo tab Nhật ký → bấm Quét", color = Color.Gray, fontSize = 13.sp, textAlign = TextAlign.Center)
+                        Text("Chưa có dữ liệu", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = ZpColors.TextPrimary)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Mở Zalo tab Nhật ký → bấm Quét",
+                            color = ZpColors.TextSecondary,
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
             } else {
@@ -1166,17 +1260,22 @@ class MainActivity : ComponentActivity() {
         }
         Card(modifier = Modifier.fillMaxWidth().padding(start = indentDp.dp),
             colors = CardDefaults.cardColors(containerColor = bgColor),
-            shape = RoundedCornerShape(6.dp)) {
+            shape = RoundedCornerShape(12.dp)) {
             Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (node.clickable) Text("👆", fontSize = 10.sp)
-                    if (node.checked) Text("✅", fontSize = 10.sp)
-                    Text(node.className, fontSize = 10.sp, color = Color.Gray)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (node.clickable) {
+                        Text("TAP", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = ZpColors.AccentBlue)
+                    }
+                    if (node.checked) {
+                        Text("ON", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = ZpColors.ColorGreen)
+                    }
+                    Text(node.className, fontSize = 10.sp, color = ZpColors.TextSecondary)
                 }
-                if (node.text.isNotEmpty())
-                    Text(node.text, fontSize = 13.sp, fontWeight = FontWeight.W500, color = Color(0xFF111111))
+                if (node.text.isNotEmpty()) {
+                    Text(node.text, fontSize = 13.sp, fontWeight = FontWeight.W500, color = ZpColors.TextPrimary)
+                }
                 if (node.resourceId.isNotEmpty())
-                    Text(node.resourceId, fontSize = 10.sp, color = Color(0xFF0068FF))
+                    Text(node.resourceId, fontSize = 10.sp, color = ZpColors.AccentBlue)
             }
         }
     }
@@ -1227,126 +1326,100 @@ class MainActivity : ComponentActivity() {
         fun isScrollFailure(log: LogEntry): Boolean =
             log.tag == LogTag.SCROLL && log.result.contains("FAIL", ignoreCase = true)
 
-        Column(Modifier.fillMaxSize().background(Color(0xFFF5F5F5))) {
-            Box(Modifier.fillMaxWidth().background(zaloBlue).padding(20.dp)) {
-                Column {
-                    Text("Nhật ký", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.W500)
-                    Text("${activeLogs.size} dòng · ${activeTitle()}", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
-                    Spacer(Modifier.height(10.dp))
-                    TabRow(
-                        selectedTabIndex = subTab,
-                        containerColor = Color.White.copy(alpha = 0.18f),
-                        contentColor = Color.White
-                    ) {
-                        listOf("Slim", "Verbose", "Lỗi").forEachIndexed { i, label ->
-                            Tab(
-                                selected = subTab == i,
-                                onClick = { subTab = i },
-                                text = { Text(label, fontSize = 12.sp, color = Color.White) }
+        Column(Modifier.fillMaxSize().background(ZpColors.BgPage)) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text("Nhật ký", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = ZpColors.TextPrimary)
+                Text("${activeLogs.size} dòng · ${activeTitle()}", fontSize = 13.sp, color = ZpColors.TextSecondary)
+            }
+            TabRow(
+                selectedTabIndex = subTab,
+                modifier = Modifier.padding(horizontal = 16.dp),
+                containerColor = ZpColors.BgCard,
+                contentColor = ZpColors.AccentBlue,
+                divider = { HorizontalDivider(color = ZpColors.Divider, thickness = 0.5.dp) }
+            ) {
+                listOf("Slim", "Verbose", "Lỗi").forEachIndexed { i, label ->
+                    Tab(
+                        selected = subTab == i,
+                        onClick = { subTab = i },
+                        text = {
+                            Text(
+                                label,
+                                fontSize = 13.sp,
+                                color = if (subTab == i) ZpColors.AccentBlue else ZpColors.TextSecondary
                             )
                         }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    // Nhiều nút thao tác → cho phép scroll ngang để không bị chèn ép / khó bấm.
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                    ) {
-                        Button(onClick = {
-                            when (subTab) {
-                                0 -> logger.clearSlimLogs()
-                                1 -> logger.clearVerboseLogs()
-                                else -> logger.clearErrorLogs()
-                            }
-                            Toast.makeText(this@MainActivity, "🗑 Đã xóa log ${activeTitle()}", Toast.LENGTH_SHORT).show()
-                        },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(8.dp)) {
-                            Text("🗑 Xóa", color = Color.White, fontSize = 12.sp)
-                        }
-                        Button(onClick = {
-                            when (subTab) {
-                                0 -> exportLogText(logger.getSlimLogText(), suffix = "slim")
-                                1 -> exportLogText(logger.getVerboseLogText(), suffix = "verbose")
-                                else -> exportLogText(logger.getErrorLogText(), suffix = "error")
-                            }
-                        },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(8.dp)) {
-                            Text("💾 Xuất", color = Color.White, fontSize = 12.sp)
-                        }
-                        Button(onClick = { dumpZaloUI() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(8.dp)) {
-                            Text("🔍 Dump UI Zalo", color = Color.White, fontSize = 12.sp)
-                        }
-                        Button(onClick = { exportUiDumpJson() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(8.dp)) {
-                            Text("💾 Xuất UI Dump", color = Color.White, fontSize = 12.sp)
-                        }
-                        val unlikedDumpExists = File(filesDir, "ui_dump_unliked.json").exists()
-                        Button(
-                            onClick = { exportInternalDumpJson("ui_dump_unliked.json", "ZaloPilot_ui_dump_unliked") },
-                            enabled = unlikedDumpExists,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(8.dp)
-                        ) { Text("💾 Xuất dump chưa like", color = Color.White, fontSize = 12.sp) }
-
-                        val likedDumpExists = File(filesDir, "ui_dump_liked.json").exists()
-                        Button(
-                            onClick = { exportInternalDumpJson("ui_dump_liked.json", "ZaloPilot_ui_dump_liked") },
-                            enabled = likedDumpExists,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(8.dp)
-                        ) { Text("💾 Xuất dump đã like", color = Color.White, fontSize = 12.sp) }
-                        Button(onClick = {
-                            val txt = when (subTab) {
-                                0 -> logger.getSlimLogText()
-                                1 -> logger.getVerboseLogText()
-                                else -> logger.getErrorLogText()
-                            }
-                            copyLogsText(txt, activeTitle())
-                        },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.25f)),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(8.dp)) {
-                            Text("📋 Copy log", color = Color.White, fontSize = 12.sp)
-                        }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Dump cây UI khi lỗi", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
-                        Switch(
-                            checked = verboseUiTreeLog,
-                            onCheckedChange = onVerboseUiTreeChange
-                        )
-                    }
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Log chi tiết nút Like", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
-                        Switch(
-                            checked = verboseLikeContextLog,
-                            onCheckedChange = onVerboseLikeContextChange
-                        )
-                    }
+                    )
                 }
             }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                    .horizontalScroll(rememberScrollState())
+            ) {
+                IosSecondaryButton("Xóa", onClick = {
+                    when (subTab) {
+                        0 -> logger.clearSlimLogs()
+                        1 -> logger.clearVerboseLogs()
+                        else -> logger.clearErrorLogs()
+                    }
+                    Toast.makeText(this@MainActivity, "Đã xóa log ${activeTitle()}", Toast.LENGTH_SHORT).show()
+                })
+                IosSecondaryButton("Xuất", onClick = {
+                    when (subTab) {
+                        0 -> exportLogText(logger.getSlimLogText(), suffix = "slim")
+                        1 -> exportLogText(logger.getVerboseLogText(), suffix = "verbose")
+                        else -> exportLogText(logger.getErrorLogText(), suffix = "error")
+                    }
+                })
+                IosSecondaryButton("Dump UI", onClick = { dumpZaloUI() })
+                IosSecondaryButton("Xuất dump", onClick = { exportUiDumpJson() })
+                val unlikedDumpExists = File(filesDir, "ui_dump_unliked.json").exists()
+                IosSecondaryButton(
+                    "Dump chưa like",
+                    onClick = { exportInternalDumpJson("ui_dump_unliked.json", "ZaloPilot_ui_dump_unliked") },
+                    enabled = unlikedDumpExists
+                )
+                val likedDumpExists = File(filesDir, "ui_dump_liked.json").exists()
+                IosSecondaryButton(
+                    "Dump đã like",
+                    onClick = { exportInternalDumpJson("ui_dump_liked.json", "ZaloPilot_ui_dump_liked") },
+                    enabled = likedDumpExists
+                )
+                IosSecondaryButton("Copy log", onClick = {
+                    val txt = when (subTab) {
+                        0 -> logger.getSlimLogText()
+                        1 -> logger.getVerboseLogText()
+                        else -> logger.getErrorLogText()
+                    }
+                    copyLogsText(txt, activeTitle())
+                })
+            }
+            IosCard(
+                modifier = Modifier.padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Dump cây UI khi lỗi", fontSize = 14.sp, color = ZpColors.TextPrimary)
+                    Switch(checked = verboseUiTreeLog, onCheckedChange = onVerboseUiTreeChange, colors = iosSwitchColors)
+                }
+                HorizontalDivider(color = ZpColors.Divider, thickness = 0.5.dp)
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Log chi tiết nút Like", fontSize = 14.sp, color = ZpColors.TextPrimary)
+                    Switch(checked = verboseLikeContextLog, onCheckedChange = onVerboseLikeContextChange, colors = iosSwitchColors)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
             Box(
                 Modifier
                     .weight(1f)
@@ -1355,10 +1428,9 @@ class MainActivity : ComponentActivity() {
                 if (activeLogs.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("📋", fontSize = 40.sp)
-                            Spacer(Modifier.height(8.dp))
-                            Text("Chưa có log ${activeTitle()}", color = Color.Gray, fontSize = 14.sp)
-                            Text("Mở Zalo và chạy bot để ghi log", color = Color.Gray, fontSize = 12.sp)
+                            Text("Chưa có log", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = ZpColors.TextPrimary)
+                            Spacer(Modifier.height(6.dp))
+                            Text("${activeTitle()} · Mở Zalo và chạy bot", color = ZpColors.TextSecondary, fontSize = 13.sp)
                         }
                     }
                 } else {
@@ -1376,11 +1448,11 @@ class MainActivity : ComponentActivity() {
                                     containerColor = when {
                                         failure -> Color(0xFFFFEBEE)
                                         log.tag == LogTag.ERROR -> Color(0xFFFFCDD2)
-                                        else -> Color.White
+                                        else -> ZpColors.BgCard
                                     }
                                 ),
-                                shape = RoundedCornerShape(10.dp),
-                                border = if (failure) androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE57373)) else null
+                                shape = RoundedCornerShape(12.dp),
+                                border = if (failure) BorderStroke(1.dp, Color(0xFFE57373)) else null
                             ) {
                                 Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     Box(
@@ -1401,21 +1473,21 @@ class MainActivity : ComponentActivity() {
                                                 )
                                             }
                                             if (failure) {
-                                                Text("THẤT BẠI", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFC62828))
+                                                Text("THẤT BẠI", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = ZpColors.ColorRed)
                                             }
                                         }
                                         Spacer(Modifier.height(4.dp))
-                                        Text(log.target, fontSize = 13.sp, color = Color(0xFF222222))
-                                        Text(log.result, fontSize = 12.sp, color = Color(0xFF555555))
+                                        Text(log.target, fontSize = 13.sp, color = ZpColors.TextPrimary)
+                                        Text(log.result, fontSize = 12.sp, color = ZpColors.TextSecondary)
                                         Spacer(Modifier.height(4.dp))
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text(log.timestamp, fontSize = 11.sp, color = Color.Gray)
+                                            Text(log.timestamp, fontSize = 11.sp, color = ZpColors.TextSecondary)
                                             val meta = buildList {
                                                 if (!log.foregroundPkg.isNullOrBlank()) add("pkg ${log.foregroundPkg}")
                                                 log.durationMs?.let { add("${it}ms") }
                                             }.joinToString(" · ")
                                             if (meta.isNotEmpty()) {
-                                                Text(meta, fontSize = 10.sp, color = Color(0xFF888888), maxLines = 2)
+                                                Text(meta, fontSize = 10.sp, color = ZpColors.TextSecondary, maxLines = 2)
                                             }
                                         }
                                     }

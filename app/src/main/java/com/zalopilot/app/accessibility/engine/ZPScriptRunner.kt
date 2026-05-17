@@ -192,6 +192,7 @@ class ZPScriptRunner @Inject constructor(
                 }
                 if (mode == VisitActionMode.COMMENT_ONLY) {
                     logger.log(LogTag.STATE, "skip likes (COMMENT_ONLY)", "PROFILE_LIKE_MODE")
+                    service.showToast("⏭ Visit: COMMENT_ONLY — bỏ like profile")
                 }
                 val result = engine.runProfileLikeLoop(max)
                 logger.log(
@@ -201,6 +202,7 @@ class ZPScriptRunner @Inject constructor(
                 )
                 if (result.likedCount == 0 && result.noPostsOnProfile) {
                     visitRoundSuccess = false
+                    service.showToast("⚠️ Profile: không có bài để like — đánh dấu vòng lỗi")
                 }
                 true
             }
@@ -580,49 +582,87 @@ class ZPScriptRunner @Inject constructor(
         service: ZaloPilotAccessibilityService,
         engine: ZPEngine
     ): Boolean {
-        val root = engine.acquireRoot() ?: return false
+        service.showToast("👤 Mở profile từ contact…")
+        val root = engine.acquireRoot()
+        if (root == null) {
+            service.showToast("⚠️ Không đọc UI — mở profile thất bại")
+            return false
+        }
         try {
             if (nodeFinder.isProfileTimelineReady(root)) {
                 logger.log(LogTag.STATE, "tapProfileEntry", "ALREADY_ON_TIMELINE")
+                service.showToast("✅ Đã ở timeline profile")
                 return true
             }
             if (nodeFinder.isChatScreen(root)) {
+                service.showToast("💬 Đang chat — tap mở profile…")
                 nodeFinder.findChatIntroProfileTapTarget(root)?.let { intro ->
                     logger.log(LogTag.CLICK, "tapProfileEntry", "INTRO_CARD")
                     if (service.scriptTapProfileEntryNode(intro)) {
                         delay(1_100)
-                        if (service.waitForProfileScreen(5_000L)) return true
+                        if (service.waitForProfileScreen(5_000L)) {
+                            service.showToast("✅ Profile từ thẻ giữa chat")
+                            return true
+                        }
                     }
                 }
                 tryTapProfileTitleBar(service, root, "CHAT_TITLE")
                 delay(1_000)
-                if (service.waitForProfileScreen(4_000L)) return true
+                if (service.waitForProfileScreen(4_000L)) {
+                    service.showToast("✅ Profile từ thanh tên chat")
+                    return true
+                }
             }
             val node = nodeFinder.findProfileEntryNode(root)
             if (node != null && service.scriptTapProfileEntryNode(node)) {
                 delay(900)
-                if (service.waitForProfileScreen(6_000L)) return true
+                if (service.waitForProfileScreen(6_000L)) {
+                    service.showToast("✅ Đã vào profile")
+                    return true
+                }
             }
-            val r2 = engine.acquireRoot() ?: return false
+            val r2 = engine.acquireRoot()
+            if (r2 == null) {
+                service.showToast("⚠️ Mất UI sau tap profile")
+                return false
+            }
             try {
-                if (nodeFinder.isProfileTimelineReady(r2)) return true
+                if (nodeFinder.isProfileTimelineReady(r2)) {
+                    service.showToast("✅ Timeline profile sẵn sàng")
+                    return true
+                }
                 if (nodeFinder.isChatScreen(r2)) {
+                    service.showToast("🔄 Vẫn chat — thử lại tên…")
                     tryTapProfileTitleBar(service, r2, "RETRY_CHAT")
                     delay(1_000)
                 }
             } finally {
                 runCatching { r2.recycle() }
             }
-            if (service.waitForProfileScreen(4_000L)) return true
-            val r3 = engine.acquireRoot() ?: return false
+            if (service.waitForProfileScreen(4_000L)) {
+                service.showToast("✅ Profile (chờ UI)")
+                return true
+            }
+            val r3 = engine.acquireRoot()
+            if (r3 == null) {
+                service.showToast("⚠️ Không đọc UI lần cuối")
+                return false
+            }
             return try {
                 when {
-                    nodeFinder.isProfileTimelineReady(r3) -> true
+                    nodeFinder.isProfileTimelineReady(r3) -> {
+                        service.showToast("✅ Timeline profile OK")
+                        true
+                    }
                     nodeFinder.isChatScreen(r3) -> {
                         logger.log(LogTag.ERROR, "tapProfileEntry", "STILL_CHAT_AFTER_TAPS")
+                        service.showToast("❌ Kẹt chat — không vào profile")
                         false
                     }
-                    else -> false
+                    else -> {
+                        service.showToast("❌ Không nhận profile/chat — kiểm tra màn")
+                        false
+                    }
                 }
             } finally {
                 runCatching { r3.recycle() }

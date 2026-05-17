@@ -7,6 +7,7 @@ Không dùng root. Không dùng Zalo API. Hoàn toàn hợp lệ về mặt kỹ
 ## Tech Stack
 - **Ngôn ngữ:** Kotlin (không dùng Java)
 - **UI:** Jetpack Compose (không dùng XML layout)
+- **UI style:** Bắt buộc theo [`UI_REDESIGN.md`](UI_REDESIGN.md) — `ZpColors`, `IosCard`, `IosSectionLabel` trong `ui/ZaloPilotUi.kt`; không header xanh, không emoji làm icon tab, không `#0068FF`/`Color.Gray` tùy tiện
 - **DI:** Hilt
 - **Async:** Kotlin Coroutines + Flow
 - **Min SDK:** 26 (Android 8.0)
@@ -131,7 +132,7 @@ Hai lớp (OR với nhau):
 
 > **Đọc section này trước khi sửa `runFeedMode` / feed like.** Đây là logic product owner đã chốt; **không** thay bằng suy diễn từ code cũ (`findLikeButtons` toàn màn, `isAlreadyLiked`, `verifyLikedNearClickArea` làm nguồn truth chính).
 >
-> **Implementation chi tiết (like / skip / nhớ phiên / log):** xem [`FEED_LIKE_SKIP_LOGIC.md`](FEED_LIKE_SKIP_LOGIC.md) — cập nhật file đó khi đổi `runFeedMode` / `feedShouldAttemptLike`.
+> **Implementation chi tiết (2 bước like + cách quét ô BL):** [`FEED_LIKE_SKIP_LOGIC.md`](FEED_LIKE_SKIP_LOGIC.md) — cập nhật khi đổi `runFeedMode` / `hasCommentBoxOnFeedItemNearLike` / `hasInlineCommentComposerNearLikeAnchor`.
 
 **Nguồn truth (cùng feed item / footer bài):** có **ô bình luận** hay không — **không** dùng «Đã thích» / `isAlreadyLiked` trên feed (không detect ổn định). Chi tiết: [`FEED_LIKE_SKIP_LOGIC.md`](FEED_LIKE_SKIP_LOGIC.md).
 
@@ -144,7 +145,7 @@ Hai lớp (OR với nhau):
 
 **Sau like thành công:** cuộn theo `FeedMode` + `delayFeedSettleAfterScroll`.
 
-**Không** lưu danh sách bài đã like — **không** `postKey` / phiên thay ô bình luận. Mỗi vòng chỉ đọc màn: có ô BL → skip; chưa có → tap → đọc lại ô BL.
+**Không** lưu danh sách «đã like» lâu dài — chỉ **`feedItemSavedKeys`** (bài vừa tap, trùng thì cuộn). Chi tiết: [`FEED_LIKE_SKIP_LOGIC.md`](FEED_LIKE_SKIP_LOGIC.md).
 
 **Visit / profile:** vẫn có thể dùng `isAlreadyLiked()` (layout khác feed) — section §7 bên dưới áp dụng **không** override spec feed này.
 
@@ -180,6 +181,8 @@ Hai lớp (OR với nhau):
 ## Visit danh bạ (`LikeMode.VISIT`) — SPEC bắt buộc
 
 > **Đọc section này trước khi sửa `visitScriptLoop`, `ZPScriptRunner`, `runProfileLikeLoop`, `tapContactAt`, `tapProfileEntry`.** Script: `visit_contacts_v1.json`. Cài đặt: `visitLikeCount`, `visitCommentCount`, `visitMaxProfiles`, `visitActionMode` (dùng chung enum với feed).
+>
+> **Like/cuộn profile + toast debug:** [`VISIT_PROFILE_LOGIC.md`](VISIT_PROFILE_LOGIC.md)
 >
 > **Trạng thái code:** spec **chưa** khớp — dump UI + máy test (2026-05) xác nhận lỗi dưới.
 

@@ -149,6 +149,13 @@ enum class FeedScanResult { LIKED, ALL_SKIPPED, NO_BUTTONS }
 - Giải thích ngắn gọn (< 5 dòng)
 - Gộp update TODO.md + CHANGELOG.md vào cuối cùng 1 lần
 
+## UI Compose (bắt buộc — `UI_REDESIGN.md`)
+
+- Đọc `UI_REDESIGN.md` trước khi sửa `ui/*.kt` hoặc màn Compose trong `MainActivity.kt`
+- Màu: `ZpColors` + `IosCard` / `IosSectionLabel` / `IosScreenTitle` / `IosSecondaryButton` (`ZaloPilotUi.kt`)
+- Không header xanh; không `#0068FF` / `zaloBlue` / `Color.Gray`; không emoji làm icon tab hoặc empty state
+- Overlay `FloatingMenuService`: hex khớp `ZpColors` (`FloatingMenuUiColors`)
+
 ## KHÔNG được làm
 - KHÔNG hardcode resource-id Zalo
 - KHÔNG dùng Thread.sleep()

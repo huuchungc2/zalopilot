@@ -46,7 +46,7 @@ data class LikeSettings(
     val feedCommentCount: Int = 0,
     val visitActionMode: String = "LIKE_ONLY",
     val visitMaxProfiles: Int = 50,
-    val visitCommentList: List<String> = listOf("👍", "❤️", "Hay quá!", "Tuyệt vời!")
+    val visitCommentList: List<String> = VisitCommentDefaults.lines
 )
 
 enum class VisitActionMode { LIKE_ONLY, COMMENT_ONLY, MIX }
@@ -93,8 +93,9 @@ class LikeSettingsManager @Inject constructor(
         )
     }
 
-    private fun defaultVisitComments(): List<String> =
-        listOf("👍", "❤️", "Hay quá!", "Tuyệt vời!")
+    fun defaultVisitComments(): List<String> = VisitCommentDefaults.lines
+
+    fun defaultVisitCommentsText(): String = VisitCommentDefaults.multilineText()
 
     fun save(settings: LikeSettings) {
         prefs.edit().putString("settings", gson.toJson(settings)).apply()

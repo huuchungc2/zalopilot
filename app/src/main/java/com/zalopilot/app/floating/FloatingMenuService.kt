@@ -41,6 +41,15 @@ import org.json.JSONObject
 import java.io.File
 import javax.inject.Inject
 
+/** Khớp [com.zalopilot.app.ui.ZpColors] — overlay View, không Compose. */
+private object FloatingMenuUiColors {
+    const val ACCENT_BLUE = "#007AFF"
+    const val ACCENT_PURPLE = "#AF52DE"
+    const val COLOR_GREEN = "#34C759"
+    const val COLOR_RED = "#FF3B30"
+    const val TEXT_MUTED = "#8E8E93"
+}
+
 @AndroidEntryPoint
 class FloatingMenuService : Service() {
 
@@ -136,7 +145,7 @@ class FloatingMenuService : Service() {
             textSize = 13f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setBackgroundColor(Color.parseColor("#0068FF"))
+            setBackgroundColor(Color.parseColor(FloatingMenuUiColors.ACCENT_BLUE))
             layoutParams = LinearLayout.LayoutParams(size, size)
         }
 
@@ -205,32 +214,32 @@ class FloatingMenuService : Service() {
             setPadding(8, 8, 8, 8)
             setBackgroundColor(Color.parseColor("#EE1a1a2e"))
 
-            addView(menuItem("ZaloPilot ${AppVersion.fromContext(this@FloatingMenuService)}", "#0068FF", null))
+            addView(menuItem("ZaloPilot ${AppVersion.fromContext(this@FloatingMenuService)}", FloatingMenuUiColors.ACCENT_BLUE, null))
 
             val statLabel = buildString {
-                append("📊 Like ${progress.todayLikeCount}")
+                append("Like ${progress.todayLikeCount}")
                 append(" · Duyệt ${progress.todayPostsHandledCount}")
                 if (settings.dailyLimit > 0) append(" /${settings.dailyLimit}")
                 append(" hôm nay")
             }
-            addView(menuItem(statLabel, "#0068FF", null))
+            addView(menuItem(statLabel, FloatingMenuUiColors.ACCENT_BLUE, null))
 
             if (settingsManager.getLikeMode() == LikeMode.VISIT) {
                 val visitIdx = progress.visitIndex
-                addView(menuItem("👤 Profile: $visitIdx / ${settings.visitMaxProfiles}", "#34495E", null))
-                addView(menuItem("❤️ Like −  (${settings.visitLikeCount})", "#8E44AD") {
+                addView(menuItem("Profile: $visitIdx / ${settings.visitMaxProfiles}", FloatingMenuUiColors.TEXT_MUTED, null))
+                addView(menuItem("Like −  (${settings.visitLikeCount})", FloatingMenuUiColors.ACCENT_PURPLE) {
                     settingsManager.setVisitLikeCount((settings.visitLikeCount - 1).coerceAtLeast(0))
                     closeMenu(); openMenu()
                 })
-                addView(menuItem("❤️ Like +  (${settings.visitLikeCount})", "#8E44AD") {
+                addView(menuItem("Like +  (${settings.visitLikeCount})", FloatingMenuUiColors.ACCENT_PURPLE) {
                     settingsManager.setVisitLikeCount((settings.visitLikeCount + 1).coerceAtMost(10))
                     closeMenu(); openMenu()
                 })
-                addView(menuItem("💬 Cmt −  (${settings.visitCommentCount})", "#2980B9") {
+                addView(menuItem("Cmt −  (${settings.visitCommentCount})", FloatingMenuUiColors.ACCENT_BLUE) {
                     settingsManager.setVisitCommentCount((settings.visitCommentCount - 1).coerceAtLeast(0))
                     closeMenu(); openMenu()
                 })
-                addView(menuItem("💬 Cmt +  (${settings.visitCommentCount})", "#2980B9") {
+                addView(menuItem("Cmt +  (${settings.visitCommentCount})", FloatingMenuUiColors.ACCENT_BLUE) {
                     settingsManager.setVisitCommentCount((settings.visitCommentCount + 1).coerceAtMost(5))
                     closeMenu(); openMenu()
                 })
@@ -242,7 +251,7 @@ class FloatingMenuService : Service() {
                 addView(menuItem("Chế độ: $modeLabel (đổi trong app)", "#555555", null))
             }
 
-            addView(menuItem("📋 Dump UI", "#6C5CE7") {
+            addView(menuItem("Dump UI", FloatingMenuUiColors.ACCENT_BLUE) {
                 runCatching {
                     val fileName = dumpFullScreenToDownloads()
                     Toast.makeText(
@@ -260,20 +269,20 @@ class FloatingMenuService : Service() {
             })
 
             addView(menuItem(
-                if (autoMode) "🤖 Tự động: BẬT" else "👆 Thủ công",
-                if (autoMode) "#2E75B6" else "#555555"
+                if (autoMode) "Tự động: BẬT" else "Thủ công",
+                if (autoMode) FloatingMenuUiColors.ACCENT_BLUE else FloatingMenuUiColors.TEXT_MUTED
             ) {
                 settingsManager.toggleAutoStart()
                 closeMenu(); openMenu()
             })
 
             if (botRunning) {
-                addView(menuItem("■  Dừng", "#E24B4A") {
+                addView(menuItem("■  Dừng", FloatingMenuUiColors.COLOR_RED) {
                     AccessibilityHelper.requestStopAutoLike(this@FloatingMenuService)
                     closeMenu()
                 })
             } else {
-                addView(menuItem("▶  Bắt đầu like", "#27AE60") {
+                addView(menuItem("▶  Bắt đầu like", FloatingMenuUiColors.COLOR_GREEN) {
                     val inferred = ZaloPilotAccessibilityService.instance?.inferLikeModeForStart()
                     val mode = inferred ?: settingsManager.getLikeMode()
                     AccessibilityHelper.requestStartAutoLike(
@@ -285,7 +294,7 @@ class FloatingMenuService : Service() {
                 })
             }
 
-            addView(menuItem("🚫  Ẩn nút ZP", "#555555") {
+            addView(menuItem("Ẩn nút ZP", FloatingMenuUiColors.TEXT_MUTED) {
                 Toast.makeText(this@FloatingMenuService, "Đã tắt nút nổi — bật lại trong app ZaloPilot", Toast.LENGTH_LONG).show()
                 logger.log(LogTag.STATE, "FloatingMenuService", "HIDE_OVERLAY_FROM_MENU")
                 stopSelf()
@@ -326,7 +335,8 @@ class FloatingMenuService : Service() {
     private fun updateFabState() {
         val botRunning = ZaloPilotAccessibilityService.instance?.isRunning == true
         fabView?.setBackgroundColor(
-            if (botRunning) Color.parseColor("#27AE60") else Color.parseColor("#0068FF")
+            if (botRunning) Color.parseColor(FloatingMenuUiColors.COLOR_GREEN)
+            else Color.parseColor(FloatingMenuUiColors.ACCENT_BLUE)
         )
         fabView?.text = if (botRunning) "ZP▶" else "ZP"
     }

@@ -8,6 +8,11 @@
 - fix(feed): bỏ hẳn `feedPostsHandledThisSession` / `processedPosts` cho like — chỉ ô bình luận trên UI (skip / verify / đếm counter).
 - fix(feed): like 2 bước — sau tap 2 không đọc lại; xong bước 2 là cuộn bài khác.
 - fix(feed): mỗi vòng chỉ xử lý bài trên cùng màn; có ô BL → cuộn (không like bài thứ 2 cùng màn).
+- fix(visit/profile): timeline — chat→mở profile, tab Bài viết ACTION_CLICK, cuộn khi chưa sẵn sàng; toast mỗi quét/cuộn/lỗi; doc `VISIT_PROFILE_LOGIC.md`.
+- fix(feed): nhận ô bình luận trên cả item (hàng dưới footer) — tránh tap like bài đã có ô; toast CÓ/chưa có ô rõ bước 1–2.
+- fix(feed): khôi phục quét ô BL kiểu 77ecf09 (leo 6 parent + quét subtree) — bản sau chỉ quét footer nên miss.
+- fix(feed): `feedItemSavedKeys` — lưu bài trước tap; trùng bài đã lưu → chỉ cuộn; bài mới → cập nhật lưu + tap.
+- fix(ui): bot chạy chỉ overlay (một kênh); hủy feedback chờ khi DỪNG; bỏ Toast+overlay trùng feed/visit.
 - docs: **FEED_LIKE_SKIP_LOGIC.md** — logic like/skip feed (ô BL, nhớ phiên, verify, log); **CLAUDE.md** § Feed like trỏ tới file + cập nhật không re-tap.
 - fix(feed): bỏ `FEED_UNLIKE_RETRY_TAP`; `feedPostsHandledThisSession`; cải thiện `fillCommentInputAndSend` (composer, PASTE).
 - fix(start): hai luồng BẮT ĐẦU — `BotStartEntry` (Trang chủ: mở Zalo→chờ→tab; floating trên Zalo: đọc cây Zalo, không launch lại); `pickBestAccessibilityRoot`; `prepare` trước `isRunning`.
