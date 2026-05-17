@@ -477,7 +477,8 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
     /** Feed MIX/COMMENT_ONLY + `feedCommentCount` > 0 — được gửi bình luận sau like / trên sheet mở sẵn. */
     private fun feedAutoCommentEnabled(): Boolean {
         if (settingsManager.getFeedCommentCount() <= 0) return false
-        return settingsManager.getVisitActionMode() != VisitActionMode.LIKE_ONLY
+        return settingsManager.getVisitActionMode() in
+            setOf(VisitActionMode.COMMENT_ONLY, VisitActionMode.MIX)
     }
 
     private suspend fun backFromCommentSurface(reason: String) {
@@ -1692,7 +1693,7 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             LogTag.STATE,
             "mode=${s.likeModeStr} feedMode=${settingsManager.getFeedMode().name} " +
                 "action=${s.visitActionMode} feedCmt=${s.feedCommentCount} " +
-                "visitLike=${s.visitLikeCount} visitCmt=${s.visitCommentCount} " +
+                "visitLike=${s.visitLikeCount} visitCmt=${s.visitCommentCount} visitChat=${s.visitChatCount} " +
                 "session=${s.sessionLimit} daily=${s.dailyLimit} " +
                 "delay=${s.delayMinMs}-${s.delayMaxMs} eco=${s.ecoMode}",
             "SETTINGS_RELOAD_$trigger"

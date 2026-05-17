@@ -1,22 +1,30 @@
 {
   "id": "visit_contacts_v1",
-  "version": 11,
-  "desc": "Visit v11 — batch contact 1..n rồi mới scroll; chat intro→profile timeline",
+  "version": 12,
+  "desc": "Visit v12 — CHAT_ONLY gửi tin khung chat; profile like/comment khi không chat",
   "steps": [
     { "id": "s1", "action": "findContactItems" },
     { "id": "s2", "action": "tapContactAt" },
     { "id": "s3", "action": "wait", "ms": 1200 },
-    { "id": "s4", "action": "tapProfileEntry" },
-    { "id": "s5", "action": "wait", "ms": 3500 },
-    { "id": "s6", "action": "likeProfilePosts", "count": "$visitLikeCount" },
-    { "id": "s7", "action": "ifSetting", "key": "visitCommentCount", "gt": 0, "do": [
-      { "action": "repeat", "count": "$visitCommentCount", "do": [
-        { "action": "findCommentButton" },
-        { "action": "tap" },
-        { "action": "ensureScreen", "screen": "comments", "timeoutMs": 4000 },
-        { "action": "inputRandomComment" },
-        { "action": "tapSend" },
-        { "action": "back" }
+    { "id": "s3a", "action": "ifSetting", "key": "visitActionChat", "do": [
+      { "action": "ensureScreen", "screen": "chat", "timeoutMs": 5000 },
+      { "action": "repeat", "count": "$visitChatCount", "do": [
+        { "action": "sendVisitChatMessage" }
+      ]}
+    ]},
+    { "id": "s4", "action": "ifSetting", "key": "visitActionProfile", "do": [
+      { "action": "tapProfileEntry" },
+      { "action": "wait", "ms": 3500 },
+      { "action": "likeProfilePosts", "count": "$visitLikeCount" },
+      { "action": "ifSetting", "key": "visitCommentCount", "gt": 0, "do": [
+        { "action": "repeat", "count": "$visitCommentCount", "do": [
+          { "action": "findCommentButton" },
+          { "action": "tap" },
+          { "action": "ensureScreen", "screen": "comments", "timeoutMs": 4000 },
+          { "action": "inputRandomComment" },
+          { "action": "tapSend" },
+          { "action": "back" }
+        ]}
       ]}
     ]},
     { "id": "s8", "action": "openContactsFriends" },

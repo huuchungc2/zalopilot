@@ -243,10 +243,19 @@ class FloatingMenuService : Service() {
                     settingsManager.setVisitCommentCount((settings.visitCommentCount + 1).coerceAtMost(5))
                     closeMenu(); openMenu()
                 })
+                addView(menuItem("Chat −  (${settings.visitChatCount})", FloatingMenuUiColors.ACCENT_BLUE) {
+                    settingsManager.setVisitChatCount((settings.visitChatCount - 1).coerceAtLeast(0))
+                    closeMenu(); openMenu()
+                })
+                addView(menuItem("Chat +  (${settings.visitChatCount})", FloatingMenuUiColors.ACCENT_BLUE) {
+                    settingsManager.setVisitChatCount((settings.visitChatCount + 1).coerceAtMost(5))
+                    closeMenu(); openMenu()
+                })
                 val modeLabel = when (settingsManager.getVisitActionMode()) {
                     VisitActionMode.LIKE_ONLY -> "LIKE"
                     VisitActionMode.COMMENT_ONLY -> "COMMENT"
                     VisitActionMode.MIX -> "MIX"
+                    VisitActionMode.CHAT_ONLY -> "CHAT"
                 }
                 addView(menuItem("Chế độ: $modeLabel (đổi trong app)", "#555555", null))
             }
@@ -393,14 +402,21 @@ class FloatingMenuService : Service() {
         }
     }
 
+    private fun hasViewIdSuffix(root: AccessibilityNodeInfo, suffix: String): Boolean {
+        val fullId = "com.zing.zalo:id/$suffix"
+        return !(root.findAccessibilityNodeInfosByViewId(fullId).isNullOrEmpty())
+    }
+
     private fun detectScreenName(root: AccessibilityNodeInfo): String {
         return when {
+            hasViewIdSuffix(root, "main_chat_view") &&
+                hasViewIdSuffix(root, "chatinput_text") -> "chat"
             (screenHasText(root, "Contacts") || screenHasText(root, "Danh bạ")) &&
                 (screenHasText(root, "All") || screenHasText(root, "Tất cả")) -> "contacts"
             (screenHasText(root, "Comments") || screenHasText(root, "Bình luận")) &&
                 (screenHasHint(root, "Write a comment") || screenHasHint(root, "Nhập bình luận")) -> "comments"
-            (screenHasText(root, "Photos") || screenHasText(root, "Ảnh")) &&
-                (screenHasText(root, "Videos") || screenHasText(root, "Video")) -> "profile"
+            (hasViewIdSuffix(root, "profile_avatar") || hasViewIdSuffix(root, "lv_media_store")) &&
+                !hasViewIdSuffix(root, "chatinput_text") -> "profile"
             screenHasHint(root, "Message") || screenHasHint(root, "Tin nhắn") -> "chat"
             screenHasText(root, "Nhật ký") || screenHasText(root, "Timeline") ||
                 screenHasText(root, "Tường nhà") -> "feed"

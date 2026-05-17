@@ -482,6 +482,7 @@ class ZPEngine(
                 "visitIndex" -> progressManager.getVisitIndex()
                 "visitLikeCount" -> settingsManager.getVisitLikeCount()
                 "visitCommentCount" -> settingsManager.getVisitCommentCount()
+                "visitChatCount" -> settingsManager.getVisitChatCount()
                 "contactlistid", "contact_list_id" -> idStore.getContactListID().orEmpty()
                 "contactitemid", "contact_item_id" -> idStore.getContactItemID().orEmpty()
                 "likebuttonid", "like_button_id" -> idStore.getLikeButtonID().orEmpty()
@@ -532,6 +533,75 @@ class ZPEngine(
         if (text.isBlank()) return false
         val input = nodeFinder.findCommentInput(root) ?: return false
         return inputText(input, text)
+    }
+
+    /**
+     * Visit CHAT_ONLY: gõ + gửi một tin trong khung chat 1–1 (danh sách câu chung comment).
+     * @return true nếu đã gửi (tap Gửi thành công sau SET_TEXT).
+     */
+    suspend fun sendOneVisitChatMessage(): Boolean {
+        val text = nodeFinder.getRandomComment().trim()
+        if (text.isBlank()) {
+            logger.log(LogTag.STATE, "visitChat", "EMPTY_TEXT_LIST")
+            profileToast("⚠️ Chưa có câu tin — thêm trong mục Bình luận")
+            return false
+        }
+        val root = acquireRoot()
+        if (root == null) {
+            profileToast("⚠️ Không đọc UI chat")
+            return false
+        }
+        return try {
+            if (!nodeFinder.isChatScreen(root)) {
+                logger.log(LogTag.SCAN, "visitChat", "NOT_CHAT_SCREEN")
+                profileToast("❌ Chưa vào khung chat")
+                return false
+            }
+            var input = nodeFinder.findChatInput(root)
+            if (input == null) {
+                delay(450)
+                val fresh = acquireRoot() ?: return false
+                try {
+                    if (!nodeFinder.isChatScreen(fresh)) return false
+                    input = nodeFinder.findChatInput(fresh)
+                } finally {
+                    runCatching { fresh.recycle() }
+                }
+            }
+            if (input == null) {
+                logger.log(LogTag.SCAN, "visitChat", "CHAT_INPUT_MISS")
+                profileToast("❌ Không thấy ô nhập tin")
+                return false
+            }
+            if (!inputText(input, text)) {
+                logger.log(LogTag.CLICK, "visitChat", "SET_TEXT_FAIL")
+                profileToast("❌ Không gõ được tin")
+                return false
+            }
+            logger.log(LogTag.STATE, "len=${text.length}", "VISIT_CHAT_FILLED")
+            delay(350)
+            val sendRoot = acquireRoot() ?: root
+            val recycleSend = sendRoot !== root
+            val sent = tapChatSend(sendRoot)
+            if (recycleSend) runCatching { sendRoot.recycle() }
+            if (sent) {
+                logger.log(LogTag.CLICK, "visitChat", "SENT_OK")
+                profileToast("✅ Đã gửi tin")
+                delay(500)
+                true
+            } else {
+                logger.log(LogTag.CLICK, "visitChat", "SEND_FAIL")
+                profileToast("❌ Không bấm được Gửi")
+                false
+            }
+        } finally {
+            runCatching { root.recycle() }
+        }
+    }
+
+    suspend fun tapChatSend(root: AccessibilityNodeInfo): Boolean {
+        nodeFinder.findChatSendButton(root)?.let { if (tap(it)) return true }
+        return tapSend(root)
     }
 
     private suspend fun tapProfileLikeTarget(node: AccessibilityNodeInfo): Boolean {

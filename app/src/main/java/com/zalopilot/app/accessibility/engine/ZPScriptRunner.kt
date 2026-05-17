@@ -9,6 +9,8 @@ import com.zalopilot.app.util.LikeSettingsManager
 import com.zalopilot.app.util.LogTag
 import com.zalopilot.app.util.Logger
 import com.zalopilot.app.util.VisitActionMode
+import com.zalopilot.app.util.VisitHandledContactsManager
+import com.zalopilot.app.util.VisitHandledOutcome
 import com.zalopilot.app.util.hasValidScreenBounds
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -21,6 +23,7 @@ class ZPScriptRunner @Inject constructor(
     private val idStore: ZaloIDStore,
     private val settingsManager: LikeSettingsManager,
     private val progressManager: LikeProgressManager,
+    private val visitHandledContacts: VisitHandledContactsManager,
     private val logger: Logger
 ) {
     private var gotoCount = 0
@@ -30,6 +33,13 @@ class ZPScriptRunner @Inject constructor(
     private var contactBatchIndex = 0
     private var contactBatchActive = false
     private var visitRecoveryStreak = 0
+    /** Kẹt chat/profile — bỏ like/comment vòng này, nhảy về danh bạ. */
+    private var skipVisitProfileSteps = false
+    /** Tên/key contact đang xử lý trong vòng hiện tại (ghi persist ở goto). */
+    private var currentVisitDisplayName: String? = null
+    private var currentVisitKey: String? = null
+    /** Cuộn A–Z: hàng dưới cùng màn trước đó — trùng sau cuộn = hết list / kẹt. */
+    private var alphaScrollBottomKey: String? = null
 
     suspend fun run(
         service: ZaloPilotAccessibilityService,
@@ -43,7 +53,16 @@ class ZPScriptRunner @Inject constructor(
         contactBatchIndex = 0
         contactBatchActive = false
         visitRecoveryStreak = 0
+        skipVisitProfileSteps = false
+        currentVisitDisplayName = null
+        currentVisitKey = null
+        alphaScrollBottomKey = null
         val profilesLimit = maxProfiles ?: settingsManager.getVisitMaxProfiles()
+        logger.log(
+            LogTag.STATE,
+            "handled=${visitHandledContacts.count()}",
+            "VISIT_HANDLED_LOADED"
+        )
         var profilesDone = 0
         var index = 0
         var ensureScreenStreak = 0
@@ -64,6 +83,7 @@ class ZPScriptRunner @Inject constructor(
 
             when (step.action.lowercase()) {
                 "goto" -> {
+                    persistCurrentVisitContact(visitRoundSuccess)
                     gotoCount++
                     if (gotoCount > MAX_GOTO) {
                         logger.log(LogTag.ERROR, "gotoCount=$gotoCount", "SCRIPT_GOTO_LIMIT")
@@ -93,6 +113,14 @@ class ZPScriptRunner @Inject constructor(
             }
 
             if (!ok && step.action.lowercase() !in SKIP_ON_FAIL_ACTIONS) {
+                if (shouldSkipContactAfterVisitFailure(step)) {
+                    val jump = skipStuckContactAndJumpToContacts(service, engine, steps, step)
+                    if (jump >= 0) {
+                        index = jump
+                        visitRecoveryStreak = 0
+                        continue
+                    }
+                }
                 if (visitRecoveryStreak < MAX_VISIT_RECOVERY &&
                     runVisitStepRecovery(service, engine, step)
                 ) {
@@ -182,9 +210,34 @@ class ZPScriptRunner @Inject constructor(
                 true
             }
             "tapcontactat" -> runTapContactAt(engine, step)
-            "tapprofileentry" -> runTapProfileEntry(service, engine)
+            "tapprofileentry" -> {
+                if (skipVisitProfileSteps) {
+                    logger.log(LogTag.STATE, "visit", "PROFILE_ENTRY_SKIPPED_FLAG")
+                    true
+                } else {
+                    runTapProfileEntry(service, engine)
+                }
+            }
+            "sendvisitchatmessage" -> {
+                refreshCurrentVisitKeyFromChat(engine)
+                val ok = engine.sendOneVisitChatMessage()
+                if (ok) {
+                    progressManager.incrementPostsHandledAndSave()
+                    service.notifyProgressUpdate()
+                }
+                ok
+            }
             "likeprofileposts" -> {
+                if (skipVisitProfileSteps) {
+                    skipVisitProfileSteps = false
+                    logger.log(LogTag.STATE, "visit", "PROFILE_LIKE_SKIPPED_STUCK")
+                    true
+                } else {
                 val mode = settingsManager.getVisitActionMode()
+                if (mode == VisitActionMode.CHAT_ONLY) {
+                    logger.log(LogTag.STATE, "skip likes (CHAT_ONLY)", "PROFILE_LIKE_MODE")
+                    return true
+                }
                 val requested = engine.resolveVarInt(step.count ?: "\$visitLikeCount")
                 val max = when (mode) {
                     VisitActionMode.COMMENT_ONLY -> 0
@@ -205,6 +258,7 @@ class ZPScriptRunner @Inject constructor(
                     service.showToast("⚠️ Profile: không có bài để like — đánh dấu vòng lỗi")
                 }
                 true
+                }
             }
             "findlikebutton" -> {
                 val root = engine.acquireRoot() ?: return false
@@ -360,11 +414,21 @@ class ZPScriptRunner @Inject constructor(
 
     private fun evaluateIfSetting(step: ZPStep): Boolean {
         val key = step.key ?: return false
-        if (key == "visitCommentCount" && settingsManager.getVisitActionMode() == VisitActionMode.LIKE_ONLY) {
+        val mode = settingsManager.getVisitActionMode()
+        if (key == "visitCommentCount" &&
+            mode in setOf(VisitActionMode.LIKE_ONLY, VisitActionMode.CHAT_ONLY)
+        ) {
             return false
+        }
+        when (key) {
+            "visitActionChat" ->
+                return mode == VisitActionMode.CHAT_ONLY && settingsManager.getVisitChatCount() > 0
+            "visitActionProfile" ->
+                return mode != VisitActionMode.CHAT_ONLY
         }
         val value = when (key) {
             "visitCommentCount" -> settingsManager.getVisitCommentCount()
+            "visitChatCount" -> settingsManager.getVisitChatCount()
             "visitLikeCount" -> settingsManager.getVisitLikeCount()
             "visitMaxProfiles" -> settingsManager.getVisitMaxProfiles()
             else -> 0
@@ -377,7 +441,30 @@ class ZPScriptRunner @Inject constructor(
         return false
     }
 
+    private suspend fun ensureVisitFriendsListVisible(engine: ZPEngine): Boolean {
+        val root = engine.acquireRoot() ?: return false
+        return try {
+            if (!nodeFinder.isContactsMessagePreviewListVisible(root)) {
+                return nodeFinder.hasOnScreenVisitFriendRows(root)
+            }
+            logger.log(LogTag.SCAN, "contacts", "VISIT_SWITCH_MSG_PREVIEW_TO_DIRECTORY")
+            nodeFinder.findContactsDirectoryPagerSwitch(root)?.let { tab ->
+                ScriptTapTarget.fromNode(tab)?.let { engine.tap(it) }
+            }
+            delay(750)
+            val fresh = engine.acquireRoot() ?: return false
+            try {
+                nodeFinder.hasOnScreenVisitFriendRows(fresh)
+            } finally {
+                runCatching { fresh.recycle() }
+            }
+        } finally {
+            runCatching { root.recycle() }
+        }
+    }
+
     private suspend fun runFindContactItems(engine: ZPEngine): Boolean {
+        ensureVisitFriendsListVisible(engine)
         if (contactBatchActive && engine.lastContactTargets.isNotEmpty() &&
             contactBatchIndex < engine.lastContactTargets.size
         ) {
@@ -412,14 +499,36 @@ class ZPScriptRunner @Inject constructor(
             delay(700)
             targets = scanOnce()
         }
-        engine.lastContactTargets = targets
+        var filtered = filterUnhandledContactTargets(targets)
+        if (filtered.isEmpty() && targets.isNotEmpty()) {
+            val bottomKey = bottomContactKeyFromTargets(targets)
+            if (bottomKey != null && bottomKey == alphaScrollBottomKey) {
+                logger.log(LogTag.SCAN, "bottom=$bottomKey", "VISIT_ALPHA_END_ALL_HANDLED")
+                engine.lastContactTargets = emptyList()
+                contactBatchActive = false
+                return false
+            }
+            alphaScrollBottomKey = bottomKey
+            logger.log(
+                LogTag.SCAN,
+                "visible=${targets.size} bottom=$bottomKey",
+                "VISIT_HANDLED_SCROLL_ALPHA"
+            )
+            engine.scrollContacts()
+            delay(700)
+            targets = scanOnce()
+            filtered = filterUnhandledContactTargets(targets)
+        } else if (filtered.isNotEmpty()) {
+            alphaScrollBottomKey = null
+        }
+        engine.lastContactTargets = filtered
         contactBatchActive = targets.isNotEmpty()
-        if (targets.isNotEmpty()) {
-            logger.log(LogTag.SCAN, "contacts=${targets.size}", "VISIT_CONTACTS_FOUND")
+        if (filtered.isNotEmpty()) {
+            logger.log(LogTag.SCAN, "contacts=${filtered.size}", "VISIT_CONTACTS_FOUND")
         } else {
             logger.log(LogTag.SCAN, "contacts", "VISIT_CONTACTS_EMPTY")
         }
-        return targets.isNotEmpty()
+        return filtered.isNotEmpty()
     }
 
     private suspend fun runScrollContactsWhenBatchDone(engine: ZPEngine): Boolean {
@@ -436,6 +545,7 @@ class ZPScriptRunner @Inject constructor(
         delay(650)
         contactBatchActive = false
         contactBatchIndex = 0
+        engine.clearTapCache()
         return true
     }
 
@@ -443,15 +553,32 @@ class ZPScriptRunner @Inject constructor(
     private suspend fun runTapContactAt(engine: ZPEngine, step: ZPStep): Boolean {
         if (engine.lastContactTargets.isEmpty()) return false
         val targets = engine.lastContactTargets
+        if (contactBatchIndex >= targets.size) {
+            logger.log(LogTag.CLICK, "batchIdx=$contactBatchIndex", "TAP_CONTACT_BATCH_EXHAUSTED")
+            return false
+        }
+        var index = contactBatchIndex
+        while (index < targets.size) {
+            val key = visitHandledContacts.keyFromTapLabel(targets[index].label)
+            if (key == null || !visitHandledContacts.isHandled(key)) break
+            logger.log(LogTag.CLICK, "key=$key", "TAP_CONTACT_SKIP_HANDLED")
+            index++
+        }
+        if (index >= targets.size) {
+            contactBatchIndex = index
+            return false
+        }
+        contactBatchIndex = index
         val stored = progressManager.getVisitIndex()
-        val index = if (contactBatchIndex < targets.size) {
-            contactBatchIndex
-        } else {
-            (stored % targets.size).coerceIn(0, targets.lastIndex)
+        val tapped = targets[index]
+        visitHandledContacts.firstLineDisplayName(tapped.label)?.let { name ->
+            currentVisitDisplayName = name
+            currentVisitKey = visitHandledContacts.keyFromTapLabel(tapped.label)
         }
         logger.log(
             LogTag.CLICK,
-            "batchIdx=$contactBatchIndex visitIndex=$stored index=$index/${targets.size}",
+            "batchIdx=$contactBatchIndex visitIndex=$stored index=$index/${targets.size} " +
+                "name=${currentVisitDisplayName ?: "?"}",
             "TAP_CONTACT"
         )
         if (!engine.tapNodeAt(targets, index)) {
@@ -460,6 +587,72 @@ class ZPScriptRunner @Inject constructor(
         }
         contactBatchIndex++
         return true
+    }
+
+    private fun filterUnhandledContactTargets(targets: List<ScriptTapTarget>): List<ScriptTapTarget> =
+        targets.filter { t ->
+            val key = visitHandledContacts.keyFromTapLabel(t.label) ?: return@filter false
+            !visitHandledContacts.isHandled(key)
+        }
+
+    /** Hàng dưới cùng trên màn (danh bạ A–Z — cuộn xuống = tên lớn hơn). */
+    private fun bottomContactKeyFromTargets(targets: List<ScriptTapTarget>): String? =
+        targets.maxByOrNull { it.bounds.bottom }?.label?.let { visitHandledContacts.keyFromTapLabel(it) }
+
+    private fun refreshCurrentVisitKeyFromChat(engine: ZPEngine) {
+        val root = engine.acquireRoot() ?: return
+        try {
+            nodeFinder.findChatContactDisplayName(root)?.let { name ->
+                currentVisitDisplayName = name
+                currentVisitKey = visitHandledContacts.normalizeKey(name)
+                logger.log(LogTag.STATE, "key=$currentVisitKey", "VISIT_CONTACT_KEY_CHAT_TITLE")
+            }
+        } finally {
+            runCatching { root.recycle() }
+        }
+    }
+
+    private fun persistCurrentVisitContact(roundSuccess: Boolean) {
+        val key = currentVisitKey
+        val name = currentVisitDisplayName
+        currentVisitDisplayName = null
+        currentVisitKey = null
+        if (!roundSuccess || key.isNullOrBlank() || name.isNullOrBlank()) return
+        val outcome = when (settingsManager.getVisitActionMode()) {
+            VisitActionMode.LIKE_ONLY -> VisitHandledOutcome.LIKE
+            VisitActionMode.COMMENT_ONLY -> VisitHandledOutcome.COMMENT
+            VisitActionMode.CHAT_ONLY -> VisitHandledOutcome.CHAT
+            VisitActionMode.MIX -> VisitHandledOutcome.MIX
+        }
+        visitHandledContacts.record(name, outcome, key)
+        logger.log(LogTag.STATE, "key=$key outcome=${outcome.name}", "VISIT_HANDLED_SAVED")
+    }
+
+    private fun shouldSkipContactAfterVisitFailure(step: ZPStep): Boolean {
+        val action = step.action.lowercase()
+        return visitRecoveryStreak >= MAX_VISIT_RECOVERY &&
+            action in VISIT_FAIL_SKIP_CONTACT_ACTIONS
+    }
+
+    private suspend fun skipStuckContactAndJumpToContacts(
+        service: ZaloPilotAccessibilityService,
+        engine: ZPEngine,
+        steps: List<ZPStep>,
+        failedStep: ZPStep
+    ): Int {
+        visitRoundSuccess = false
+        skipVisitProfileSteps = true
+        currentVisitDisplayName = null
+        currentVisitKey = null
+        logger.log(LogTag.STATE, "action=${failedStep.action}", "VISIT_SKIP_STUCK_CONTACT")
+        service.showToast("⏭ Kẹt màn hình — bỏ người này, về danh bạ…")
+        if (!runOpenContactsFriends(service, engine)) {
+            logger.log(LogTag.ERROR, "openContactsFriends", "VISIT_SKIP_OPEN_CONTACTS_FAIL")
+            return -1
+        }
+        val scrollIdx = steps.indexOfFirst { it.action.equals("scrollcontacts", ignoreCase = true) }
+        if (scrollIdx >= 0) return scrollIdx
+        return steps.indexOfFirst { it.action.equals("opencontactsfriends", ignoreCase = true) }
     }
 
     /**
@@ -596,6 +789,17 @@ class ZPScriptRunner @Inject constructor(
             }
             if (nodeFinder.isChatScreen(root)) {
                 service.showToast("💬 Đang chat — tap mở profile…")
+                refreshCurrentVisitKeyFromChat(engine)
+                nodeFinder.findChatOpenProfileMoreInfoButton(root)?.let { more ->
+                    logger.log(LogTag.CLICK, "tapProfileEntry", "CHAT_MORE_INFO")
+                    if (service.scriptTapProfileEntryNode(more)) {
+                        delay(1_100)
+                        if (service.waitForProfileScreen(5_000L)) {
+                            service.showToast("✅ Profile từ menu thông tin")
+                            return true
+                        }
+                    }
+                }
                 nodeFinder.findChatIntroProfileTapTarget(root)?.let { intro ->
                     logger.log(LogTag.CLICK, "tapProfileEntry", "INTRO_CARD")
                     if (service.scriptTapProfileEntryNode(intro)) {
@@ -679,10 +883,16 @@ class ZPScriptRunner @Inject constructor(
     ): Boolean {
         return when (step.action.lowercase()) {
             "tapprofileentry" -> {
-                engine.back()
-                delay(650)
-                engine.back()
-                delay(900)
+                if (visitRecoveryStreak >= 2) {
+                    logger.log(LogTag.STATE, "streak=$visitRecoveryStreak", "PROFILE_RECOVERY_OPEN_CONTACTS")
+                    runOpenContactsFriends(service, engine)
+                    delay(500)
+                } else {
+                    engine.back()
+                    delay(650)
+                    engine.back()
+                    delay(900)
+                }
                 true
             }
             "tapcontactat" -> {
@@ -724,5 +934,10 @@ class ZPScriptRunner @Inject constructor(
         private const val MAX_GOTO = 10_000
         private const val MAX_VISIT_RECOVERY = 5
         private val SKIP_ON_FAIL_ACTIONS = setOf("goto", "savevar", "incrementvar")
+        private val VISIT_FAIL_SKIP_CONTACT_ACTIONS = setOf(
+            "tapprofileentry",
+            "ensurescreen",
+            "sendvisitchatmessage"
+        )
     }
 }

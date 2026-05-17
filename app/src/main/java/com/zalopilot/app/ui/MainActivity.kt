@@ -75,6 +75,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var uiScanner: ZaloUIScanner
     @Inject lateinit var zaloIdStore: ZaloIDStore
     @Inject lateinit var scriptStore: ZPScriptStore
+    @Inject lateinit var visitHandledContacts: VisitHandledContactsManager
 
     private val permissionGateTick = mutableIntStateOf(0)
 
@@ -941,6 +942,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun CommentScreen(settings: LikeSettings, onSave: (LikeSettings) -> Unit) {
         var visitCommentCount by remember(settings) { mutableIntStateOf(settings.visitCommentCount) }
+        var visitChatCount by remember(settings) { mutableIntStateOf(settings.visitChatCount) }
         var feedCommentCount by remember(settings) { mutableIntStateOf(settings.feedCommentCount) }
         var visitActionMode by remember(settings) {
             mutableStateOf(
@@ -960,7 +962,7 @@ class MainActivity : ComponentActivity() {
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item { IosScreenTitle("Bình luận", "Nhật ký & danh bạ dùng chung danh sách câu") }
+            item { IosScreenTitle("Bình luận & tin", "Nhật ký, comment profile & tin chat dùng chung danh sách câu") }
             item { IosSectionLabel("CHẾ ĐỘ") }
             item {
                 IosCard {
@@ -973,7 +975,8 @@ class MainActivity : ComponentActivity() {
                     listOf(
                         VisitActionMode.LIKE_ONLY to "Chỉ like",
                         VisitActionMode.COMMENT_ONLY to "Chỉ comment",
-                        VisitActionMode.MIX to "Like rồi comment"
+                        VisitActionMode.MIX to "Like rồi comment",
+                        VisitActionMode.CHAT_ONLY to "Chỉ gửi tin (chat)"
                     ).forEach { (mode, label) ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(
@@ -998,17 +1001,74 @@ class MainActivity : ComponentActivity() {
                         steps = 5,
                         colors = iosSliderColors
                     )
-                    if (visitActionMode == VisitActionMode.COMMENT_ONLY) {
-                        Text(
-                            "Chỉ comment: bot không bấm Thích, chỉ gửi bình luận.",
+                    when (visitActionMode) {
+                        VisitActionMode.COMMENT_ONLY -> Text(
+                            "Chỉ comment: bot mở profile, không like, chỉ gửi bình luận bài.",
                             fontSize = 11.sp,
                             color = ZpColors.TextSecondary,
                             modifier = Modifier.padding(top = 4.dp)
                         )
+                        VisitActionMode.CHAT_ONLY -> Text(
+                            "Chỉ tin: sau tap bạn bè bot gửi tin trong khung chat, không vào profile.",
+                            fontSize = 11.sp,
+                            color = ZpColors.TextSecondary,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        else -> Unit
                     }
                 }
             }
             item { IosSectionLabel("DANH BẠ (VISIT)") }
+            item {
+                var handledCount by remember { mutableIntStateOf(visitHandledContacts.count()) }
+                val recentHandled = remember(handledCount) { visitHandledContacts.recent(12) }
+                IosCard {
+                    Text(
+                        "Đã xử lý (like / comment / tin): $handledCount",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.W500
+                    )
+                    Text(
+                        "Bot bỏ qua tên có trong danh sách; danh bạ A–Z — cuộn khi cả màn đã xử lý.",
+                        fontSize = 11.sp,
+                        color = ZpColors.TextSecondary,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                    if (recentHandled.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        recentHandled.take(6).forEach { entry ->
+                            Text(
+                                "• ${entry.displayName} (${entry.outcome.lowercase()})",
+                                fontSize = 11.sp,
+                                color = ZpColors.TextSecondary
+                            )
+                        }
+                        if (handledCount > 6) {
+                            Text(
+                                "… và ${handledCount - 6} người khác",
+                                fontSize = 11.sp,
+                                color = ZpColors.TextSecondary
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            visitHandledContacts.clear()
+                            handledCount = 0
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Đã xóa danh sách đã xử lý Visit",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Xóa danh sách đã xử lý", fontSize = 13.sp)
+                    }
+                }
+            }
             item {
                 IosCard {
                     Text("Số comment / profile (0 = không gửi)", fontSize = 12.sp, color = ZpColors.TextSecondary)
@@ -1018,7 +1078,27 @@ class MainActivity : ComponentActivity() {
                         onValueChange = { visitCommentCount = it.toInt() },
                         valueRange = 0f..5f,
                         steps = 5,
-                        colors = iosSliderColors
+                        colors = iosSliderColors,
+                        enabled = visitActionMode != VisitActionMode.CHAT_ONLY
+                    )
+                    if (visitActionMode == VisitActionMode.CHAT_ONLY) {
+                        Text(
+                            "Chế độ tin: comment profile tắt.",
+                            fontSize = 11.sp,
+                            color = ZpColors.TextSecondary,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text("Số tin / contact (chat)", fontSize = 12.sp, color = ZpColors.TextSecondary)
+                    Text("Tin / contact: $visitChatCount", fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+                    Slider(
+                        value = visitChatCount.toFloat(),
+                        onValueChange = { visitChatCount = it.toInt() },
+                        valueRange = 0f..5f,
+                        steps = 5,
+                        colors = iosSliderColors,
+                        enabled = visitActionMode == VisitActionMode.CHAT_ONLY
                     )
                 }
             }
@@ -1062,6 +1142,7 @@ class MainActivity : ComponentActivity() {
                         onSave(
                             base.copy(
                                 visitCommentCount = visitCommentCount,
+                                visitChatCount = visitChatCount,
                                 feedCommentCount = feedCommentCount,
                                 visitActionMode = visitActionMode.name,
                                 visitCommentList = if (comments.isEmpty()) base.visitCommentList else comments

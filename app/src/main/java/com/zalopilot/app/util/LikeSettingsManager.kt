@@ -42,6 +42,8 @@ data class LikeSettings(
     val pauseWhenZaloAway: Boolean = true,
     val visitLikeCount: Int = 3,
     val visitCommentCount: Int = 0,
+    /** Số tin nhắn gửi / contact ở chế độ Visit CHAT_ONLY (0 = không gửi). Dùng chung [visitCommentList]. */
+    val visitChatCount: Int = 1,
     /** Số comment gửi trên mỗi bài sau khi like thành công ở chế độ Nhật ký (0 = chỉ like). Dùng chung [visitCommentList]. */
     val feedCommentCount: Int = 0,
     val visitActionMode: String = "LIKE_ONLY",
@@ -49,7 +51,7 @@ data class LikeSettings(
     val visitCommentList: List<String> = VisitCommentDefaults.lines
 )
 
-enum class VisitActionMode { LIKE_ONLY, COMMENT_ONLY, MIX }
+enum class VisitActionMode { LIKE_ONLY, COMMENT_ONLY, MIX, CHAT_ONLY }
 
 @Singleton
 class LikeSettingsManager @Inject constructor(
@@ -85,6 +87,7 @@ class LikeSettingsManager @Inject constructor(
         return s.copy(
             visitLikeCount = s.visitLikeCount.coerceIn(0, 10),
             visitCommentCount = s.visitCommentCount.coerceIn(0, 5),
+            visitChatCount = s.visitChatCount.coerceIn(0, 5),
             feedCommentCount = s.feedCommentCount.coerceIn(0, 5),
             visitMaxProfiles = s.visitMaxProfiles.coerceIn(1, 500),
             visitCommentList = comments,
@@ -165,6 +168,7 @@ class LikeSettingsManager @Inject constructor(
 
     fun getVisitLikeCount(): Int = load().visitLikeCount
     fun getVisitCommentCount(): Int = load().visitCommentCount
+    fun getVisitChatCount(): Int = load().visitChatCount
     fun getFeedCommentCount(): Int = load().feedCommentCount
     fun getVisitMaxProfiles(): Int = load().visitMaxProfiles
     fun getVisitCommentList(): List<String> = load().visitCommentList
@@ -183,6 +187,10 @@ class LikeSettingsManager @Inject constructor(
 
     fun setVisitCommentCount(count: Int) {
         save(load().copy(visitCommentCount = count.coerceIn(0, 5)))
+    }
+
+    fun setVisitChatCount(count: Int) {
+        save(load().copy(visitChatCount = count.coerceIn(0, 5)))
     }
 
     fun setVisitActionMode(mode: VisitActionMode) {
