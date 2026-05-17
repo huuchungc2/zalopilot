@@ -1453,6 +1453,27 @@ class ZaloPilotAccessibilityService : AccessibilityService() {
             logger.log(LogTag.STATE, "autoLike", "START_BLOCKED_USER_STOPPED")
             return
         }
+        if (isRunning && userInitiated && preferredMode != null) {
+            val current = activeLikeMode()
+            if (current == preferredMode) {
+                val label = if (preferredMode == LikeMode.VISIT) "danh bạ" else "nhật ký"
+                showToast("ℹ️ Đang chạy $label rồi")
+                return
+            }
+            val toLabel = if (preferredMode == LikeMode.VISIT) "danh bạ" else "nhật ký"
+            logger.log(LogTag.STATE, "from=$current to=$preferredMode", "START_SWITCH_MODE")
+            showToast("↻ Chuyển sang $toLabel…")
+            stopAutoLike(reason = "switch_mode", userRequested = false)
+            scope.launch {
+                var waitMs = 0
+                while (isRunning && waitMs < 3_000) {
+                    delay(100)
+                    waitMs += 100
+                }
+                startAutoLike(preferredMode, userInitiated = true, startEntry = startEntry)
+            }
+            return
+        }
         if (isRunning) {
             logger.log(LogTag.STATE, "autoLike", "ALREADY_RUNNING")
             showToast("ℹ️ Bot đang chạy sẵn")
