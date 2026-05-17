@@ -283,9 +283,24 @@ class MainActivity : ComponentActivity() {
                         "com.zalopilot.STATUS_UPDATE" -> {
                             val running = intent.getBooleanExtra("running", false)
                             isRunning = running
-                            Toast.makeText(this@MainActivity,
-                                if (running) "▶ ZaloPilot đang chạy" else "■ ZaloPilot đã dừng",
-                                Toast.LENGTH_SHORT).show()
+                            val modeExtra = intent.getStringExtra(
+                                ZaloPilotAccessibilityService.EXTRA_RUNNING_LIKE_MODE
+                            )
+                            if (running && modeExtra != null) {
+                                runCatching { LikeMode.valueOf(modeExtra) }.getOrNull()?.let { mode ->
+                                    settingsManager.setLikeMode(mode)
+                                    settings = settingsManager.load()
+                                }
+                            }
+                            val modeLabel = when (settingsManager.getLikeMode()) {
+                                LikeMode.VISIT -> "danh bạ"
+                                LikeMode.FEED -> "nhật ký"
+                            }
+                            Toast.makeText(
+                                this@MainActivity,
+                                if (running) "▶ Đang chạy like $modeLabel" else "■ ZaloPilot đã dừng",
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
                         "com.zalopilot.DAILY_LIMIT" ->
                             Toast.makeText(this@MainActivity,
@@ -318,7 +333,7 @@ class MainActivity : ComponentActivity() {
                 val tabs = listOf(
                     Triple("Home", Icons.Filled.Home, 0),
                     Triple("Cài đặt", Icons.Filled.Settings, 1),
-                    Triple("Comment", Icons.Filled.Email, 2),
+                    Triple("BL/Tin", Icons.Filled.Email, 2),
                     Triple("Log", Icons.Filled.List, 3),
                     Triple("Script", Icons.Filled.Edit, 4),
                     Triple("UI", Icons.Filled.Menu, 5)
@@ -369,6 +384,7 @@ class MainActivity : ComponentActivity() {
                         floatingOverlayOn,
                         accessibilityOn,
                         accessibilityConnected,
+                        overlayTick = overlayTick,
                         onOpenSettings = { selectedTab = 1 },
                         onOpenComments = { selectedTab = 2 }
                     )
@@ -420,13 +436,18 @@ class MainActivity : ComponentActivity() {
         floatingOverlayOn: Boolean,
         accessibilityOn: Boolean,
         accessibilityConnected: Boolean,
+        overlayTick: Int,
         onOpenSettings: () -> Unit,
         onOpenComments: () -> Unit
     ) {
         var autoStart by remember { mutableStateOf(settingsManager.isAutoStart()) }
         var ecoMode by remember(settings) { mutableStateOf(settings.ecoMode) }
-        val runningMode = remember(settings.likeModeStr) {
-            runCatching { LikeMode.valueOf(settings.likeModeStr) }.getOrDefault(LikeMode.FEED)
+        val runningMode = remember(isRunning, settings.likeModeStr, overlayTick) {
+            val session = ZaloPilotAccessibilityService.instance?.getSessionLikeMode()
+            when {
+                isRunning && session != null -> session
+                else -> runCatching { LikeMode.valueOf(settings.likeModeStr) }.getOrDefault(LikeMode.FEED)
+            }
         }
         val pct = if (settings.dailyLimit <= 0) 0f
         else (progress.todayLikeCount.toFloat() / settings.dailyLimit).coerceIn(0f, 1f)
@@ -494,9 +515,10 @@ class MainActivity : ComponentActivity() {
                 IosCard {
                     if (isRunning) {
                         Text(
-                            "Đang chạy: ${if (runningMode == LikeMode.VISIT) "Like danh bạ" else "Like Nhật ký"}",
+                            "Đang chạy: ${if (runningMode == LikeMode.VISIT) "Like danh bạ" else "Like nhật ký"}",
                             fontSize = 13.sp,
-                            color = ZpColors.TextSecondary
+                            fontWeight = FontWeight.W600,
+                            color = if (runningMode == LikeMode.VISIT) ZpColors.AccentPurple else ZpColors.AccentBlue
                         )
                         Spacer(Modifier.height(12.dp))
                     } else {
@@ -510,7 +532,7 @@ class MainActivity : ComponentActivity() {
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    "▶  Like nhật ký",
+                                    "▶ Nhật ký",
                                     color = Color.White,
                                     fontSize = 16.sp,
                                     fontWeight = FontWeight.W600,
@@ -526,7 +548,7 @@ class MainActivity : ComponentActivity() {
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    "▶  Like danh sách",
+                                    "▶ Danh bạ",
                                     color = Color.White,
                                     fontSize = 16.sp,
                                     fontWeight = FontWeight.W600,
@@ -1467,7 +1489,7 @@ class MainActivity : ComponentActivity() {
 
         Column(Modifier.fillMaxSize().background(ZpColors.BgPage)) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-                Text("Nhật ký", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = ZpColors.TextPrimary)
+                Text("Log", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = ZpColors.TextPrimary)
                 Text("${activeLogs.size} dòng · ${activeTitle()}", fontSize = 13.sp, color = ZpColors.TextSecondary)
             }
             TabRow(

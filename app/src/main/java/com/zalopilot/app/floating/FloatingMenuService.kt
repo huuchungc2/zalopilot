@@ -44,7 +44,7 @@ import javax.inject.Inject
 /** Khớp [com.zalopilot.app.ui.ZpColors] — overlay View, không Compose. */
 private object FloatingMenuUiColors {
     const val ACCENT_BLUE = "#007AFF"
-    const val ACCENT_PURPLE = "#AF52DE"
+    const val ACCENT_PURPLE = "#AF52DE" // Like danh bạ — khớp ZpColors.AccentPurple
     const val COLOR_GREEN = "#34C759"
     const val COLOR_RED = "#FF3B30"
     const val TEXT_MUTED = "#8E8E93"
@@ -291,12 +291,20 @@ class FloatingMenuService : Service() {
                     closeMenu()
                 })
             } else {
-                addView(menuItem("▶  Bắt đầu like", FloatingMenuUiColors.COLOR_GREEN) {
-                    val inferred = ZaloPilotAccessibilityService.instance?.inferLikeModeForStart()
-                    val mode = inferred ?: settingsManager.getLikeMode()
+                addView(menuItem("▶ Nhật ký", FloatingMenuUiColors.ACCENT_BLUE) {
+                    settingsManager.setLikeMode(LikeMode.FEED)
                     AccessibilityHelper.requestStartAutoLike(
                         this@FloatingMenuService,
-                        mode,
+                        LikeMode.FEED,
+                        BotStartEntry.FLOATING_ON_ZALO
+                    )
+                    closeMenu()
+                })
+                addView(menuItem("▶ Danh bạ", FloatingMenuUiColors.ACCENT_PURPLE) {
+                    settingsManager.setLikeMode(LikeMode.VISIT)
+                    AccessibilityHelper.requestStartAutoLike(
+                        this@FloatingMenuService,
+                        LikeMode.VISIT,
                         BotStartEntry.FLOATING_ON_ZALO
                     )
                     closeMenu()
