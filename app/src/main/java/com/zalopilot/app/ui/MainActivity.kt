@@ -25,12 +25,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.Code
-import androidx.compose.material.icons.outlined.AccessibilityNew
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.List
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -164,7 +167,7 @@ class MainActivity : ComponentActivity() {
             when (step) {
                 1 -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     StepCard(
-                        Icons.Outlined.AccessibilityNew,
+                        Icons.Outlined.Info,
                         "Bật Trợ năng",
                         "Mở màn cài đặt → bật ZaloPilot.",
                         "Mở Trợ năng",
@@ -174,7 +177,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 2 -> StepCard(
-                    Icons.Outlined.Layers,
+                    Icons.Outlined.Visibility,
                     "Hiển thị trên app khác",
                     "Cho phép nút ZP nổi trên Zalo.",
                     "Mở cài đặt",
@@ -184,7 +187,7 @@ class MainActivity : ComponentActivity() {
                 }
                 3 -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
-                        Icons.Outlined.CheckCircle,
+                        Icons.Outlined.Check,
                         contentDescription = null,
                         modifier = Modifier.size(56.dp),
                         tint = ZpColors.ColorGreen
@@ -316,10 +319,10 @@ class MainActivity : ComponentActivity() {
                 val tabIcons = listOf(
                     Icons.Outlined.Home,
                     Icons.Outlined.Settings,
-                    Icons.Outlined.ChatBubbleOutline,
-                    Icons.Outlined.Article,
-                    Icons.Outlined.Code,
-                    Icons.Outlined.AccountTree
+                    Icons.Outlined.Email,
+                    Icons.Outlined.Description,
+                    Icons.Outlined.Edit,
+                    Icons.Outlined.List
                 )
                 listOf("Trang chủ", "Cài đặt", "Bình luận", "Nhật ký", "Script", "UI").forEachIndexed { i, label ->
                     NavigationBarItem(

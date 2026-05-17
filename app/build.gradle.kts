@@ -51,7 +51,8 @@ dependencies {
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
-    implementation("androidx.compose.material:material-icons-extended")
+    // Bộ icon nhỏ (~vài trăm KB) — KHÔNG material-icons-extended (~+10MB APK khi không minify).
+    implementation("androidx.compose.material:material-icons-core")
     implementation(libs.navigation.compose)
     implementation(libs.hilt.android)
     implementation(libs.hilt.navigation.compose)
