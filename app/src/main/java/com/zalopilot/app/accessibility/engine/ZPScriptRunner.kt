@@ -303,14 +303,7 @@ class ZPScriptRunner @Inject constructor(
                         }
                     }
                     val lt = likeTarget ?: return false
-                    val likeNode = nodeFinder.findLikeAreaNodeAt(
-                        root,
-                        lt.bounds,
-                        lt.viewId
-                    ) ?: return false
-                    val btn = nodeFinder.findCommentButton(likeNode) ?: return false
-                    engine.lastTapTarget = ScriptTapTarget.fromNode(btn) ?: return false
-                    true
+                    engine.storeCommentTapTarget(root, lt)
                 } finally {
                     runCatching { root.recycle() }
                 }

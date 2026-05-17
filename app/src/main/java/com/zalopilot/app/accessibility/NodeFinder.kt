@@ -710,6 +710,12 @@ class NodeFinder @Inject constructor(
         val anchor = findLikeAreaNodeAt(root, origRect, origId)
             ?: findNearestLikeAreaNode(root, origRect, maxDistancePx = 320)
         if (anchor != null && isAlreadyLiked(anchor)) return true
+        findFeedFooterOverlappingRect(root, origRect)?.let { footer ->
+            if (isFeedFooterModule(footer) && footerAggregatedTextShowsSelfLiked(footer)) {
+                logger.log(LogTag.CLICK, "footer", "VERIFY_AGGREGATED_FOOTER_LIKED")
+                return true
+            }
+        }
         return isLikedStateInRectBand(root, origRect)
     }
 
@@ -1479,14 +1485,52 @@ class NodeFinder @Inject constructor(
     fun findFeedItemFooters(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> =
         findByViewId(root, "feedItemFooterBarModule").filter { it.isVisibleToUser && it.hasValidScreenBounds() }
 
+    private fun footerAggregatedTextBundle(footer: AccessibilityNodeInfo): String = buildString {
+        append(footer.text?.toString().orEmpty())
+        append('\n')
+        append(footer.contentDescription?.toString().orEmpty())
+    }
+
     private fun footerAggregatedTextHasLikeAction(footer: AccessibilityNodeInfo): Boolean {
-        val hay = buildString {
-            append(footer.text?.toString().orEmpty())
-            append(' ')
-            append(footer.contentDescription?.toString().orEmpty())
-        }.lowercase()
+        val hay = footerAggregatedTextBundle(footer).lowercase()
         if (hay.contains("đã thích") || hay.contains("liked")) return false
         return hay.contains(ZaloIDStore.TEXT_LIKE.lowercase())
+    }
+
+    /** Profile/footer text gộp: mình đã like khi có dòng «Đã thích» / không còn nút «Thích». */
+    fun footerAggregatedTextShowsSelfLiked(footer: AccessibilityNodeInfo): Boolean {
+        val raw = footerAggregatedTextBundle(footer)
+        for (line in raw.lineSequence()) {
+            val t = line.trim().lowercase()
+            if (t == "đã thích" || t == "liked") return true
+        }
+        val hay = raw.lowercase()
+        if (hay.contains("\nđã thích") || hay.trimEnd().endsWith("đã thích")) return true
+        if (!footerAggregatedTextHasLikeAction(footer) && hay.contains("đã thích")) return true
+        return false
+    }
+
+    /** Footer bài giao với vùng tap like (verify profile footer gộp). */
+    fun findFeedFooterOverlappingRect(root: AccessibilityNodeInfo, origRect: Rect): AccessibilityNodeInfo? {
+        val band = Rect(
+            (origRect.left - 80).coerceAtLeast(0),
+            (origRect.top - 120).coerceAtLeast(0),
+            origRect.right + 120,
+            origRect.bottom + 80
+        )
+        var best: AccessibilityNodeInfo? = null
+        var bestOverlap = 0
+        for (footer in findFeedItemFooters(root)) {
+            val fr = Rect().also { footer.getBoundsInScreen(it) }
+            if (!Rect.intersects(band, fr)) continue
+            val intersect = Rect(fr).apply { intersect(band) }
+            val area = intersect.width().coerceAtLeast(0) * intersect.height().coerceAtLeast(0)
+            if (area > bestOverlap) {
+                bestOverlap = area
+                best = footer
+            }
+        }
+        return best
     }
 
     /** Tap vùng dòng «Thích» trên footer text gộp (dump: childCount=0). */

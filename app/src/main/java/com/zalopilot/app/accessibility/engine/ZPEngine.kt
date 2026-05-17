@@ -518,7 +518,14 @@ class ZPEngine(
         suspend fun check(): Boolean {
             val fresh = acquireRoot() ?: return false
             return try {
-                nodeFinder.verifyLikedNearClickArea(fresh, rect, id)
+                if (nodeFinder.verifyLikedNearClickArea(fresh, rect, id)) return true
+                nodeFinder.findFeedFooterAt(fresh, rect, id)?.let { footer ->
+                    if (nodeFinder.footerAggregatedTextShowsSelfLiked(footer)) {
+                        logger.log(LogTag.CLICK, "profile", "VERIFY_FOOTER_TEXT_LIKED")
+                        return true
+                    }
+                }
+                false
             } finally {
                 runCatching { fresh.recycle() }
             }
@@ -526,6 +533,26 @@ class ZPEngine(
         if (check()) return true
         delay(800)
         return check()
+    }
+
+    /** Visit/profile script: neo footer → node hoặc vùng tap bình luận (footer text gộp). */
+    fun storeCommentTapTarget(root: AccessibilityNodeInfo, likeTarget: ScriptTapTarget): Boolean {
+        val footer = nodeFinder.findFeedFooterAt(root, likeTarget.bounds, likeTarget.viewId)
+            ?: return false
+        return when (val target = nodeFinder.resolveFeedCommentTapTarget(footer)) {
+            is NodeFinder.FeedCommentTapTarget.Node -> {
+                lastTapTarget = ScriptTapTarget.fromNode(target.node)
+                lastTapTarget != null
+            }
+            is NodeFinder.FeedCommentTapTarget.Area -> {
+                lastTapTarget = ScriptTapTarget(
+                    bounds = Rect(target.rect),
+                    label = "comment:${target.reason}"
+                )
+                logger.log(LogTag.CLICK, target.reason, "VISIT_COMMENT_TAP_AREA")
+                true
+            }
+        }
     }
 
     suspend fun inputRandomComment(root: AccessibilityNodeInfo): Boolean {
