@@ -598,7 +598,7 @@ class MainActivity : ComponentActivity() {
                                 color = ZpColors.TextPrimary
                             )
                             Text(
-                                "Menu nổi: Bắt đầu (tự nhận màn), Dừng, Tự động",
+                                "Menu ZP trên Zalo. Tắt switch = ẩn nút (hết thông báo). Ẩn thông báo: Cài đặt máy → ZaloPilot → Thông báo.",
                                 fontSize = 12.sp,
                                 color = ZpColors.TextSecondary
                             )

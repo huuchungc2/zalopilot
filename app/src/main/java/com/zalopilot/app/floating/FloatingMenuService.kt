@@ -375,32 +375,39 @@ class FloatingMenuService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val channelId = "zalopilot_service"
+        // Channel mới — IMPORTANCE_MIN: không pop-up, gọn thanh trạng thái (Android bắt buộc khi nút ZP bật).
+        val channelId = "zalopilot_floating_min_v2"
         val manager = getSystemService(NotificationManager::class.java)
         if (manager.getNotificationChannel(channelId) == null) {
-            manager.createNotificationChannel(
-                NotificationChannel(channelId, "ZaloPilot", NotificationManager.IMPORTANCE_LOW)
-            )
+            NotificationChannel(channelId, "Nút nổi ZP", NotificationManager.IMPORTANCE_MIN).apply {
+                description =
+                    "Chỉ hiện khi bật nút ZP. Ẩn: Cài đặt → Ứng dụng → ZaloPilot → Thông báo → tắt «Nút nổi ZP»."
+                setShowBadge(false)
+                enableLights(false)
+                enableVibration(false)
+                setSound(null, null)
+                lockscreenVisibility = Notification.VISIBILITY_SECRET
+            }.also { manager.createNotificationChannel(it) }
         }
-        val dumpPi = PendingIntent.getBroadcast(
+        val openAppPi = PendingIntent.getActivity(
             this,
-            2,
-            Intent(ZaloPilotAccessibilityService.ACTION_DUMP_UI_TREE).setPackage(packageName),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val stopPi = PendingIntent.getService(
-            this,
-            3,
-            Intent(this, FloatingMenuService::class.java).apply { action = ACTION_STOP },
+            1,
+            packageManager.getLaunchIntentForPackage(packageName),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, channelId)
-            .setContentTitle("ZaloPilot ${AppVersion.shortLabel()}")
-            .setContentText("Nút ZP nổi · ${AppVersion.fullLabel()}")
+            .setContentTitle("ZaloPilot")
+            .setContentText("Nút ZP đang bật")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .addAction(android.R.drawable.ic_menu_save, "📋 Dump UI", dumpPi)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Tắt nút ZP", stopPi)
+            .setContentIntent(openAppPi)
+            .setSilent(true)
+            .setShowWhen(false)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
 
