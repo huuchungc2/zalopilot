@@ -271,6 +271,7 @@ class MainActivity : ComponentActivity() {
                 overlayTick++
             }
         }
+        val floatingOverlayOn = remember(overlayTick) { FloatingMenuService.isOverlayRunning }
         val accessibilityOn = remember(overlayTick) { AccessibilityHelper.isAccessibilityEnabled(this@MainActivity) }
         val accessibilityConnected = remember(overlayTick) { ZaloPilotAccessibilityService.instance != null }
 
@@ -378,6 +379,7 @@ class MainActivity : ComponentActivity() {
                         isRunning,
                         progress,
                         settings,
+                        floatingOverlayOn,
                         accessibilityOn,
                         accessibilityConnected,
                         overlayTick = overlayTick,
@@ -433,6 +435,7 @@ class MainActivity : ComponentActivity() {
         isRunning: Boolean,
         progress: LikeProgress,
         settings: LikeSettings,
+        floatingOverlayOn: Boolean,
         accessibilityOn: Boolean,
         accessibilityConnected: Boolean,
         overlayTick: Int,
@@ -575,6 +578,38 @@ class MainActivity : ComponentActivity() {
                                 textAlign = TextAlign.Center
                             )
                         }
+                    }
+                }
+            }
+            item {
+                IosCard(contentPadding = PaddingValues(0.dp)) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Nút nổi ZP trên Zalo",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = ZpColors.TextPrimary
+                            )
+                            Text(
+                                "Menu nổi: Bắt đầu (tự nhận màn), Dừng, Tự động",
+                                fontSize = 12.sp,
+                                color = ZpColors.TextSecondary
+                            )
+                        }
+                        Switch(
+                            checked = floatingOverlayOn,
+                            onCheckedChange = { on ->
+                                if (on) startFloatingOverlay() else stopFloatingOverlay()
+                            },
+                            colors = iosSwitchColors
+                        )
                     }
                 }
             }
