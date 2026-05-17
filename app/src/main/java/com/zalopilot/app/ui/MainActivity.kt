@@ -94,6 +94,9 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         permissionGateTick.intValue++
+        if (ZaloPilotAccessibilityService.instance?.isRunning == true) {
+            AccessibilityHelper.requestStopAutoLike(this)
+        }
         if (!AccessibilityHelper.isAccessibilityEnabled(this)) {
             Toast.makeText(
                 this,
@@ -268,7 +271,6 @@ class MainActivity : ComponentActivity() {
                 overlayTick++
             }
         }
-        val floatingOverlayOn = remember(overlayTick) { FloatingMenuService.isOverlayRunning }
         val accessibilityOn = remember(overlayTick) { AccessibilityHelper.isAccessibilityEnabled(this@MainActivity) }
         val accessibilityConnected = remember(overlayTick) { ZaloPilotAccessibilityService.instance != null }
 
@@ -293,13 +295,9 @@ class MainActivity : ComponentActivity() {
                                     settings = settingsManager.load()
                                 }
                             }
-                            val modeLabel = when (settingsManager.getLikeMode()) {
-                                LikeMode.VISIT -> "danh bạ"
-                                LikeMode.FEED -> "nhật ký"
-                            }
                             Toast.makeText(
                                 this@MainActivity,
-                                if (running) "▶ Đang chạy like $modeLabel" else "■ ZaloPilot đã dừng",
+                                if (running) "▶ ZaloPilot đang chạy" else "■ ZaloPilot đã dừng",
                                 Toast.LENGTH_SHORT
                             ).show()
                         }
@@ -380,7 +378,6 @@ class MainActivity : ComponentActivity() {
                         isRunning,
                         progress,
                         settings,
-                        floatingOverlayOn,
                         accessibilityOn,
                         accessibilityConnected,
                         overlayTick = overlayTick,
@@ -436,7 +433,6 @@ class MainActivity : ComponentActivity() {
         isRunning: Boolean,
         progress: LikeProgress,
         settings: LikeSettings,
-        floatingOverlayOn: Boolean,
         accessibilityOn: Boolean,
         accessibilityConnected: Boolean,
         overlayTick: Int,
@@ -445,12 +441,8 @@ class MainActivity : ComponentActivity() {
     ) {
         var autoStart by remember { mutableStateOf(settingsManager.isAutoStart()) }
         var ecoMode by remember(settings) { mutableStateOf(settings.ecoMode) }
-        val runningMode = remember(isRunning, settings.likeModeStr, overlayTick) {
-            val session = ZaloPilotAccessibilityService.instance?.getSessionLikeMode()
-            when {
-                isRunning && session != null -> session
-                else -> runCatching { LikeMode.valueOf(settings.likeModeStr) }.getOrDefault(LikeMode.FEED)
-            }
+        val runningVisit = remember(isRunning, overlayTick) {
+            isRunning && ZaloPilotAccessibilityService.instance?.getSessionLikeMode() == LikeMode.VISIT
         }
         val pct = if (settings.dailyLimit <= 0) 0f
         else (progress.todayLikeCount.toFloat() / settings.dailyLimit).coerceIn(0f, 1f)
@@ -515,80 +507,72 @@ class MainActivity : ComponentActivity() {
                 }
             }
             item {
-                IosCard {
-                    if (isRunning) {
+                if (isRunning) {
+                    IosCard {
                         Text(
-                            "Đang chạy: ${if (runningMode == LikeMode.VISIT) "Like danh bạ" else "Like nhật ký"}",
-                            fontSize = 13.sp,
+                            if (runningVisit) "▶ Đang chạy danh bạ" else "▶ Đang chạy nhật ký",
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.W600,
-                            color = if (runningMode == LikeMode.VISIT) ZpColors.AccentPurple else ZpColors.AccentBlue
+                            color = if (runningVisit) ZpColors.AccentPurple else ZpColors.AccentBlue,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center
                         )
-                        Spacer(Modifier.height(12.dp))
-                    } else {
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Box(
-                                Modifier.weight(1f).height(52.dp).clip(RoundedCornerShape(14.dp))
-                                    .background(ZpColors.AccentBlue).clickable {
-                                        settingsManager.setLikeMode(LikeMode.FEED)
-                                        AccessibilityHelper.requestStartAutoLike(this@MainActivity, LikeMode.FEED)
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    "▶ Nhật ký",
-                                    color = Color.White,
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.W600,
-                                    textAlign = TextAlign.Center
-                                )
-                            }
-                            Box(
-                                Modifier.weight(1f).height(52.dp).clip(RoundedCornerShape(14.dp))
-                                    .background(ZpColors.AccentPurple).clickable {
-                                        settingsManager.setLikeMode(LikeMode.VISIT)
-                                        AccessibilityHelper.requestStartAutoLike(this@MainActivity, LikeMode.VISIT)
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    "▶ Danh bạ",
-                                    color = Color.White,
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.W600,
-                                    textAlign = TextAlign.Center
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "Mở lại app ZaloPilot → bot tự dừng",
+                            fontSize = 12.sp,
+                            color = ZpColors.TextSecondary,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            textAlign = TextAlign.Center
+                        )
                     }
+                } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Box(
-                            Modifier.weight(1f).height(44.dp).clip(RoundedCornerShape(14.dp))
-                                .background(ZpColors.BgSecondary).clickable {
-                                    val intent = packageManager.getLaunchIntentForPackage("com.zing.zalo")
-                                    if (intent == null) {
-                                        Toast.makeText(this@MainActivity, "Chưa cài Zalo", Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                        startActivity(intent)
-                                    }
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("Mở Zalo", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = ZpColors.TextPrimary)
-                        }
-                        Box(
-                            Modifier.weight(1f).height(44.dp).clip(RoundedCornerShape(14.dp))
-                                .background(ZpColors.BgSecondary).clickable {
-                                    if (floatingOverlayOn) stopFloatingOverlay() else startFloatingOverlay()
+                            Modifier
+                                .weight(1f)
+                                .height(56.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(ZpColors.AccentBlue)
+                                .clickable {
+                                    settingsManager.setLikeMode(LikeMode.FEED)
+                                    AccessibilityHelper.requestStartAutoLike(
+                                        this@MainActivity,
+                                        LikeMode.FEED
+                                    )
                                 },
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                if (floatingOverlayOn) "Tắt nút nổi" else "Bật nút nổi",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = ZpColors.TextPrimary
+                                "▶ Nhật ký",
+                                color = Color.White,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.W600,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .height(56.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(ZpColors.AccentPurple)
+                                .clickable {
+                                    settingsManager.setLikeMode(LikeMode.VISIT)
+                                    AccessibilityHelper.requestStartAutoLike(
+                                        this@MainActivity,
+                                        LikeMode.VISIT
+                                    )
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "▶ Danh bạ",
+                                color = Color.White,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.W600,
+                                textAlign = TextAlign.Center
                             )
                         }
                     }
