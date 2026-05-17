@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Settings
@@ -334,9 +335,7 @@ class MainActivity : ComponentActivity() {
                     Triple("Home", Icons.Filled.Home, 0),
                     Triple("Cài đặt", Icons.Filled.Settings, 1),
                     Triple("BL/Tin", Icons.Filled.Email, 2),
-                    Triple("Log", Icons.Filled.List, 3),
-                    Triple("Script", Icons.Filled.Edit, 4),
-                    Triple("UI", Icons.Filled.Menu, 5)
+                    Triple("Hệ thống", Icons.Filled.Build, 3)
                 )
                 tabs.forEach { (label, icon, index) ->
                     NavigationBarItem(
@@ -396,31 +395,35 @@ class MainActivity : ComponentActivity() {
                         settings,
                         onSave = { settings = it; settingsManager.save(it) }
                     )
-                    3 -> LogScreen(
-                        logsSlim = logsSlim,
-                        logsVerbose = logsVerbose,
-                        logsError = logsError,
-                        verboseUiTreeLog = verboseUiTreeLog,
-                        verboseLikeContextLog = verboseLikeContextLog,
-                        onVerboseUiTreeChange = {
-                            verboseUiTreeLog = it
-                            debugHighlightPrefs.setVerboseUiTreeLoggingEnabled(it)
+                    3 -> SystemHubScreen(
+                        logContent = {
+                            LogScreen(
+                                logsSlim = logsSlim,
+                                logsVerbose = logsVerbose,
+                                logsError = logsError,
+                                verboseUiTreeLog = verboseUiTreeLog,
+                                verboseLikeContextLog = verboseLikeContextLog,
+                                onVerboseUiTreeChange = {
+                                    verboseUiTreeLog = it
+                                    debugHighlightPrefs.setVerboseUiTreeLoggingEnabled(it)
+                                },
+                                onVerboseLikeContextChange = {
+                                    verboseLikeContextLog = it
+                                    debugHighlightPrefs.setVerboseLikeContextLoggingEnabled(it)
+                                },
+                                onClearLogs = {
+                                    logger.clearDebugArtifacts()
+                                    sendBroadcast(Intent(ZaloPilotAccessibilityService.ACTION_CLEAR_DEBUG_STATE).setPackage(packageName))
+                                    logsSlim = logger.readSlimLogs()
+                                    logsVerbose = logger.readVerboseLogs()
+                                    logsError = logger.readErrorLogs()
+                                    Toast.makeText(this@MainActivity, "Đã xóa log & file tạm", Toast.LENGTH_SHORT).show()
+                                }
+                            )
                         },
-                        onVerboseLikeContextChange = {
-                            verboseLikeContextLog = it
-                            debugHighlightPrefs.setVerboseLikeContextLoggingEnabled(it)
-                        },
-                        onClearLogs = {
-                            logger.clearDebugArtifacts()
-                            sendBroadcast(Intent(ZaloPilotAccessibilityService.ACTION_CLEAR_DEBUG_STATE).setPackage(packageName))
-                            logsSlim = logger.readSlimLogs()
-                            logsVerbose = logger.readVerboseLogs()
-                            logsError = logger.readErrorLogs()
-                            Toast.makeText(this@MainActivity, "Đã xóa log & file tạm", Toast.LENGTH_SHORT).show()
-                        }
+                        scriptContent = { ScriptScreen(scriptStore = scriptStore) },
+                        uiTreeContent = { UiTreeScreen() }
                     )
-                    4 -> ScriptScreen(scriptStore = scriptStore)
-                    5 -> UiTreeScreen()
                 }
             }
         }
